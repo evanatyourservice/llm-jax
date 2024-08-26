@@ -75,7 +75,7 @@ class Options:
     """
 
     grafting_type: GraftingType = GraftingType.RMSPROP
-    second_moment_decay: float = 0.999
+    second_moment_decay: float = 0.95
     start_preconditioning_step: int = 0
     epsilon: float = 1e-8
     skip_preconditioning_any_dim_gt: int = 4096
@@ -86,8 +86,7 @@ class Options:
 
 
 def graft(
-    options: Options,
-    direction: praxis_shim.ShardedGradientTransformation,
+    options: Options, direction: praxis_shim.ShardedGradientTransformation
 ) -> praxis_shim.ShardedGradientTransformation:
     """Generate the grafting update from options and direction update.
 
@@ -110,18 +109,10 @@ def graft(
         return _graft_with(direction, _sgd(), options)
 
     if options.grafting_type == GraftingType.RMSPROP:
-        return _graft_with(
-            direction,
-            _rmsprop(options),
-            options,
-        )
+        return _graft_with(direction, _rmsprop(options), options)
 
     if options.grafting_type == GraftingType.ADAFACTOR:
-        return _graft_with(
-            direction,
-            _adafactor(options),
-            options,
-        )
+        return _graft_with(direction, _adafactor(options), options)
     # check options for validity (SGD/none and no 2nd moment, appropriate range)
     # test to check sharded gradient transform is otherwise identical to
     #   praxis'
@@ -167,9 +158,7 @@ def _sgd() -> praxis_shim.ShardedGradientTransformation:
     """Create SGD sharded gradient transform."""
     grad_transform = optax.identity()
     return praxis_shim.ShardedGradientTransformation(
-        grad_transform.init,
-        grad_transform.update,
-        optax.EmptyState,
+        grad_transform.init, grad_transform.update, optax.EmptyState
     )
 
 
@@ -193,9 +182,7 @@ def _adafactor(options: Options) -> praxis_shim.ShardedGradientTransformation:
         raise NotImplementedError
 
     return praxis_shim.ShardedGradientTransformation(
-        grad_transform.init,
-        grad_transform.update,
-        _adafactor_pspec_fn,
+        grad_transform.init, grad_transform.update, _adafactor_pspec_fn
     )
 
 
@@ -277,9 +264,7 @@ def _graft_with(
         )
         graft_updates, graft_state = norm.update(updates, state.norm, params)
         new_state = GraftingState(
-            count=state.count + 1,
-            direction=base_state,
-            norm=graft_state,
+            count=state.count + 1, direction=base_state, norm=graft_state
         )
 
         def maybe_graft(graft_upd, base):
@@ -292,9 +277,7 @@ def _graft_with(
                 base_norm > 0.0, jnp.linalg.norm(graft_upd) / base_norm, 0.0
             )
             return jnp.where(
-                state.count >= start_preconditioning_step,
-                base * multiplier,
-                graft_upd,
+                state.count >= start_preconditioning_step, base * multiplier, graft_upd
             )
 
         new_updates = jax.tree.map(
@@ -317,9 +300,7 @@ def _graft_with(
         )
 
     return praxis_shim.ShardedGradientTransformation(
-        init_fn,
-        update_fn,
-        init_partition_spec_fn,
+        init_fn, update_fn, init_partition_spec_fn
     )
 
 

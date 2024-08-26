@@ -53,9 +53,7 @@ def _derive_shapes(options: Options, param: jax.Array) -> _Shapes:
     merged = _merge_small_dims(param.shape, options.merge_dims)
     if merged == [1]:
         return _Shapes(
-            original_shape=list(param.shape),
-            merged_shape=[],
-            padded_shape=[],
+            original_shape=list(param.shape), merged_shape=[], padded_shape=[]
         )
     if options.block_size == 0:
         padded = merged
@@ -67,9 +65,7 @@ def _derive_shapes(options: Options, param: jax.Array) -> _Shapes:
                 s *= options.block_size
             padded.append(s)
     return _Shapes(
-        original_shape=list(param.shape),
-        merged_shape=merged,
-        padded_shape=padded,
+        original_shape=list(param.shape), merged_shape=merged, padded_shape=padded
     )
 
 
@@ -97,9 +93,7 @@ def merge(options: Options) -> optax.GradientTransformation:
         return merged
 
     def update(
-        updates: optax.Updates,
-        state: optax.MaskedNode,
-        params: optax.Params,
+        updates: optax.Updates, state: optax.MaskedNode, params: optax.Params
     ) -> tuple[optax.Updates, optax.MaskedNode]:
         shapes = jax.tree.map(functools.partial(_derive_shapes, options), params)
         new_updates = jax.tree.map(_merge, updates, shapes)
@@ -120,9 +114,7 @@ def unmerge(options: Options) -> optax.GradientTransformation:
         return merged.reshape(shapes.original_shape)
 
     def update(
-        updates: optax.Updates,
-        state: optax.MaskedNode,
-        params: optax.Params,
+        updates: optax.Updates, state: optax.MaskedNode, params: optax.Params
     ) -> tuple[optax.Updates, optax.MaskedNode]:
         shapes = jax.tree.map(functools.partial(_derive_shapes, options), params)
         new_updates = jax.tree.map(_unmerge, updates, shapes)

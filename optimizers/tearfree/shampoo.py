@@ -47,7 +47,7 @@ class Options:
     block_size: int = 256
     update_preconditioners_freq: int = 20
     update_statistics_freq: int = 1
-    second_moment_decay: float = 0.999
+    second_moment_decay: float = 0.95
     # TODO(vladf):
     # lb, rb, b sharding: maybe later?
     # spmd_mesh_axis_names: Sequence[str] = () maybe later?
@@ -247,8 +247,7 @@ def _pspec(
     )
 
     def make_blocks_pspec(
-        path: ...,
-        param: praxis_shim.WeightHParams,
+        path: ..., param: praxis_shim.WeightHParams
     ) -> praxis_shim.NestedHParams:
         meta = _blocks_metadata(options, param.shape, str(path))
         num_blocks = meta.num_blocks
@@ -299,11 +298,7 @@ def _update(
     blocks = jax.lax.cond(should_update_stats, stats_updated_blocks, lambda: blocks)
 
     precond_updated_blocks = functools.partial(
-        jax.tree.map,
-        _update_block_precond,
-        blocks,
-        meta,
-        is_leaf=is_block,
+        jax.tree.map, _update_block_precond, blocks, meta, is_leaf=is_block
     )
     should_update_precond = (state.count % options.update_preconditioners_freq) == 0
     blocks = jax.lax.cond(should_update_precond, precond_updated_blocks, lambda: blocks)
