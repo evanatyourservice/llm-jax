@@ -12,7 +12,7 @@ optimizer: !dataclass:OptimizerConfig
     type: "adamw"
     learning_rate: 0.001
     warmup_steps: 1000
-    weight_decay: 0.1
+    weight_decay: 0.01
     grad_clip: 1.0
     gradient_accumulation_steps: 1
     betas:

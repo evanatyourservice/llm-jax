@@ -75,7 +75,7 @@ class Options:
     """
 
     grafting_type: GraftingType = GraftingType.RMSPROP
-    second_moment_decay: float = 0.95
+    second_moment_decay: float = 0.999
     start_preconditioning_step: int = 0
     epsilon: float = 1e-8
     skip_preconditioning_any_dim_gt: int = 4096

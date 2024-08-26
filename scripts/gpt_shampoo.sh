@@ -10,7 +10,6 @@ python3 train.py \
     --train_pattern=gs://uscentral1stuff/openwebtext/train_??.tfrecord \
     --val_pattern=gs://uscentral1stuff/openwebtext/val_??.tfrecord \
     --batch_size=128 \
-    --bfloat16_compute \
     --optimizer.type=shampoo \
     --optimizer.learning_rate=0.001 \
     --optimizer.weight_decay=0.01
