@@ -1,0 +1,13 @@
+tyro
+wandb
+flax
+tqdm
+numpy
+tiktoken
+datasets
+tensorflow
+transformers
+optax
+einops
+psgd-jax
+chex
