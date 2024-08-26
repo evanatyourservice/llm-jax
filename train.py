@@ -296,7 +296,7 @@ def main(config: TrainConfig):
             )
         elif config.optimizer.type in ["psgd_affine", "affine"]:
             update_prob_schedule = lambda n: jnp.maximum(jnp.exp(-0.002 * n), 0.01)
-            precond_lr_schedule = lambda n: jnp.maximum(0.1 * jnp.exp(-0.001 * n), 0.01)
+            # precond_lr_schedule = lambda n: jnp.maximum(0.1 * jnp.exp(-0.001 * n), 0.01)
             optimizer.append(
                 affine(
                     lr_schedule,
