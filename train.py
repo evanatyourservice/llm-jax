@@ -98,6 +98,7 @@ class OptimizerConfig:
     max_size_triangular: int = 0
     max_skew_triangular: int = 0
     precond_lr: float = 0.1
+    schedule_precond_lr: bool = False
     precond_init_scale: float = 1.0
     update_global_norm_clip: Optional[float] = 10000
 
@@ -331,7 +332,12 @@ def main(config: TrainConfig):
             )
         elif config.optimizer.type in ["psgd_affine", "affine"]:
             update_prob_schedule = lambda n: jnp.maximum(jnp.exp(-0.002 * n), 0.01)
-            # precond_lr_schedule = lambda n: jnp.maximum(0.1 * jnp.exp(-0.001 * n), 0.01)
+            if config.optimizer.schedule_precond_lr:
+                precond_lr_schedule = lambda n: jnp.maximum(
+                    config.optimizer.precond_lr * jnp.exp(-0.002 * n), 0.05
+                )
+            else:
+                precond_lr_schedule = config.optimizer.precond_lr
             optimizer.append(
                 affine(
                     lr_schedule,
@@ -341,7 +347,7 @@ def main(config: TrainConfig):
                     mask=param_decay_mask,
                     max_size_triangular=config.optimizer.max_size_triangular,
                     max_skew_triangular=config.optimizer.max_skew_triangular,
-                    precond_lr=config.optimizer.precond_lr,
+                    precond_lr=precond_lr_schedule,
                     precond_init_scale=config.optimizer.precond_init_scale,
                     update_global_norm_clip=config.optimizer.update_global_norm_clip,
                     momentum_before_precond_update=True,  # experimental

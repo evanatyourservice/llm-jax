@@ -15,10 +15,11 @@ python3 train.py \
     --optimizer.psgd_use_hessian \
     --optimizer.learning_rate=0.01 \
     --optimizer.weight_decay=0.01 \
-    --optimizer.grad_clip=0.0 \
+    --optimizer.grad_clip=1.0 \
     --optimizer.preconditioner_update_probability=0.5 \
     --optimizer.max_size_triangular=1000000000 \
     --optimizer.max_skew_triangular=0 \
-    --optimizer.precond_lr=0.1 \
+    --optimizer.precond_lr=0.5 \
+    --optimizer.schedule_precond_lr \
     --optimizer.precond_init_scale=1.0 \
     --optimizer.update_global_norm_clip=10000.0
