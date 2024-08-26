@@ -17,6 +17,7 @@ python3 train.py \
     --hs_eval_steps=2 \
     --batch_size=4 \
     --optimizer.type=affine \
+    --optimizer.psgd_use_hessian \
     --optimizer.learning_rate=0.0001 \
     --optimizer.warmup_steps=20 \
     --model.n_embd=8 \
