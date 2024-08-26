@@ -530,7 +530,7 @@ def main(config: TrainConfig):
         jax.jit,
         donate_argnums=(0,),
         in_shardings=train_state_sharding,
-        out_shardings=repl_sharding,
+        out_shardings=train_state_sharding,
     )
     def step_minus_1(state):
         return state.replace(step=state.step - 1)
