@@ -334,7 +334,7 @@ def main(config: TrainConfig):
                 )
             )
         elif config.optimizer.type in ["psgd_affine", "affine"]:
-            update_prob_schedule = lambda n: jnp.maximum(jnp.exp(-0.002 * n), 0.01)
+            update_prob_schedule = lambda n: jnp.maximum(jnp.exp(-0.002 * n), 0.02)
             optimizer.append(
                 affine(
                     lr_schedule,
@@ -349,6 +349,7 @@ def main(config: TrainConfig):
                     update_global_norm_clip=config.optimizer.update_global_norm_clip,
                     momentum_before_precond_update=True,  # experimental
                     mu_dtype=jnp.bfloat16,
+                    precond_dtype=jnp.bfloat16,
                     precision="tensorfloat32",
                     precond_sharding=precond_sharding,
                 )

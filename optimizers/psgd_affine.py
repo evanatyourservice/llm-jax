@@ -33,6 +33,7 @@ def scale_by_affine(
     step_normalizer_order: str = "2nd",
     seed: Optional[PRNGKey] = None,
     mu_dtype: Optional[Union[str, jnp.dtype]] = None,
+    precond_dtype: Optional[Union[str, jnp.dtype]] = None,
     precision: str = "tensorfloat32",
     precond_sharding: Any = None,
 ) -> base.GradientTransformationExtraArgs:
@@ -57,6 +58,7 @@ def scale_by_affine(
         seed: Optional PRNGKey, random seed.
         mu_dtype: optional str or jnp.dtype, dtype of the momentum accumulator.
             Defaults to the same dtype as the parameters.
+        precond_dtype: optional str or jnp.dtype, dtype of the preconditioner.
         precision: str, precision for matmul, 'bfloat16', 'tensorfloat32', 'float32'.
         precond_sharding: optional Any, sharding spec for parameters.
 
@@ -64,6 +66,7 @@ def scale_by_affine(
         optax.GradientTransformationExtraArgs
     """
     mu_dtype = canonicalize_dtype(mu_dtype)
+    precond_dtype = canonicalize_dtype(precond_dtype)
 
     def init_fn(params):
         key = seed if seed is not None else jax.random.PRNGKey(36)
@@ -77,7 +80,7 @@ def scale_by_affine(
         # preconditioners
         affine_reshapers = [_shape_as_matrix(x) for x in jax.tree.leaves(params)]
         Qs = [
-            _initQ(s[2], max_size_triangular, max_skew_triangular, jnp.float32)
+            _initQ(s[2], max_size_triangular, max_skew_triangular, precond_dtype)
             for s in affine_reshapers
         ]
 
@@ -262,6 +265,7 @@ def scale_by_affine(
         updates = jax.tree.map(lambda x: jnp.clip(x, -1.0, 1.0), updates)
 
         mu = otu.tree_cast(mu, mu_dtype)
+        Qs = otu.tree_cast(Qs, precond_dtype)
         state = PSGDAffineState(count=count_inc, key=key, mu=mu, Qs=Qs)
         return updates, state
 
@@ -284,6 +288,7 @@ def affine(
     step_normalizer_order: str = "2nd",
     seed: Optional[PRNGKey] = None,
     mu_dtype: Optional[Union[str, jnp.dtype]] = None,
+    precond_dtype: Optional[Union[str, jnp.dtype]] = None,
     precision: str = "tensorfloat32",
     precond_sharding: Any = None,
 ) -> base.GradientTransformationExtraArgs:
@@ -311,6 +316,7 @@ def affine(
         seed: Optional PRNGKey, random seed.
         mu_dtype: optional str or jnp.dtype, dtype of the momentum accumulator.
             Defaults to the same dtype as the parameters.
+        precond_dtype: optional str or jnp.dtype, dtype of the preconditioner.
         precision: str, precision for matmul, 'bfloat16', 'tensorfloat32', 'float32'.
         precond_sharding: optional Any, sharding spec for parameters.
 
@@ -331,6 +337,7 @@ def affine(
             step_normalizer_order=step_normalizer_order,
             seed=seed,
             mu_dtype=mu_dtype,
+            precond_dtype=precond_dtype,
             precision=precision,
             precond_sharding=precond_sharding,
         )
@@ -694,9 +701,7 @@ def _update_precond_affine_dropv_math(
             #   2) gradient is a short matrix, but left side is a diagonal preconditioner, right side is dense
             #   3) both sides use dense preconditioner, but gradient is skewed (no saving for square shape gradient)
             key, subkey = jax.random.split(key)
-            v = otu.tree_random_like(
-                subkey, dG, partial(jax.random.normal, dtype=dG.dtype)
-            )
+            v = jax.random.normal(subkey, dG.shape, dtype=dG.dtype)
             if precond_sharding is not None:
                 v = jax.lax.with_sharding_constraint(v, precond_sharding)
             key, subkey = jax.random.split(key)
