@@ -10,8 +10,10 @@ python3 train.py \
     --train_pattern=gs://uscentral1stuff/openwebtext/train_??.tfrecord \
     --val_pattern=gs://uscentral1stuff/openwebtext/val_??.tfrecord \
     --batch_size=128 \
+    --bfloat16_compute \
     --optimizer.type=affine \
     --optimizer.psgd_use_hessian \
+    --remat \
     --optimizer.learning_rate=0.01 \
     --optimizer.weight_decay=0.01 \
     --optimizer.grad_clip=0.0 \

@@ -136,6 +136,7 @@ def train_step(
     bfloat16_compute: bool,
     compute_hessian: bool = False,
     params_sharding: Any = None,
+    remat: bool = False,
 ) -> Tuple[jnp.ndarray, TrainState]:
 
     rng_key = jax.random.fold_in(rng_key, state.step)
@@ -153,6 +154,9 @@ def train_step(
         loss += 1e-4 * jax.scipy.special.logsumexp(logits, axis=-1).mean() ** 2
 
         return loss
+
+    if remat:
+        loss_fn = jax.checkpoint(loss_fn)
 
     if compute_hessian:
         update_prob_schedule = lambda n: jnp.maximum(0.5 * jnp.exp(-0.002 * n), 0.01)
@@ -462,6 +466,7 @@ def main(config: TrainConfig):
         bfloat16_compute=config.bfloat16_compute,
         compute_hessian=config.optimizer.psgd_use_hessian,
         params_sharding=train_state_sharding.params,
+        remat=config.remat,
     )
     train_step_jit = jax.jit(
         train_step_w_sharding,
