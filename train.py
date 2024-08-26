@@ -155,7 +155,6 @@ def train_step(
         return loss
 
     if compute_hessian:
-        print("computing Hessian for PSGD")
         update_prob_schedule = lambda n: jnp.maximum(0.5 * jnp.exp(-0.002 * n), 0.01)
         loss, grads, hvp, vector, update_precond = hessian_helper(
             jax.random.split(rng_key, 1)[0],
@@ -457,6 +456,7 @@ def main(config: TrainConfig):
 
     # ====== jit functions ========
     # we specify in_shardings for sake of clarity, but they are inferred
+    write_note(f"PSGD use Hessian = {config.optimizer.psgd_use_hessian}")
     train_step_w_sharding = partial(
         train_step,
         bfloat16_compute=config.bfloat16_compute,
