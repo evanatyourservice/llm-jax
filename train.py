@@ -354,7 +354,7 @@ def main(config: TrainConfig):
                 )
             )
         elif config.optimizer.type in ["psgd_xmat", "xmat"]:
-            update_prob_schedule = lambda n: jnp.maximum(jnp.exp(-0.002 * n), 0.02)
+            update_prob_schedule = lambda n: jnp.maximum(jnp.exp(-0.002 * n), 0.1)
             optimizer.append(
                 xmat(
                     lr_schedule,
