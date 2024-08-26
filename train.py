@@ -493,7 +493,6 @@ def main(config: TrainConfig):
 
     # ====== jit functions ========
     # we specify in_shardings for sake of clarity, but they are inferred
-    write_note(f"PSGD use Hessian = {config.optimizer.psgd_use_hessian}")
     train_step_w_sharding = partial(
         train_step,
         bfloat16_compute=config.bfloat16_compute,
@@ -529,8 +528,8 @@ def main(config: TrainConfig):
     @partial(
         jax.jit,
         donate_argnums=(0,),
-        in_shardings=train_state_sharding,
-        out_shardings=train_state_sharding,
+        in_shardings=(train_state_sharding,),
+        out_shardings=(train_state_sharding,),
     )
     def step_minus_1(state):
         return state.replace(step=state.step - 1)
