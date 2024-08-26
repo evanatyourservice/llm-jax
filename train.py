@@ -312,7 +312,7 @@ def main(config: TrainConfig):
 
     def make_opt(precond_sharding=None):
         optimizer = []
-        if config.optimizer.grad_clip > 0:
+        if config.optimizer.grad_clip > 0.0:
             optimizer.append(optax.clip_by_global_norm(config.optimizer.grad_clip))
         write_note(f"using {config.optimizer.type} optimizer")
         if config.optimizer.type in ["adam", "adamw"]:

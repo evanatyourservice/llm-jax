@@ -96,8 +96,6 @@ def scale_by_affine(
         # use hessian preconditioning if hessian provided
         # otherwise use gg^T whitening type preconditioning
         hessian_based_preconditioning = Hvp is not None
-        if hessian_based_preconditioning:
-            print("PSGD: Using Hessian-based preconditioning.")
         if hessian_based_preconditioning and (
             vector is None or update_preconditioner is None
         ):

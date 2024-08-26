@@ -20,4 +20,4 @@ python3 train.py \
     --optimizer.max_skew_triangular=0 \
     --optimizer.precond_lr=0.1 \
     --optimizer.precond_init_scale=1.0 \
-    --optimizer.update_global_norm_clip=10000.0 \  # sqrt n params seems to work well
+    --optimizer.update_global_norm_clip=10000.0
