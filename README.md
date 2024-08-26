@@ -1,6 +1,7 @@
 # llm-jax
 
-Started with [this repo](https://github.com/jenkspt/gpt-jax). Also pulled some tools from [big_vision](https://github.com/google-research/big_vision).
+Started with [this repo, credit to @jenkspt](https://github.com/jenkspt/gpt-jax), and is still mostly this repo. 
+Also pulled some tools from [big_vision](https://github.com/google-research/big_vision) to add FSDP.
 
 TODO:
 - any huggingface model
@@ -10,19 +11,19 @@ TODO:
 
 ## Install
 
-Clone gpt-jax
+Clone llm-jax
 ```shell
-git clone https://github.com/evanatyourservice/gpt-jax.git
+git clone https://github.com/evanatyourservice/llm-jax.git
 ```
 
 Install python dependencies TPU
 ```shell
-cd gpt-jax && pip install -U pip && pip install -r requirements.txt && pip install --force-reinstall --upgrade --no-cache-dir 'jax[tpu]' -f https://storage.googleapis.com/jax-releases/libtpu_releases.html && pip install 'numpy<2'
+cd llm-jax && pip install -U pip && pip install -r requirements.txt && pip install --force-reinstall --upgrade --no-cache-dir 'jax[tpu]' -f https://storage.googleapis.com/jax-releases/libtpu_releases.html && pip install 'numpy<2'
 ```
 
 Install python dependencies GPU
 ```shell
-cd gpt-jax && pip install -U pip && pip install -r requirements.txt && pip install --force-reinstall --upgrade --no-cache-dir 'jax[cuda12]' && pip install 'numpy<2'
+cd llm-jax && pip install -U pip && pip install -r requirements.txt && pip install --force-reinstall --upgrade --no-cache-dir 'jax[cuda12]' && pip install 'numpy<2'
 ```
 
 
@@ -48,11 +49,11 @@ like in `scripts/gpt_psgd.sh`.
 
 To run on multi-host TPU, install requirements on all hosts
 ```shell
-gcloud compute tpus tpu-vm ssh gpt-jax --zone=us-central2-a --worker=all --command="cd gpt-jax && pip install -r requirements.txt"
+gcloud compute tpus tpu-vm ssh llm-jax --zone=us-central2-a --worker=all --command="cd llm-jax && pip install -r requirements.txt"
 ```
 
 Then run a script on all hosts
 
 ```shell
-gcloud compute tpus tpu-vm ssh gpt-jax --zone=us-central2-a --worker=all --command="cd gpt-jax && bash scripts/gpt_psgd.sh"
+gcloud compute tpus tpu-vm ssh llm-jax --zone=us-central2-a --worker=all --command="cd llm-jax && bash scripts/gpt_psgd.sh"
 ```
