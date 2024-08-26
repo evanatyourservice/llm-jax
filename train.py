@@ -155,7 +155,7 @@ def train_step(
         return loss
 
     if compute_hessian:
-        write_note("computing Hessian for PSGD")
+        print("computing Hessian for PSGD")
         update_prob_schedule = lambda n: jnp.maximum(0.5 * jnp.exp(-0.002 * n), 0.01)
         loss, grads, hvp, vector, update_precond = hessian_helper(
             jax.random.split(rng_key, 1)[0],
