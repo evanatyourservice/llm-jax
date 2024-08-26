@@ -44,7 +44,7 @@ class Options:
     """
 
     use_CASPR_variant: bool = False
-    block_size: int = 1024
+    block_size: int = 256
     update_preconditioners_freq: int = 20
     update_statistics_freq: int = 1
     second_moment_decay: float = 0.999

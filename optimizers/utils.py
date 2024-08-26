@@ -1,4 +1,4 @@
-from typing import Callable, Tuple
+from typing import Callable, Tuple, Any
 
 import jax
 from jax import numpy as jnp
@@ -16,7 +16,7 @@ def hessian_helper(
     loss_fn_extra_args: Tuple = (),
     has_aux: bool = False,
     preconditioner_update_probability: float = 1.0,
-    params_sharding: bool = False,
+    params_sharding: Any = None,
 ):
     """Helper function for computing hessian vector product for PSGD.
 
