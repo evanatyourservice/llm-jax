@@ -323,15 +323,6 @@ def main(config: TrainConfig):
         if config.optimizer.grad_clip > 0.0:
             optimizer.append(optax.clip_by_global_norm(config.optimizer.grad_clip))
 
-        # some psgd stuff
-        update_prob_schedule = lambda n: jnp.maximum(jnp.exp(-0.002 * n), 0.01)
-        if config.optimizer.schedule_precond_lr:
-            precond_lr_schedule = lambda n: jnp.maximum(
-                config.optimizer.precond_lr * jnp.exp(-0.002 * n), 0.05
-            )
-        else:
-            precond_lr_schedule = config.optimizer.precond_lr
-
         if config.optimizer.type in ["adam", "adamw"]:
             optimizer.append(
                 optax.adamw(
@@ -343,6 +334,7 @@ def main(config: TrainConfig):
                 )
             )
         elif config.optimizer.type in ["psgd_affine", "affine"]:
+            update_prob_schedule = lambda n: jnp.maximum(jnp.exp(-0.002 * n), 0.01)
             optimizer.append(
                 affine(
                     lr_schedule,
@@ -352,7 +344,7 @@ def main(config: TrainConfig):
                     mask=param_decay_mask,
                     max_size_triangular=config.optimizer.max_size_triangular,
                     max_skew_triangular=config.optimizer.max_skew_triangular,
-                    precond_lr=precond_lr_schedule,
+                    precond_lr=config.optimizer.precond_lr,
                     precond_init_scale=config.optimizer.precond_init_scale,
                     update_global_norm_clip=config.optimizer.update_global_norm_clip,
                     momentum_before_precond_update=True,  # experimental
@@ -362,6 +354,7 @@ def main(config: TrainConfig):
                 )
             )
         elif config.optimizer.type in ["psgd_xmat", "xmat"]:
+            update_prob_schedule = lambda n: jnp.maximum(jnp.exp(-0.002 * n), 0.02)
             optimizer.append(
                 xmat(
                     lr_schedule,
@@ -369,7 +362,7 @@ def main(config: TrainConfig):
                     b1=config.optimizer.betas[0],
                     weight_decay=config.optimizer.weight_decay,
                     mask=param_decay_mask,
-                    precond_lr=precond_lr_schedule,
+                    precond_lr=config.optimizer.precond_lr,
                     precond_init_scale=config.optimizer.precond_init_scale,
                     update_global_norm_clip=config.optimizer.update_global_norm_clip,
                     momentum_before_precond_update=True,  # experimental
