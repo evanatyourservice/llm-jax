@@ -204,6 +204,7 @@ def scale_by_affine(
                     )
                 ]
 
+            Qs = otu.tree_cast(Qs, precond_dtype)
             return key, Qs
 
         def _dont_update_precond(key, state, Hvs, vs):
