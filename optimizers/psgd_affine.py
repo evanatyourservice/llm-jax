@@ -118,9 +118,13 @@ def scale_by_affine(
 
         def _update_precond(key: PRNGKey, state: PSGDAffineState, Hvs, vs):
             Hvs = [r[0](x) for x, r in zip(jax.tree.leaves(Hvs), affine_reshapers)]
+            if precond_sharding is not None:
+                Hvs = jax.lax.with_sharding_constraint(Hvs, precond_sharding)
 
             if hessian_based_preconditioning:
                 vs = [r[0](x) for x, r in zip(jax.tree.leaves(vs), affine_reshapers)]
+                if precond_sharding is not None:
+                    vs = jax.lax.with_sharding_constraint(vs, precond_sharding)
 
                 # init Qs
                 def init_q(v, h):
@@ -236,6 +240,10 @@ def scale_by_affine(
         flat_updates = [
             r[0](u) for u, r in zip(jax.tree.leaves(momentum_updates), affine_reshapers)
         ]
+        if precond_sharding is not None:
+            flat_updates = jax.lax.with_sharding_constraint(
+                flat_updates, precond_sharding
+            )
         flat_updates = [
             _precond_grad_affine_math(Qlr[0], Qlr[1], g)
             for (Qlr, g) in zip(Qs, flat_updates)

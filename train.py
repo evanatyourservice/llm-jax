@@ -1,6 +1,6 @@
 from functools import partial
 from pprint import pprint
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Any
 from dataclasses import dataclass, field, asdict
 import os
 import numpy as np
@@ -22,6 +22,7 @@ from dataset import get_dataset, prepare_hellaswag
 from optimizers.psgd_affine import affine, _shape_as_matrix
 from optimizers.tearfree import optimizer as tearfree_opt
 from optimizers.tearfree import shampoo, second_order
+from optimizers.utils import hessian_helper
 from sharding import infer_sharding, fsdp_sharding
 from utils import reshard, write_note
 
@@ -88,16 +89,17 @@ class OptimizerConfig:
     type: str = "adamw"
     learning_rate: float = 0.001
     warmup_steps: int = 1000
-    weight_decay: float = 0.1
+    weight_decay: float = 0.01
     grad_clip: float = 1.0
     gradient_accumulation_steps: int = 1
     betas: Tuple[float, float] = (0.9, 0.95)
     preconditioner_update_probability: float = 1.0
+    psgd_use_hessian: bool = False
     max_size_triangular: int = 0
     max_skew_triangular: int = 0
     precond_lr: float = 0.1
     precond_init_scale: float = 1.0
-    update_global_norm_clip: Optional[float] = None
+    update_global_norm_clip: Optional[float] = 10000
 
 
 @dataclass(frozen=True)
@@ -128,19 +130,22 @@ class TrainConfig:
 
 
 def train_step(
-    state: TrainState, tokens: jnp.ndarray, dropout_key, bfloat16_compute: bool
+    state: TrainState,
+    tokens: jnp.ndarray,
+    rng_key,
+    bfloat16_compute: bool,
+    compute_hessian: bool = False,
+    params_sharding: Any = None,
 ) -> Tuple[jnp.ndarray, TrainState]:
 
-    dropout_key = jax.random.fold_in(dropout_key, state.step)
+    rng_key = jax.random.fold_in(rng_key, state.step)
 
     def loss_fn(params) -> jnp.ndarray:
         X, Y = tokens[:, :-1], tokens[:, 1:]
         if bfloat16_compute:
             X = X.astype(jnp.bfloat16)
             params = optax.tree_utils.tree_cast(params, jnp.bfloat16)
-        logits = state.apply_fn(X, params=params, dropout_rng=dropout_key, train=True)[
-            0
-        ]
+        logits = state.apply_fn(X, params=params, dropout_rng=rng_key, train=True)[0]
         logits = logits.astype(jnp.float32)
         loss = optax.softmax_cross_entropy_with_integer_labels(logits, Y).mean()
 
@@ -149,8 +154,33 @@ def train_step(
 
         return loss
 
-    loss, grads = jax.value_and_grad(loss_fn, has_aux=False)(state.params)
-    new_state = state.apply_gradients(grads=grads)
+    if compute_hessian:
+        write_note("computing Hessian for PSGD")
+        update_prob_schedule = lambda n: jnp.maximum(0.5 * jnp.exp(-0.002 * n), 0.01)
+        loss, grads, hvp, vector, update_precond = hessian_helper(
+            jax.random.split(rng_key, 1)[0],
+            state.step,
+            loss_fn=loss_fn,
+            params=state.params,
+            preconditioner_update_probability=update_prob_schedule(state.step),
+            params_sharding=params_sharding,
+        )
+        updates, new_opt_state = state.tx.update(
+            grads,
+            state.opt_state,
+            state.params,
+            Hvp=hvp,
+            vector=vector,
+            update_preconditioner=update_precond,
+        )
+        new_params = optax.apply_updates(state.params, updates)
+        new_state = state.replace(
+            step=state.step + 1, params=new_params, opt_state=new_opt_state
+        )
+    else:
+        loss, grads = jax.value_and_grad(loss_fn, has_aux=False)(state.params)
+        new_state = state.apply_gradients(grads=grads)
+
     return loss, new_state
 
 
@@ -331,7 +361,7 @@ def main(config: TrainConfig):
                             shampoo_options=shampoo.Options(use_CASPR_variant=False)
                         ),
                     ),
-                ),
+                )
             )
         else:
             raise ValueError("Unknown optimizer type")
@@ -427,9 +457,14 @@ def main(config: TrainConfig):
 
     # ====== jit functions ========
     # we specify in_shardings for sake of clarity, but they are inferred
-    train_step_jit = jax.jit(
+    train_step_w_sharding = partial(
         train_step,
-        static_argnames=("bfloat16_compute",),
+        bfloat16_compute=config.bfloat16_compute,
+        compute_hessian=config.optimizer.psgd_use_hessian,
+        params_sharding=train_state_sharding.params,
+    )
+    train_step_jit = jax.jit(
+        train_step_w_sharding,
         donate_argnames=("state",),
         in_shardings=(train_state_sharding, data_sharding, rng.sharding),
         out_shardings=(repl_sharding, train_state_sharding),
@@ -463,9 +498,7 @@ def main(config: TrainConfig):
     write_note("starting training")
     for step in range(step, config.train_steps):
         tokens = next(train_ds)
-        loss, train_state = train_step_jit(
-            train_state, tokens, rng, config.bfloat16_compute
-        )
+        loss, train_state = train_step_jit(train_state, tokens, rng)
         train_losses.append(jax.device_get(loss).item())
 
         if (config.wandb is not None) and (jax.process_index() == 0) and step % 10 == 0:
