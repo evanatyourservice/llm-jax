@@ -12,7 +12,7 @@ python3 train.py \
     --batch_size=128 \
     --bfloat16_compute \
     --optimizer.type=xmat \
-    --optimizer.learning_rate=0.001 \
+    --optimizer.learning_rate=0.01 \
     --optimizer.weight_decay=0.01 \
     --optimizer.grad_clip=1.0 \
     --optimizer.preconditioner_update_probability=0.5 \
