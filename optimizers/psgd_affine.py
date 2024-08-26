@@ -481,6 +481,8 @@ def _initQ(shape, max_size, max_skew, dtype=jnp.float32):
 
 def _solve_triangular(a, b, upper, left=True):
     """jax.lax.linalg.triangular_solve rewritten to match PyTorch convention."""
+    dtype_in = jnp.promote_types(a.dtype, b.dtype)
+    a, b = a.astype(dtype_in), b.astype(dtype_in)
     return jax.lax.linalg.triangular_solve(a, b, left_side=left, lower=not upper)
 
 
