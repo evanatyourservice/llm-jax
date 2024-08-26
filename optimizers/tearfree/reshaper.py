@@ -36,7 +36,7 @@ class Options:
     """
 
     merge_dims: int = 4096
-    block_size: int = 256
+    block_size: int = 1024
 
 
 @dataclasses.dataclass

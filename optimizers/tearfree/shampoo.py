@@ -44,8 +44,8 @@ class Options:
     """
 
     use_CASPR_variant: bool = False
-    block_size: int = 256
-    update_preconditioners_freq: int = 32
+    block_size: int = 1024
+    update_preconditioners_freq: int = 20
     update_statistics_freq: int = 1
     second_moment_decay: float = 0.999
     # TODO(vladf):
@@ -484,7 +484,7 @@ def _pth_inv_root(p: int, cov: jax.Array) -> jax.Array:
 
 def _update_block_precond(block: _AxesBlocks, meta: _BlocksMetadata) -> _AxesBlocks:
     """Update preconditioners."""
-    p = 2  # len(meta.param_shape) * 2
+    p = len(meta.param_shape) * 2
 
     with jax.named_scope("PthInvRoot"):
         new_roots = list(map(functools.partial(_pth_inv_root, p), block.stats))
