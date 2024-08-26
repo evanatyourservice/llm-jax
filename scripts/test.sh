@@ -16,8 +16,8 @@ python3 train.py \
     --eval_steps=2 \
     --hs_eval_steps=2 \
     --batch_size=4 \
-    --optimizer.type=affine \
-    --optimizer.learning_rate=0.00001 \
+    --optimizer.type=shampoo \
+    --optimizer.learning_rate=0.0001 \
     --optimizer.warmup_steps=20 \
     --model.n_embd=8 \
     --model.n_head=2 \

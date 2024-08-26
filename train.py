@@ -20,6 +20,8 @@ import tensorflow as tf
 
 from dataset import get_dataset, prepare_hellaswag
 from optimizers.psgd_affine import affine, _shape_as_matrix
+from optimizers.tearfree import optimizer as tearfree_opt
+from optimizers.tearfree import shampoo, second_order
 from sharding import infer_sharding, fsdp_sharding
 from utils import reshard, write_note
 
@@ -314,6 +316,22 @@ def main(config: TrainConfig):
                     precision="tensorfloat32",
                     precond_sharding=precond_sharding,
                 )
+            )
+        elif config.optimizer.type == "shampoo":
+            optimizer.append(
+                tearfree_opt.tearfree(
+                    lr_schedule,
+                    tearfree_opt.TearfreeOptions(
+                        momentum_options=tearfree_opt.momentum.Options(
+                            weight_decay=config.optimizer.weight_decay,
+                            momentum_decay=config.optimizer.betas[0],
+                            momentum_dtype="bfloat16",
+                        ),
+                        second_order_options=second_order.Options(
+                            shampoo_options=shampoo.Options(use_CASPR_variant=False)
+                        ),
+                    ),
+                ),
             )
         else:
             raise ValueError("Unknown optimizer type")
