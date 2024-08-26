@@ -13,4 +13,4 @@ python3 train.py \
     --bfloat16_compute \
     --optimizer.type=shampoo \
     --optimizer.learning_rate=0.001 \
-    --optimizer.weight_decay=0.1
+    --optimizer.weight_decay=0.01
