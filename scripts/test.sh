@@ -16,9 +16,7 @@ python3 train.py \
     --eval_steps=2 \
     --hs_eval_steps=2 \
     --batch_size=4 \
-    --optimizer.type=affine \
-    --optimizer.psgd_use_hessian \
-    --remat \
+    --optimizer.type=xmat \
     --optimizer.learning_rate=0.0001 \
     --optimizer.warmup_steps=20 \
     --model.n_embd=8 \

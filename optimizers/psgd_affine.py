@@ -220,6 +220,7 @@ def scale_by_affine(
             update_preconditioner = jnp.logical_or(
                 jax.random.uniform(subkey) < update_prob_in, state.count < 2
             )
+
             # use grads as Hvp
             if momentum_before_precond_update:
                 Hvp = momentum_updates

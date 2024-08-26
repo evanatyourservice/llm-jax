@@ -20,6 +20,7 @@ import tensorflow as tf
 
 from dataset import get_dataset, prepare_hellaswag
 from optimizers.psgd_affine import affine, _shape_as_matrix
+from optimizers.psgd_xmat import xmat
 from optimizers.tearfree import optimizer as tearfree_opt
 from optimizers.tearfree import shampoo, second_order
 from optimizers.utils import hessian_helper
@@ -316,10 +317,21 @@ def main(config: TrainConfig):
     )
 
     def make_opt(precond_sharding=None):
+        write_note(f"using {config.optimizer.type} optimizer")
+
         optimizer = []
         if config.optimizer.grad_clip > 0.0:
             optimizer.append(optax.clip_by_global_norm(config.optimizer.grad_clip))
-        write_note(f"using {config.optimizer.type} optimizer")
+
+        # some psgd stuff
+        update_prob_schedule = lambda n: jnp.maximum(jnp.exp(-0.002 * n), 0.01)
+        if config.optimizer.schedule_precond_lr:
+            precond_lr_schedule = lambda n: jnp.maximum(
+                config.optimizer.precond_lr * jnp.exp(-0.002 * n), 0.05
+            )
+        else:
+            precond_lr_schedule = config.optimizer.precond_lr
+
         if config.optimizer.type in ["adam", "adamw"]:
             optimizer.append(
                 optax.adamw(
@@ -327,17 +339,10 @@ def main(config: TrainConfig):
                     *config.optimizer.betas,
                     weight_decay=config.optimizer.weight_decay,
                     mask=param_decay_mask,
-                    mu_dtype=jnp.float32,
+                    mu_dtype=jnp.bfloat16,
                 )
             )
         elif config.optimizer.type in ["psgd_affine", "affine"]:
-            update_prob_schedule = lambda n: jnp.maximum(jnp.exp(-0.002 * n), 0.01)
-            if config.optimizer.schedule_precond_lr:
-                precond_lr_schedule = lambda n: jnp.maximum(
-                    config.optimizer.precond_lr * jnp.exp(-0.002 * n), 0.05
-                )
-            else:
-                precond_lr_schedule = config.optimizer.precond_lr
             optimizer.append(
                 affine(
                     lr_schedule,
@@ -352,6 +357,24 @@ def main(config: TrainConfig):
                     update_global_norm_clip=config.optimizer.update_global_norm_clip,
                     momentum_before_precond_update=True,  # experimental
                     mu_dtype=jnp.bfloat16,
+                    precision="tensorfloat32",
+                    precond_sharding=precond_sharding,
+                )
+            )
+        elif config.optimizer.type in ["psgd_xmat", "xmat"]:
+            optimizer.append(
+                xmat(
+                    lr_schedule,
+                    update_prob_schedule,
+                    b1=config.optimizer.betas[0],
+                    weight_decay=config.optimizer.weight_decay,
+                    mask=param_decay_mask,
+                    precond_lr=precond_lr_schedule,
+                    precond_init_scale=config.optimizer.precond_init_scale,
+                    update_global_norm_clip=config.optimizer.update_global_norm_clip,
+                    momentum_before_precond_update=True,  # experimental
+                    mu_dtype=jnp.bfloat16,
+                    precond_dtype=jnp.float32,
                     precision="tensorfloat32",
                     precond_sharding=precond_sharding,
                 )
@@ -420,19 +443,25 @@ def main(config: TrainConfig):
         train_state.params
     )
 
-    def get_precond_sharding(params):
-        """Follows PSGD affine matrix reshaping and applies sharding strategy."""
-        # returns tuples if (reshape_fn, unreshape_fn, shape)
-        affine_reshapers = [_shape_as_matrix(x) for x in jax.tree.leaves(params)]
-        # grab preconditioner shapes and make jax.ShapeDtypeStructs
-        precond_shapes = [
-            jax.ShapeDtypeStruct(r[2], jnp.float32) for r in affine_reshapers
-        ]
-        # apply sharding strategy
-        return infer_sharding(params=precond_shapes, mesh=mesh, op=op)
+    if config.optimizer.type in ["psgd_affine", "affine"]:
+
+        def get_precond_sharding(params):
+            """Follows PSGD affine matrix reshaping and applies sharding strategy."""
+            # returns tuples if (reshape_fn, unreshape_fn, shape)
+            affine_reshapers = [_shape_as_matrix(x) for x in jax.tree.leaves(params)]
+            # grab preconditioner shapes and make jax.ShapeDtypeStructs
+            precond_shapes = [
+                jax.ShapeDtypeStruct(r[2], jnp.float32) for r in affine_reshapers
+            ]
+            # apply sharding strategy
+            return infer_sharding(params=precond_shapes, mesh=mesh, op=op)
+
+        precond_sharding = get_precond_sharding(train_state.params)
+    else:
+        # psgd xmat preconditioners are same shapes as params
+        precond_sharding = train_state_sharding.params
 
     # remake optimizer with preconditioner sharding passed in
-    precond_sharding = get_precond_sharding(train_state.params)
     optimizer = make_opt(precond_sharding=precond_sharding)
 
     # finish making train state (pass in optimizer and opt_state)
