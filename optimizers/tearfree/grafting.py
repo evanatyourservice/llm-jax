@@ -204,6 +204,12 @@ def _rmsprop(options: Options) -> praxis_shim.ShardedGradientTransformation:
     def update_fn(updates, state, params=None):
         del params
 
+        # CHANGED: rmsprop normalized from distributed shampoo
+        # normalizes grads layer-wise
+        update_norms = jax.tree.map(jnp.linalg.norm, updates)
+        update_norms = jax.tree.map(lambda x: jnp.where(x > 0.0, x, 1.0), update_norms)
+        updates = jax.tree.map(lambda g, n: g / n, updates, update_norms)
+
         def ema(prev, new):
             second_moment_decay = options.second_moment_decay
             snew = jnp.square(new)
