@@ -10,9 +10,10 @@ python3 train.py \
     --train_pattern=gs://uscentral1stuff/openwebtext/train_??.tfrecord \
     --val_pattern=gs://uscentral1stuff/openwebtext/val_??.tfrecord \
     --batch_size=128 \
+    --optimizer.gradient_accumulation_steps=8 \
     --bfloat16_compute \
     --optimizer.type=affine \
-    --optimizer.learning_rate=0.001 \
+    --optimizer.learning_rate=0.003 \
     --optimizer.weight_decay=0.01 \
     --optimizer.grad_clip=1.0 \
     --optimizer.preconditioner_update_probability=0.5 \

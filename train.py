@@ -392,10 +392,14 @@ def main(config: TrainConfig):
         else:
             raise ValueError("Unknown optimizer type")
 
-        optimizer.append(
-            optax.apply_every(config.optimizer.gradient_accumulation_steps)
-        )
-        return optax.chain(*optimizer)
+        optimizer = optax.chain(*optimizer)
+
+        if config.optimizer.gradient_accumulation_steps > 1:
+            optimizer = optax.MultiSteps(
+                optimizer, config.optimizer.gradient_accumulation_steps
+            )
+
+        return optimizer
 
     # ===== shard and transfer =====
     write_note("creating and sharding train state")
@@ -499,7 +503,7 @@ def main(config: TrainConfig):
     )
     train_step_jit = jax.jit(
         train_step_w_sharding,
-        donate_argnames=("state",),
+        donate_argnums=(0,),
         in_shardings=(train_state_sharding, data_sharding, rng.sharding),
         out_shardings=(repl_sharding, train_state_sharding),
     )
@@ -522,6 +526,15 @@ def main(config: TrainConfig):
         lr_schedule, in_shardings=repl_sharding, out_shardings=repl_sharding
     )
 
+    @partial(
+        jax.jit,
+        donate_argnums=(0,),
+        in_shardings=train_state_sharding,
+        out_shardings=repl_sharding,
+    )
+    def step_minus_1(state):
+        return state.replace(step=state.step - 1)
+
     # ======= train ========
     # grab step from last checkpoint
     step = 0
@@ -531,9 +544,13 @@ def main(config: TrainConfig):
     train_losses = []
     write_note("starting training")
     for step in range(step, config.train_steps):
-        tokens = next(train_ds)
-        loss, train_state = train_step_jit(train_state, tokens, rng)
-        train_losses.append(jax.device_get(loss).item())
+        for accum_step in range(config.optimizer.gradient_accumulation_steps):
+            tokens = next(train_ds)
+            loss, train_state = train_step_jit(train_state, tokens, rng)
+            train_losses.append(jax.device_get(loss).item())
+            if accum_step < config.optimizer.gradient_accumulation_steps - 1:
+                # only update step if we're on the last accumulation step
+                train_state = step_minus_1(train_state)
 
         if (config.wandb is not None) and (jax.process_index() == 0) and step % 10 == 0:
             train_loss = np.mean(train_losses)
