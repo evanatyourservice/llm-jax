@@ -479,7 +479,8 @@ def _pth_inv_root(p: int, cov: jax.Array) -> jax.Array:
 
 def _update_block_precond(block: _AxesBlocks, meta: _BlocksMetadata) -> _AxesBlocks:
     """Update preconditioners."""
-    p = len(meta.param_shape) * 2
+    # p=2 works better
+    p = 2  # len(meta.param_shape) * 2
 
     with jax.named_scope("PthInvRoot"):
         new_roots = list(map(functools.partial(_pth_inv_root, p), block.stats))
