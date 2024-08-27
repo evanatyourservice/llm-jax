@@ -323,6 +323,8 @@ def main(config: TrainConfig):
         if config.optimizer.grad_clip > 0.0:
             optimizer.append(optax.clip_by_global_norm(config.optimizer.grad_clip))
 
+        update_prob_schedule = lambda n: jnp.maximum(jnp.exp(-0.002 * n), 0.02)
+
         if config.optimizer.type in ["adam", "adamw"]:
             optimizer.append(
                 optax.adamw(
@@ -334,7 +336,6 @@ def main(config: TrainConfig):
                 )
             )
         elif config.optimizer.type in ["psgd_affine", "affine"]:
-            update_prob_schedule = lambda n: jnp.maximum(jnp.exp(-0.002 * n), 0.02)
             optimizer.append(
                 affine(
                     lr_schedule,
@@ -355,7 +356,6 @@ def main(config: TrainConfig):
                 )
             )
         elif config.optimizer.type in ["psgd_xmat", "xmat"]:
-            update_prob_schedule = lambda n: jnp.maximum(jnp.exp(-0.002 * n), 0.1)
             optimizer.append(
                 xmat(
                     lr_schedule,
