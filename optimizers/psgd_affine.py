@@ -4,8 +4,8 @@ import numpy as np
 import jax
 from jax import numpy as jnp
 from jax.random import PRNGKey
-from optax import tree_utils as otu
-from optax._src import base, transform, clipping
+from optax import tree_utils as otu, global_norm
+from optax._src import base, transform
 from optax._src.numerics import safe_int32_increment
 from optax._src.utils import canonicalize_dtype
 from optax._src.combine import chain
@@ -250,9 +250,16 @@ def scale_by_affine(
 
         # global clipping (sqrt(n_params) seems to work well empirically)
         n_params = sum(p.size for p in jax.tree.leaves(updates))
-        clip_amt = np.sqrt(n_params)
-        updates, _ = clipping.clip_by_global_norm(clip_amt).update(
-            updates, base.EmptyState
+        max_norm = jnp.sqrt(n_params)
+        max_norm_tree = jax.tree.map(lambda _: max_norm, updates)
+        g_norm = global_norm(updates)
+        g_norm = jnp.maximum(max_norm, g_norm)
+        g_norm_tree = jax.tree.map(lambda _: g_norm, updates)
+        updates = jax.tree.map(
+            lambda u, g_n, max_n: (u / g_n.astype(u.dtype)) * max_n.astype(u.dtype),
+            updates,
+            g_norm_tree,
+            max_norm_tree,
         )
         # elementwise clipping
         updates = jax.tree.map(lambda x: jnp.clip(x, -1.0, 1.0), updates)

@@ -27,6 +27,7 @@ class OptimizerConfig:
     max_skew_triangular: int = 0
     precond_lr: float = 0.1
     precond_init_scale: Optional[float] = 1.0
+    preconditioner_dtype: str = "float32"
 
 
 @dataclass(frozen=True)

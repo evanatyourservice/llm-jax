@@ -198,3 +198,12 @@ def reshard(tree, shardings):
 def write_note(note: str):
     if jax.process_index() == 0:
         print(note)
+
+
+def check_dtypes(orig_dtype_tree, current_dtype_tree):
+    """Pass in two trees of dtypes and check if they are the same."""
+    assert orig_dtype_tree == current_dtype_tree, (
+        f"dtype mismatch:\n"
+        f"Before: {orig_dtype_tree}\n"
+        f"After:  {current_dtype_tree}\n"
+    )

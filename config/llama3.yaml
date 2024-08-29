@@ -23,6 +23,7 @@ optimizer: !dataclass:OptimizerConfig
     max_skew_triangular: 16
     precond_lr: 0.1
     precond_init_scale: 1.0
+    preconditioner_dtype: float32
 wandb: !dataclass:WandbConfig
     entity: evanatyourservice
     mode: online

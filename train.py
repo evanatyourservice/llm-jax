@@ -26,7 +26,7 @@ from optimizers.tearfree import optimizer as tearfree_opt
 from optimizers.tearfree import shampoo, second_order
 from optimizers.utils import hessian_helper
 from sharding import infer_sharding, fsdp_sharding
-from utils import reshard, write_note
+from utils import check_dtypes, reshard, write_note
 
 
 wandb.require("core")
@@ -52,13 +52,13 @@ def train_step(
     params_dtype: str = "float32",
 ) -> Tuple[jnp.ndarray, jnp.ndarray, TrainState]:
 
-    rng_key = jax.random.fold_in(rng_key, state.step)
+    rng_key = jax.random.fold_in(rng_key, state.step)  # same key each grad accum step
 
     def loss_fn(params):
         X, Y = tokens[:, :-1], tokens[:, 1:]
 
         X = X.astype(compute_dtype)
-        params = optax.tree_utils.tree_cast(params, compute_dtype)
+        params = otu.tree_cast(params, compute_dtype)
 
         logits = state.apply_fn(X, params=params, dropout_rng=rng_key, train=True)[0]
         logits = logits.astype(jnp.float32)
@@ -71,6 +71,8 @@ def train_step(
         accuracy = jnp.mean(jnp.argmax(logits, axis=-1) == Y)
 
         return loss, accuracy
+
+    before_dtypes = jax.tree.map(lambda x: x.dtype, state)
 
     if compute_hessian:
         update_prob_schedule = lambda n: jnp.maximum(0.5 * jnp.exp(-0.002 * n), 0.01)
@@ -98,6 +100,8 @@ def train_step(
     else:
         (loss, acc), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
         new_state = state.apply_gradients(grads=grads)
+
+    check_dtypes(before_dtypes, jax.tree.map(lambda x: x.dtype, new_state))
 
     new_state = new_state.replace(params=otu.tree_cast(new_state.params, params_dtype))
 
@@ -254,7 +258,7 @@ def main(config: TrainConfig):
                     precond_lr=config.optimizer.precond_lr,
                     precond_init_scale=config.optimizer.precond_init_scale,
                     mu_dtype=jnp.bfloat16,
-                    precond_dtype=jnp.bfloat16,
+                    precond_dtype=config.optimizer.preconditioner_dtype,
                     precision="tensorfloat32",
                     reshaped_params_sharding=reshaped_params_sharding,
                 )
@@ -399,7 +403,7 @@ def main(config: TrainConfig):
     )
     train_step_jit = jax.jit(
         train_step_w_sharding,
-        donate_argnums=(0,),
+        # donate_argnums=(0,),
         in_shardings=(train_state_sharding, data_sharding, rng.sharding),
         out_shardings=(repl_sharding, repl_sharding, train_state_sharding),
     )
@@ -419,7 +423,7 @@ def main(config: TrainConfig):
 
     @partial(
         jax.jit,
-        donate_argnums=(0,),
+        # donate_argnums=(0,),
         in_shardings=(train_state_sharding,),
         out_shardings=train_state_sharding,
     )
@@ -430,6 +434,8 @@ def main(config: TrainConfig):
     # grab step from last checkpoint
     step = jax.device_get(train_state.step).item()
 
+    orig_dtypes = jax.tree.map(lambda x: x.dtype, train_state)
+
     train_losses = []
     train_accs = []
     write_note("starting training")
@@ -438,12 +444,11 @@ def main(config: TrainConfig):
             try:
                 tokens = next(train_ds)
             except StopIteration:
-                train_ds = get_dataset(
-                    config.train_pattern,
-                    devices_flat,
-                    config.batch_size,
-                    block_size,
-                    interleave_cycle_length=max(1, 32 // jax.process_count()),
+                train_ds = fineweb_edu_dataset(
+                    flat_devices=devices_flat,
+                    tokenizer_name=tokenizer,
+                    batch_size=config.batch_size,
+                    block_size=block_size,
                     shuffle_buffer_size=config.shuffle_buffer_size,
                     tf_prefetch=10,
                     device_prefetch=2 if platform == "gpu" else 1,
@@ -484,6 +489,9 @@ def main(config: TrainConfig):
                 write_note(
                     f"step: {step}, loss: {train_loss:.4f}, accuracy: {train_acc:.4f}"
                 )
+
+                # double check dtypes
+                check_dtypes(orig_dtypes, jax.tree.map(lambda x: x.dtype, train_state))
 
         # eval hellaswag
         if step % config.hellaswag_eval_interval == 0:
