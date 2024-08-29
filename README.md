@@ -7,6 +7,7 @@ Model is from [EasyDeL](https://github.com/erfanzar/EasyDeL).
 TODO:
 - scan model layers for psgd affine
 - checkpointing huggingface dataset
+- add sharding and more models from EasyDeL
 
 
 ## Install
