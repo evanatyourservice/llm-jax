@@ -25,6 +25,7 @@ import jax
 from jax import numpy as jnp
 import optax
 from optimizers.tearfree import praxis_shim
+from utils import write_note
 
 
 @dataclasses.dataclass
@@ -304,7 +305,7 @@ def _update(
     blocks = jax.lax.cond(should_update_precond, precond_updated_blocks, lambda: blocks)
     new_state = _ShampooState(count=state.count + 1, blocks=blocks)
     if options.use_CASPR_variant:
-        print("CASPR operations:")
+        write_note("CASPR operations:")
         new_updates = jax.tree.map(
             _precondition_blocks_caspr,
             blockified_updates,
@@ -313,7 +314,7 @@ def _update(
             is_leaf=is_block,
         )
     else:
-        print("Shampoo operations:")
+        write_note("Shampoo operations:")
         new_updates = jax.tree.map(
             _precondition_blocks_shampoo,
             blockified_updates,
@@ -515,7 +516,7 @@ def _precondition_blocks_shampoo(
     inputs = ",".join([blocked_input] + preconditioner_inputs)
     formula = inputs + "->" + blocked_output
     with jax.named_scope("PreconditionShampoo"):
-        print(formula, update.shape, [x.shape for x in preconditioners])
+        write_note(formula, update.shape, [x.shape for x in preconditioners])
         return jnp.einsum(formula, update, *preconditioners)
 
 
@@ -551,7 +552,7 @@ def _precondition_blocks_caspr(
     ]
 
     with jax.named_scope("PreconditionCASPR"):
-        print(formulas, update.shape, [x.shape for x in preconditioners])
+        write_note(formulas, update.shape, [x.shape for x in preconditioners])
         for i in range(2):
             to_sum = []
             for f, p in zip(formulas, preconditioners):

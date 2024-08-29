@@ -5,7 +5,8 @@ import flax.jax_utils
 import transformers
 
 from dataset import prepare_hellaswag
-from train import eval_hellaswag, TrainConfig
+from train import eval_hellaswag
+from configs import TrainConfig
 
 
 @struct.dataclass

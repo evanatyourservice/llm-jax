@@ -35,7 +35,9 @@ def infer_sharding(params, mesh, op):
         params,
         names,
         specs,
-        is_leaf=lambda v: isinstance(v, nn.Partitioned),
+        # CHANGED: we assume preconditioners are kept in lists
+        # this is at least the case with tearfree shampoo and PSGD affine
+        is_leaf=lambda v: isinstance(v, nn.Partitioned) or isinstance(v, list),
     )
 
     # Two-level tree_map to prevent it from doing traversal inside the spec.
@@ -43,7 +45,7 @@ def infer_sharding(params, mesh, op):
     return jax.tree.map(lambda spec: NamedSharding(mesh, spec), specs)
 
 
-def fsdp_sharding(axis, min_size_to_shard_mb=4):
+def fsdp_sharding(axis, min_size_to_shard_mb=4, reverse_shape=True):
     """FSDP sharding rule.
 
     Shards the largest dimension that is not sharded already and is divisible
@@ -52,14 +54,23 @@ def fsdp_sharding(axis, min_size_to_shard_mb=4):
     Args:
       axis: mesh axis name for FSDP, or a collection of names.
       min_size_to_shard_mb: minimal tensor size to bother with sharding.
+      reverse_shape: if True, we shard the last axis first for dims of same size.
 
     Returns:
       A function that updates the sharding spec.
     """
+    orig_axis = axis
     axis = axis if isinstance(axis, str) else tuple(axis)
     axis_tuple = axis if isinstance(axis, tuple) else (axis,)
 
     def _update_spec(cur_spec, mesh, name, x):
+        # CHANGED: we assume preconditioners are kept in lists.
+        # This is at least the case for tearfree shampoo and PSGD affine.
+        if isinstance(x, list):
+            # For preconditioners, we replicate vectors, and shard matrices
+            # along first axis.
+            return [(axis, None) if len(y.shape) == 2 else (None,) for y in x]
+
         shape = x.shape
         axis_size = np.prod([mesh.shape[a] for a in axis_tuple])
 
@@ -67,11 +78,18 @@ def fsdp_sharding(axis, min_size_to_shard_mb=4):
             return cur_spec
 
         # Partition along largest axis that is divisible and not taken.
-        idx = np.argsort(shape)[::-1]
-        for i in idx:
-            if shape[i] % axis_size == 0:
-                if cur_spec[i] is None:
-                    return cur_spec[:i] + (axis,) + cur_spec[i + 1 :]
+        idx = np.argsort(shape)
+        if reverse_shape:
+            idx = idx[::-1]
+            for i in idx:
+                if shape[i] % axis_size == 0:
+                    if cur_spec[i] is None:
+                        return cur_spec[:i] + (axis,) + cur_spec[i + 1 :]
+        else:
+            for i in idx:
+                if shape[i] % axis_size == 0:
+                    if cur_spec[i] is None:
+                        return cur_spec[:i] + (axis,) + cur_spec[i + 1 :]
 
         write_note(
             f"Failed to apply `fsdp` rule to the parameter {name}:{shape}, "

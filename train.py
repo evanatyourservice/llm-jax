@@ -1,7 +1,7 @@
 from functools import partial
 from pprint import pprint
-from typing import Tuple, Optional, Any
-from dataclasses import dataclass, field, asdict
+from typing import Tuple, Any
+from dataclasses import asdict
 import os
 import numpy as np
 import wandb
@@ -11,16 +11,17 @@ import jax
 import jax.numpy as jnp
 from jax.experimental import mesh_utils
 from jax.sharding import Mesh, PartitionSpec as P, NamedSharding
-import transformers
 import flax
 from flax.training import checkpoints
 from flax.training.train_state import TrainState
 import optax
+import optax.tree_utils as otu
 import tensorflow as tf
+import easydel
 
-from dataset import get_dataset, prepare_hellaswag
+from dataset import prepare_hellaswag, fineweb_edu_dataset
+from configs import TrainConfig
 from optimizers.psgd_affine import affine, _shape_as_matrix
-from optimizers.psgd_xmat import xmat
 from optimizers.tearfree import optimizer as tearfree_opt
 from optimizers.tearfree import shampoo, second_order
 from optimizers.utils import hessian_helper
@@ -41,132 +42,44 @@ jax.config.update("jax_transfer_guard", "disallow")
 jax.config.update("jax_threefry_partitionable", True)
 
 
-@dataclass(frozen=True)
-class GPT2Config:
-    vocab_size: int = 50304  # divisible by 64
-    n_positions: int = 1024
-    n_embd: int = 768
-    n_layer: int = 12
-    n_head: int = 12
-    n_inner: int = None
-    activation_function: str = "gelu_new"
-    resid_pdrop: float = 0.0
-    embd_pdrop: float = 0.0
-    attn_pdrop: float = 0.0
-    layer_norm_epsilon: float = 0.00001
-    initializer_range: float = 0.01
-    summary_type: str = "cls_index"
-    summary_use_proj: bool = True
-    summary_activation: str = None
-    summary_proj_to_labels: bool = True
-    summary_first_dropout: float = 0.0
-    scale_attn_weights: bool = True
-    use_cache: bool = False
-    bos_token_id: int = 50256
-    eos_token_id: int = 50256
-    scale_attn_by_inverse_layer_idx: bool = True
-    reorder_and_upcast_attn: bool = True
-
-
-@dataclass(frozen=True)
-class WandbConfig:
-    """
-    wandb logging configuration
-    """
-
-    entity: str = "evanatyourservice"
-    """username or team name where you're sending runs"""
-    project: str = "owt"
-    """project name"""
-    name: str = ""
-    """experiment name"""
-    mode: str = "online"
-    """'offline', 'online', or 'disabled'"""
-    notes: str = ""
-
-
-@dataclass(frozen=True)
-class OptimizerConfig:
-    type: str = "adamw"
-    learning_rate: float = 0.001
-    warmup_steps: int = 1000
-    weight_decay: float = 0.01
-    grad_clip: float = 1.0
-    gradient_accumulation_steps: int = 1
-    betas: Tuple[float, float] = (0.9, 0.95)
-    preconditioner_update_probability: float = 1.0
-    psgd_use_hessian: bool = False
-    max_size_triangular: int = 0
-    max_skew_triangular: int = 0
-    precond_lr: float = 0.1
-    schedule_precond_lr: bool = False
-    precond_init_scale: float = 1.0
-    update_global_norm_clip: Optional[float] = 10000
-
-
-@dataclass(frozen=True)
-class TrainConfig:
-    seed: int = 0
-    out_dir: str = os.path.expanduser(
-        "~/gpt_out_dir"
-    )  # output directory for checkpoints (can be gcs path)
-    train_pattern: str = (
-        "owt_data/train_??.tfrecord"  # training files glob pattern (can be gcs path)
-    )
-    val_pattern: str = (
-        "owt_data/val_??.tfrecord"  # validation files glob pattern (can be gcs path)
-    )
-    min_size_to_shard_mb: int = 4
-    shuffle_buffer_size: int = 128
-    eval_interval: int = 250
-    eval_steps: int = 16  # evaluate for this number of steps (per-device)
-    hs_eval_steps: int = 16  # evaluate for this number of steps (per-device)
-    keep_checkpoints: int = 0  # number of historical checkpoints to keep
-    batch_size: int = 128
-    train_steps: int = 100000  # total number of training iterations
-    bfloat16_compute: bool = False  # use bfloat16 for compute
-    optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
-    wandb: WandbConfig = field(default_factory=WandbConfig)  # wandb logging
-    model: GPT2Config = field(default_factory=GPT2Config)  # gpt model config
-    remat: bool = False  # set to True to rematerialize gradients during backward pass
-
-
 def train_step(
     state: TrainState,
     tokens: jnp.ndarray,
     rng_key,
-    bfloat16_compute: bool,
     compute_hessian: bool = False,
     params_sharding: Any = None,
-    remat: bool = False,
-) -> Tuple[jnp.ndarray, TrainState]:
+    compute_dtype: str = "float32",
+    params_dtype: str = "float32",
+) -> Tuple[jnp.ndarray, jnp.ndarray, TrainState]:
 
     rng_key = jax.random.fold_in(rng_key, state.step)
 
-    def loss_fn(params) -> jnp.ndarray:
+    def loss_fn(params):
         X, Y = tokens[:, :-1], tokens[:, 1:]
-        if bfloat16_compute:
-            X = X.astype(jnp.bfloat16)
-            params = optax.tree_utils.tree_cast(params, jnp.bfloat16)
+
+        X = X.astype(compute_dtype)
+        params = optax.tree_utils.tree_cast(params, compute_dtype)
+
         logits = state.apply_fn(X, params=params, dropout_rng=rng_key, train=True)[0]
         logits = logits.astype(jnp.float32)
+
         loss = optax.softmax_cross_entropy_with_integer_labels(logits, Y).mean()
 
-        # palm style z loss
+        # palm style z-loss
         loss += 1e-4 * jax.scipy.special.logsumexp(logits, axis=-1).mean() ** 2
 
-        return loss
+        accuracy = jnp.mean(jnp.argmax(logits, axis=-1) == Y)
 
-    if remat:
-        loss_fn = jax.checkpoint(loss_fn)
+        return loss, accuracy
 
     if compute_hessian:
         update_prob_schedule = lambda n: jnp.maximum(0.5 * jnp.exp(-0.002 * n), 0.01)
-        loss, grads, hvp, vector, update_precond = hessian_helper(
+        (loss, acc), grads, hvp, vector, update_precond = hessian_helper(
             jax.random.split(rng_key, 1)[0],
             state.step,
             loss_fn=loss_fn,
             params=state.params,
+            has_aux=True,
             preconditioner_update_probability=update_prob_schedule(state.step),
             params_sharding=params_sharding,
         )
@@ -183,17 +96,12 @@ def train_step(
             step=state.step + 1, params=new_params, opt_state=new_opt_state
         )
     else:
-        loss, grads = jax.value_and_grad(loss_fn, has_aux=False)(state.params)
+        (loss, acc), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
         new_state = state.apply_gradients(grads=grads)
 
-    return loss, new_state
+    new_state = new_state.replace(params=otu.tree_cast(new_state.params, params_dtype))
 
-
-def eval_step(state: TrainState, tokens: jnp.ndarray) -> jnp.ndarray:
-    X, Y = tokens[:, :-1], tokens[:, 1:]
-    logits = state.apply_fn(X, params=state.params, train=False)[0]
-    loss = optax.softmax_cross_entropy_with_integer_labels(logits, Y).mean()
-    return loss
+    return loss, acc, new_state
 
 
 def eval_step_unreduced(state: TrainState, tokens: jnp.ndarray) -> jnp.ndarray:
@@ -239,7 +147,7 @@ def param_decay_mask(params):
 
 def get_default_config() -> TrainConfig:
     # use this file to set default values
-    path = os.environ.get("GPT_CONFIG", os.path.join("config", "gpt2.yaml"))
+    path = os.environ.get("LLM_CONFIG", os.path.join("config", "llama3.yaml"))
     if not os.path.exists(path):
         write_note("using default config")
         return TrainConfig()
@@ -264,8 +172,8 @@ def main(config: TrainConfig):
         wandb_config["jax_n_processes"] = jax.process_count()
         wandb.config.update(wandb_config)
 
-    block_size = config.model.n_positions
-    using_gpu = jax.devices()[0].platform == "gpu"
+    block_size = config.model.block_size
+    platform = jax.devices()[0].platform
 
     # ===== create device mesh =====
     write_note("creating 1D FSDP mesh")
@@ -275,29 +183,26 @@ def main(config: TrainConfig):
 
     # ===== datasets =====
     write_note("creating datasets")
-    train_ds = get_dataset(
-        config.train_pattern,
-        devices_flat,
-        config.batch_size,
-        block_size,
-        interleave_cycle_length=max(1, 32 // jax.process_count()),
+    tokenizer = (
+        config.model.tokenizer_name
+        if config.model.tokenizer_name is not None
+        else config.model.llama_huggingface_model_name
+    )
+    train_ds = fineweb_edu_dataset(
+        flat_devices=devices_flat,
+        tokenizer_name=tokenizer,
+        batch_size=config.batch_size,
+        block_size=block_size,
         shuffle_buffer_size=config.shuffle_buffer_size,
         tf_prefetch=10,
-        device_prefetch=2 if using_gpu else 1,
+        device_prefetch=2 if platform == "gpu" else 1,
     )
-    val_ds = get_dataset(
-        config.val_pattern,
-        devices_flat,
-        config.batch_size,
-        block_size,
-        interleave_cycle_length=max(1, 8 // jax.process_count()),
-    )
-    # hellaswag has 4 seqs per multiple choice problem
-    hellaswag_ds = prepare_hellaswag(
+    # hellaswag has 4 seqs per example
+    hellaswag_ds, hs_ds_length = prepare_hellaswag(
+        tokenizer,
         max(config.batch_size // 4, jax.device_count()),
         block_size,
         devices_flat,
-        shuffle_buffer_size=10042 // jax.process_count(),
     )
 
     # ===== optimizer =====
@@ -316,14 +221,14 @@ def main(config: TrainConfig):
         boundaries=[config.optimizer.warmup_steps],
     )
 
-    def make_opt(precond_sharding=None):
+    def make_opt(reshaped_params_sharding=None):
         write_note(f"using {config.optimizer.type} optimizer")
 
         optimizer = []
         if config.optimizer.grad_clip > 0.0:
             optimizer.append(optax.clip_by_global_norm(config.optimizer.grad_clip))
 
-        update_prob_schedule = lambda n: jnp.maximum(jnp.exp(-0.002 * n), 0.02)
+        update_prob_schedule = lambda n: jnp.maximum(jnp.exp(-0.002 * n), 0.01)
 
         if config.optimizer.type in ["adam", "adamw"]:
             optimizer.append(
@@ -336,42 +241,22 @@ def main(config: TrainConfig):
                 )
             )
         elif config.optimizer.type in ["psgd_affine", "affine"]:
-            precond_lr_schedule = lambda n: jnp.maximum(0.5 * jnp.exp(-0.003 * n), 0.1)
             optimizer.append(
                 affine(
                     lr_schedule,
                     update_prob_schedule,
                     b1=config.optimizer.betas[0],
+                    nesterov=False,
                     weight_decay=config.optimizer.weight_decay,
                     mask=param_decay_mask,
                     max_size_triangular=config.optimizer.max_size_triangular,
                     max_skew_triangular=config.optimizer.max_skew_triangular,
-                    precond_lr=precond_lr_schedule,
-                    precond_init_scale=config.optimizer.precond_init_scale,
-                    update_global_norm_clip=config.optimizer.update_global_norm_clip,
-                    momentum_before_precond_update=True,  # experimental
-                    mu_dtype=jnp.bfloat16,
-                    precond_dtype=jnp.float32,
-                    precision="tensorfloat32",
-                    precond_sharding=precond_sharding,
-                )
-            )
-        elif config.optimizer.type in ["psgd_xmat", "xmat"]:
-            optimizer.append(
-                xmat(
-                    lr_schedule,
-                    update_prob_schedule,
-                    b1=config.optimizer.betas[0],
-                    weight_decay=config.optimizer.weight_decay,
-                    mask=param_decay_mask,
                     precond_lr=config.optimizer.precond_lr,
                     precond_init_scale=config.optimizer.precond_init_scale,
-                    update_global_norm_clip=config.optimizer.update_global_norm_clip,
-                    momentum_before_precond_update=True,  # experimental
                     mu_dtype=jnp.bfloat16,
-                    precond_dtype=jnp.float32,
+                    precond_dtype=jnp.bfloat16,
                     precision="tensorfloat32",
-                    precond_sharding=precond_sharding,
+                    reshaped_params_sharding=reshaped_params_sharding,
                 )
             )
         elif config.optimizer.type == "shampoo":
@@ -410,14 +295,30 @@ def main(config: TrainConfig):
     rng = jax.random.PRNGKey(jax.device_put(config.seed, jax.devices("cpu")[0]))
 
     def init_train_state(key):
-        model_config = transformers.GPT2Config(**asdict(config.model))
-        model = transformers.FlaxAutoModelForCausalLM.from_config(
-            model_config, _do_init=False
+        model_config = easydel.modules.AutoEasyDeLConfig.from_pretrained(
+            config.model.llama_huggingface_model_name,
         )
-        params = model.init_weights(rng=key, input_shape=(1, config.model.n_positions))
+        model_config.use_cache = False
+        model_config.use_scan_mlp = config.model.use_scan_mlp
+        model = easydel.modules.llama.FlaxLlamaForCausalLM(
+            model_config,
+            dtype=config.compute_dtype,
+            param_dtype=config.params_dtype,
+        )
+        params = model.init_weights(
+            key,
+            input_shape=(
+                1,
+                block_size,
+            ),
+        )
         # delay optimizer creation to pass in preconditioner sharding
         train_state = TrainState(
-            step=0, apply_fn=model.__call__, params=params, tx=None, opt_state=None
+            step=0,
+            apply_fn=model.__call__,
+            params={"params": params},
+            tx=None,
+            opt_state=None,
         )
         return train_state
 
@@ -442,26 +343,21 @@ def main(config: TrainConfig):
         train_state.params
     )
 
-    if config.optimizer.type in ["psgd_affine", "affine"]:
+    def get_reshaped_params_sharding(params):
+        """Follows PSGD affine matrix reshaping and applies sharding strategy."""
+        # returns tuples if (reshape_fn, unreshape_fn, shape)
+        affine_reshapers = [_shape_as_matrix(x) for x in jax.tree.leaves(params)]
+        # grab preconditioner shapes and make jax.ShapeDtypeStructs
+        precond_shapes = [
+            jax.ShapeDtypeStruct(r[2], jnp.float32) for r in affine_reshapers
+        ]
+        # apply sharding strategy
+        return infer_sharding(params=precond_shapes, mesh=mesh, op=op)
 
-        def get_precond_sharding(params):
-            """Follows PSGD affine matrix reshaping and applies sharding strategy."""
-            # returns tuples if (reshape_fn, unreshape_fn, shape)
-            affine_reshapers = [_shape_as_matrix(x) for x in jax.tree.leaves(params)]
-            # grab preconditioner shapes and make jax.ShapeDtypeStructs
-            precond_shapes = [
-                jax.ShapeDtypeStruct(r[2], jnp.float32) for r in affine_reshapers
-            ]
-            # apply sharding strategy
-            return infer_sharding(params=precond_shapes, mesh=mesh, op=op)
-
-        precond_sharding = get_precond_sharding(train_state.params)
-    else:
-        # psgd xmat preconditioners are same shapes as params
-        precond_sharding = train_state_sharding.params
+    reshaped_params_sharding = get_reshaped_params_sharding(train_state.params)
 
     # remake optimizer with preconditioner sharding passed in
-    optimizer = make_opt(precond_sharding=precond_sharding)
+    optimizer = make_opt(reshaped_params_sharding=reshaped_params_sharding)
 
     # finish making train state (pass in optimizer and opt_state)
     train_state = train_state.replace(tx=optimizer, opt_state=opt_state)
@@ -487,7 +383,7 @@ def main(config: TrainConfig):
     # ==== restore train state ====
     # restore unreplicated optimizer + model state from last checkpoint.
     # this is a no-op if no checkpoints exist
-    if config.keep_checkpoints > 0:  # TODO implement checkpointing to wandb
+    if config.keep_checkpoints > 0:  # TODO implement checkpointing to bucket
         train_state = checkpoints.restore_checkpoint(
             f"{config.out_dir}/checkpoints/train_state", train_state
         )
@@ -496,21 +392,16 @@ def main(config: TrainConfig):
     # we specify in_shardings for sake of clarity, but they are inferred
     train_step_w_sharding = partial(
         train_step,
-        bfloat16_compute=config.bfloat16_compute,
         compute_hessian=config.optimizer.psgd_use_hessian,
         params_sharding=train_state_sharding.params,
-        remat=config.remat,
+        compute_dtype=config.compute_dtype,
+        params_dtype=config.params_dtype,
     )
     train_step_jit = jax.jit(
         train_step_w_sharding,
         donate_argnums=(0,),
         in_shardings=(train_state_sharding, data_sharding, rng.sharding),
-        out_shardings=(repl_sharding, train_state_sharding),
-    )
-    eval_step_jit = jax.jit(
-        eval_step,
-        in_shardings=(train_state_sharding, data_sharding),
-        out_shardings=repl_sharding,
+        out_shardings=(repl_sharding, repl_sharding, train_state_sharding),
     )
     eval_hellaswag_jit = jax.jit(
         eval_hellaswag,
@@ -537,26 +428,42 @@ def main(config: TrainConfig):
 
     # ======= train ========
     # grab step from last checkpoint
-    step = 0
-
-    best_val_loss = float("inf")
+    step = jax.device_get(train_state.step).item()
 
     train_losses = []
+    train_accs = []
     write_note("starting training")
     for step in range(step, config.train_steps):
         for accum_step in range(config.optimizer.gradient_accumulation_steps):
-            tokens = next(train_ds)
-            loss, train_state = train_step_jit(train_state, tokens, rng)
+            try:
+                tokens = next(train_ds)
+            except StopIteration:
+                train_ds = get_dataset(
+                    config.train_pattern,
+                    devices_flat,
+                    config.batch_size,
+                    block_size,
+                    interleave_cycle_length=max(1, 32 // jax.process_count()),
+                    shuffle_buffer_size=config.shuffle_buffer_size,
+                    tf_prefetch=10,
+                    device_prefetch=2 if platform == "gpu" else 1,
+                )
+                tokens = next(train_ds)
+            loss, acc, train_state = train_step_jit(train_state, tokens, rng)
             train_losses.append(jax.device_get(loss).item())
+            train_accs.append(jax.device_get(acc).item())
             if accum_step < config.optimizer.gradient_accumulation_steps - 1:
                 # only update step if we're on the last accumulation step
                 train_state = step_minus_1(train_state)
 
-        if (config.wandb is not None) and (jax.process_index() == 0) and step % 10 == 0:
+        # log every 10 steps
+        if config.wandb is not None and jax.process_index() == 0 and step % 10 == 0:
             train_loss = np.mean(train_losses)
+            train_acc = np.mean(train_accs)
             wandb.log(
                 {
                     "train_loss": train_loss,
+                    "train_acc": train_acc,
                     "lr": (
                         jax.device_get(get_lr(jax.device_put(step, repl_sharding)))
                         if callable(lr_schedule)
@@ -571,43 +478,42 @@ def main(config: TrainConfig):
             )
 
             train_losses = []
+            train_accs = []
 
-        if step % config.eval_interval == 0 and step > 0:
-            val_losses = []
-            for _ in range(config.eval_steps):
-                tokens = next(val_ds)
-                loss = eval_step_jit(train_state, tokens)
-                val_losses.append(jax.device_get(loss).item())
-            val_loss = np.mean(val_losses)
+            if step % 100 == 0:
+                write_note(
+                    f"step: {step}, loss: {train_loss:.4f}, accuracy: {train_acc:.4f}"
+                )
 
-            # hellaswag
+        # eval hellaswag
+        if step % config.hellaswag_eval_interval == 0:
             hs_accs = []
-            for _ in range(config.hs_eval_steps):
+            for _ in range(5 if platform == "cpu" else hs_ds_length):
                 hs_batch = next(hellaswag_ds)
                 hs_acc = eval_hellaswag_jit(train_state, *hs_batch)
                 hs_accs.append(jax.device_get(hs_acc).item())
             hellaswag_acc = np.mean(hs_accs)
 
-            write_note(
-                f"step: {step}, val_loss: {val_loss:.4f}, "
-                f"hellaswag_acc: {hellaswag_acc:.4f}"
-            )
+            if config.wandb is not None and jax.process_index() == 0:
+                wandb.log({"hellaswag_acc": hellaswag_acc}, step=step)
 
-            if val_loss < best_val_loss and config.keep_checkpoints > 0:
-                best_val_loss = val_loss
-                if jax.process_index() == 0:
-                    # save train state in process 0
-                    checkpoints.save_checkpoint(
-                        f"{config.out_dir}/checkpoints/train_state",
-                        jax.device_get(train_state),
-                        step,
-                        keep=config.keep_checkpoints,
-                        overwrite=True,
-                    )
+            write_note(f"step: {step}, hellaswag_acc: {hellaswag_acc:.4f}")
 
-            if (config.wandb is not None) and (jax.process_index() == 0):
-                wandb.log(
-                    {"val_loss": val_loss, "hellaswag_acc": hellaswag_acc}, step=step
+        # checkpoint
+        if (
+            config.checkpoint_interval > 0
+            and step % config.checkpoint_interval == 0
+            and config.keep_checkpoints > 0
+            and step > 0
+        ):
+            if jax.process_index() == 0:
+                # save train state in process 0
+                checkpoints.save_checkpoint(
+                    f"{config.out_dir}/checkpoints/train_state",
+                    jax.device_get(train_state),
+                    step,
+                    keep=config.keep_checkpoints,
+                    overwrite=True,
                 )
 
 

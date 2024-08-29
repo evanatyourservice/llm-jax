@@ -1,0 +1,32 @@
+# tyro YAML.
+!dataclass:TrainConfig
+shuffle_buffer_size: 1024
+hellaswag_eval_interval: 1000
+checkpoint_interval: 0
+batch_size: 1024
+train_steps: 50000
+compute_dtype: float32
+params_dtype: float32
+optimizer: !dataclass:OptimizerConfig
+    type: "adamw"
+    learning_rate: 0.001
+    warmup_steps: 1000
+    weight_decay: 0.01
+    grad_clip: 1.0
+    gradient_accumulation_steps: 1
+    betas:
+      - 0.9
+      - 0.95
+    preconditioner_update_probability: 1.0
+    psgd_use_hessian: False
+    max_size_triangular: 8192
+    max_skew_triangular: 16
+    precond_lr: 0.1
+    precond_init_scale: 1.0
+wandb: !dataclass:WandbConfig
+    entity: evanatyourservice
+    mode: online
+model: !dataclass:LlamaModelConfig
+    llama_huggingface_model_name: "meta-llama/Meta-Llama-3.1-8B"
+    use_scan_mlp: True
+    block_size: 2048

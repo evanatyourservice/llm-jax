@@ -1,12 +1,12 @@
 # llm-jax
 
-Started with [this repo, credit to @jenkspt](https://github.com/jenkspt/gpt-jax), and is still mostly this repo. 
-Also pulled some tools from [big_vision](https://github.com/google-research/big_vision) to add FSDP.
+Started with [this repo, credit to @jenkspt](https://github.com/jenkspt/gpt-jax). 
+Also pulled some tools from [big_vision](https://github.com/google-research/big_vision) to add simple FSDP.
+Model is from [EasyDeL](https://github.com/erfanzar/EasyDeL).
 
 TODO:
-- any huggingface model
-- scan huggingface model layers
-- any huggingface dataset (stream)
+- scan model layers for psgd affine
+- checkpointing huggingface dataset
 
 
 ## Install
@@ -27,25 +27,11 @@ cd llm-jax && pip install -U pip && pip install -r requirements.txt && pip insta
 ```
 
 
-## Data
-
-Prepare data tokenizes and saves openwebtext to tfrecords.
-```shell
-python data/openwebtext/prepare.py
-```
-
-This will generate the following files:  
-`train_0.tfrecord`, `train_1.tfrecord` ... `train_{num_shards}`  
-`val_0.tfrecord`, `val_1.tfrecord` ... `val_{num_shards}`
-
-If you're training on a TPU, you should copy these files to a GCS bucket.
-
-
 ## Run
 
-The base settings are in `config/gpt2.yaml`. This is loaded in scripts using `export GPT_CONFIG=config/gpt2.yaml`. 
+The base settings are in `config/llama3.yaml`. This is loaded in scripts using `export LLM_CONFIG=config/llama3.yaml`. 
 You can override with your own settings by either loading your own config in a script, or using flags 
-like in `scripts/gpt_psgd.sh`.
+like in `scripts/psgd.sh`.
 
 To run on multi-host TPU, install requirements on all hosts
 ```shell
@@ -55,5 +41,5 @@ gcloud compute tpus tpu-vm ssh llm-jax --zone=us-central2-a --worker=all --comma
 Then run a script on all hosts
 
 ```shell
-gcloud compute tpus tpu-vm ssh llm-jax --zone=us-central2-a --worker=all --command="cd llm-jax && bash scripts/gpt_psgd.sh"
+gcloud compute tpus tpu-vm ssh llm-jax --zone=us-central2-a --worker=all --command="cd llm-jax && bash scripts/psgd.sh"
 ```

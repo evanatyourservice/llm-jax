@@ -131,7 +131,7 @@ def _validate(options: Options) -> None:
         raise ValueError(f"rank ({options.rank}) must be at least 1")
 
 
-def _path_to_key(path: ...) -> str:
+def _path_to_key(path: Any) -> str:
     concat_path = ""
     for dickey in path:
         if hasattr(dickey, "key"):
