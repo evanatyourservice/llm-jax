@@ -26,7 +26,6 @@ from optimizers.psgd_affine import affine, _shape_as_matrix
 from optimizers.tearfree import optimizer as tearfree_opt
 from optimizers.tearfree import shampoo, second_order
 from optimizers.utils import hessian_helper
-from optimizers.make_optimizer import make_opt
 from sharding import infer_sharding, fsdp_sharding
 from utils import check_dtypes, reshard, write_note
 

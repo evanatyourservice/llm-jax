@@ -59,7 +59,6 @@ def fsdp_sharding(axis, min_size_to_shard_mb=4, reverse_shape=True):
     Returns:
       A function that updates the sharding spec.
     """
-    orig_axis = axis
     axis = axis if isinstance(axis, str) else tuple(axis)
     axis_tuple = axis if isinstance(axis, tuple) else (axis,)
 
@@ -67,9 +66,16 @@ def fsdp_sharding(axis, min_size_to_shard_mb=4, reverse_shape=True):
         # CHANGED: we assume preconditioners are kept in lists.
         # This is at least the case for tearfree shampoo and PSGD affine.
         if isinstance(x, list):
-            # For preconditioners, we replicate vectors, and shard matrices
-            # along first axis.
-            return [(axis, None) if len(y.shape) == 2 else (None,) for y in x]
+            if len(x) > 2:
+                # might be shampoo, just shard everything in first dim, opposite params
+                return [(axis,) if len(y.shape) > 1 else (None,) for y in x]
+            else:
+                # For psgd, we replicate vectors and shard matrices.
+                # if both triangular, shard opposite from each other
+                return [
+                    (axis,) if len(x[0].shape) > 1 else (None,),
+                    (None, axis) if len(x[1].shape) > 1 else (None,),
+                ]
 
         shape = x.shape
         axis_size = np.prod([mesh.shape[a] for a in axis_tuple])
