@@ -20,7 +20,7 @@ from flax.training.train_state import TrainState
 import optax
 import optax.tree_utils as otu
 import tensorflow as tf
-import easydel
+import easydel as ed
 
 from dataset import prepare_hellaswag, fineweb_edu_dataset
 from configs import TrainConfig
@@ -282,7 +282,7 @@ def main(config: TrainConfig):
     def init_train_state(key):
         """Initialize the train state."""
         # get easydel model config
-        model_config = easydel.AutoEasyDeLConfig.from_pretrained(
+        model_config = ed.AutoEasyDeLConfig.from_pretrained(
             config.model.huggingface_model_name
         )
 
@@ -297,7 +297,7 @@ def main(config: TrainConfig):
 
         # get easydel flax module
         model_type: str = model_config.model_type
-        _, module, _ = easydel.get_modules_by_type(model_type)
+        _, module, _ = ed.get_modules_by_type(model_type)
 
         # create model and params
         model = module(
