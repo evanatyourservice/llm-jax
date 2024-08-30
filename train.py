@@ -278,6 +278,7 @@ def main(config: TrainConfig):
     rng = jax.random.PRNGKey(jax.device_put(config.seed, jax.devices("cpu")[0]))
 
     def init_train_state(key):
+        """Initialize the train state."""
         # get easydel model config
         model_config = easydel.AutoEasyDeLConfig.from_pretrained(
             config.model.huggingface_model_name
@@ -295,16 +296,17 @@ def main(config: TrainConfig):
         # get easydel flax module
         model_type: str = model_config.model_type
         _, module, _ = easydel.get_modules_by_type(model_type)
-        module = module.module_class
 
         # create model and params
-        model: nn.Module = module(
+        model, params = module(
             config=model_config,
             dtype=config.compute_dtype,
             param_dtype=config.params_dtype,
             precision=jax.lax.Precision.DEFAULT,
+            seed=config.seed,
+            _do_init=True,
         )
-        params = model.init(key, jnp.ones((1, block_size), dtype=jnp.uint16))["params"]
+        params = otu.tree_cast(params, config.params_dtype)
 
         # delay optimizer creation to pass in preconditioner sharding
         apply_fn = partial(model.apply, return_dict=False)
