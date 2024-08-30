@@ -291,7 +291,7 @@ def main(config: TrainConfig):
         model_config.use_scan_mlp = config.model.use_scan_mlp
         print(model_config)
 
-        model_type: str = config.model_type
+        model_type: str = model_config.model_type
         _, module, _ = easydel.get_modules_by_type(model_type)
 
         model = module(
