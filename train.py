@@ -561,6 +561,8 @@ def main(config: TrainConfig):
                 # double check dtypes are consistent
                 check_dtypes(orig_dtypes, jax.tree.map(lambda x: x.dtype, train_state))
 
+            start_time = time.time()
+
         # checkpoint
         if (
             config.checkpoint_interval > 0
