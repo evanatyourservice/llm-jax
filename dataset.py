@@ -31,6 +31,8 @@ def get_dataset(
     tf_prefetch: int = 5,
     device_prefetch: int = 0,
 ) -> tf.data.Dataset.as_numpy_iterator:
+    seq_len = block_size + 1
+
     file_ds = tf.data.Dataset.list_files(pattern, shuffle=True)
     file_ds = file_ds.shard(jax.process_count(), jax.process_index())
     file_ds = file_ds.repeat()
@@ -62,7 +64,7 @@ def get_dataset(
         ds = ds.shuffle(shuffle_buffer_size)
 
     ds = ds.unbatch().batch(
-        block_size + 1, drop_remainder=True, num_parallel_calls=tf.data.AUTOTUNE
+        seq_len, drop_remainder=True, num_parallel_calls=tf.data.AUTOTUNE
     )
 
     # blocks are then shuffled and batched
@@ -99,6 +101,8 @@ def prepare_hellaswag(
     """Read file and tokenize the hellaswag dataset."""
     write_note("preparing hellaswag")
 
+    seq_len = block_size + 1
+
     tokenizer = AutoTokenizer.from_pretrained(
         tokenizer_name, trust_remote_code=True, use_fast=True
     )
@@ -122,13 +126,13 @@ def prepare_hellaswag(
                 input_ids = tokenizer(
                     input_text,
                     add_special_tokens=False,
-                    max_length=block_size + 1,  # Increase max_length by 1
+                    max_length=seq_len,
                     padding="max_length",
                     truncation=True,
                 )["input_ids"]
                 lens.append(len(input_ids))
                 to_concat.append(input_ids)
-            all_data.append(np.array(to_concat))  # (4, block_size + 1)
+            all_data.append(np.array(to_concat))  # (4, seq_len)
             all_labels.append(int(correct_end))  # Convert to integer
             all_lengths.append(np.array(lens))  # (4,)
 
@@ -173,6 +177,8 @@ def fineweb_edu_dataset(
     seed: int = 42,
     num_shards_per_process: int = 1,
 ):
+    seq_len = block_size + 1
+
     # awful way to shard but whatever
     idx = jax.process_index()
     # download n shards for each process
@@ -217,7 +223,7 @@ def fineweb_edu_dataset(
                 return tokenizer(
                     data_chunk["text"],
                     add_special_tokens=False,
-                    max_length=block_size,
+                    max_length=seq_len,
                     padding="max_length",
                     truncation=True,
                 )
@@ -229,7 +235,7 @@ def fineweb_edu_dataset(
                 yield example["input_ids"]
 
         ds = tf.data.Dataset.from_generator(
-            gen, output_signature=tf.TensorSpec(shape=(block_size,), dtype=tf.int32)
+            gen, output_signature=tf.TensorSpec(shape=(seq_len,), dtype=tf.int32)
         )
         ds = ds.batch(
             batch_size // jax.process_count(),
@@ -279,15 +285,15 @@ def fineweb_edu_dataset(
             return tokenizer(
                 data_chunk["text"],
                 add_special_tokens=False,
-                max_length=block_size,
+                max_length=seq_len,
                 padding="max_length",
                 truncation=True,
-            )["input_ids"]
+            )
 
-        hf_ds = hf_ds.map(tokenize, num_proc=32)
+        hf_ds = hf_ds.map(tokenize, num_proc=16)
         hf_ds = hf_ds.shuffle(seed=seed).shuffle(seed=seed + 1).shuffle(seed=seed + 2)
 
-        ds = hf_ds.to_tf_dataset(prefetch=False)
+        ds = hf_ds.to_tf_dataset(prefetch=False, label_cols=["input_ids"])
         ds = ds.batch(
             batch_size // jax.process_count(),
             drop_remainder=True,
