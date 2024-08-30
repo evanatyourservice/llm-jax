@@ -293,7 +293,7 @@ def fineweb_edu_dataset(
                 truncation=True,
             )
 
-        hf_ds = hf_ds.set_transform(tokenize)
+        hf_ds.set_transform(tokenize)
 
         ds = hf_ds.to_tf_dataset(prefetch=False, label_cols=["input_ids"])
         ds = ds.batch(
