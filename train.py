@@ -282,15 +282,25 @@ def main(config: TrainConfig):
     rng = jax.random.PRNGKey(jax.device_put(config.seed, jax.devices("cpu")[0]))
 
     def init_train_state(key):
-        model_config = easydel.modules.AutoEasyDeLConfig.from_pretrained(
-            config.model.llama_huggingface_model_name
+        model_config = easydel.AutoEasyDeLConfig.from_pretrained(
+            config.model.huggingface_model_name
         )
         model_config.use_cache = False
+        # override with config.model settings
+        model_config.attn_mechanism = config.model.attn_mechanism
         model_config.use_scan_mlp = config.model.use_scan_mlp
-        model = easydel.modules.llama.FlaxLlamaForCausalLM(
-            model_config, dtype=config.compute_dtype, param_dtype=config.params_dtype
+        print(model_config)
+
+        model_type: str = config.model_type
+        _, module, _ = easydel.get_modules_by_type(model_type)
+
+        model = module(
+            config=model_config,
+            dtype=config.compute_dtype,
+            param_dtype=config.params_dtype,
         )
         params = model.init_weights(key, input_shape=(1, block_size))
+
         # delay optimizer creation to pass in preconditioner sharding
         train_state = TrainState(
             step=0,
@@ -422,7 +432,7 @@ def main(config: TrainConfig):
     tokenizer_name = (
         config.model.tokenizer_name
         if config.model.tokenizer_name is not None
-        else config.model.llama_huggingface_model_name
+        else config.model.huggingface_model_name
     )
     if platform == "cpu":
         device_prefetch = 0

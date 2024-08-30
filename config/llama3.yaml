@@ -27,6 +27,6 @@ wandb: !dataclass:WandbConfig
     entity: evanatyourservice
     mode: online
 model: !dataclass:ModelConfig
-    llama_huggingface_model_name: "meta-llama/Meta-Llama-3.1-8B"
+    huggingface_model_name: "meta-llama/Meta-Llama-3.1-8B"
     use_scan_mlp: True
     block_size: 2048

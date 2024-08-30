@@ -8,18 +8,17 @@ class ModelConfig:
     """model configuration.
 
     Attributes:
-        llama_huggingface_model_name: llama model name.
+        huggingface_model_name: llama model name.
         tokenizer_name: tokenizer name.
         use_scan_mlp: whether to use scan mlp.
         block_size: block size.
     """
 
-    llama_huggingface_model_name: str = (
-        "trl-internal-testing/tiny-random-LlamaForCausalLM"
-    )
+    huggingface_model_name: str = "trl-internal-testing/tiny-random-LlamaForCausalLM"
     tokenizer_name: Optional[str] = None
-    use_scan_mlp: bool = False
     block_size: int = 1024
+    attn_mechanism: str = "jax_flash_attn2"
+    use_scan_mlp: bool = False
 
 
 @dataclass(frozen=True)

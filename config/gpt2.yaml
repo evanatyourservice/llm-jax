@@ -28,6 +28,6 @@ wandb: !dataclass:WandbConfig
     entity: evanatyourservice
     mode: online
 model: !dataclass:ModelConfig
-    llama_huggingface_model_name: "gpt2"
+    huggingface_model_name: "gpt2"
     use_scan_mlp: False
     block_size: 1024
