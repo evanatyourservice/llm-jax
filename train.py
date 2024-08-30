@@ -310,7 +310,6 @@ def main(config: TrainConfig):
         )
         params = model.init_weights(key, input_shape=(1, block_size))
         params = otu.tree_cast(params, config.params_dtype)
-        print(params.keys())
 
         # delay optimizer creation to pass in preconditioner sharding
         apply_fn = partial(model.__call__, return_dict=False)
