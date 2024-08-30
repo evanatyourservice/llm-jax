@@ -18,7 +18,7 @@ python3 train.py \
     --optimizer.type=affine \
     --optimizer.learning_rate=0.001 \
     --optimizer.warmup_steps=512 \
-    --optimizer.nesterov=False \
+    --optimizer.no_nesterov \
     --optimizer.weight_decay=0.01 \
     --optimizer.grad_clip=0.0 \
     --optimizer.max_size_triangular=1000000000 \
