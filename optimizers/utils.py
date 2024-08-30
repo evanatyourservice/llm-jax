@@ -3,7 +3,7 @@ from typing import Callable, Tuple, Any
 import jax
 from jax import numpy as jnp
 from jax.random import PRNGKey
-from optax import tree_utils as otu
+from optax import tree_utils as otu, global_norm
 from optax._src import base
 from optax._src.numerics import safe_int32_increment
 
@@ -101,3 +101,17 @@ def apply_momentum(
 
 def add_eps(x):
     return jnp.clip(x, 1e-25, None)
+
+
+def global_clip(updates, max_norm):
+    max_norm_tree = jax.tree.map(lambda _: max_norm, updates)
+    g_norm = global_norm(updates)
+    g_norm = jnp.maximum(max_norm, g_norm)
+    g_norm_tree = jax.tree.map(lambda _: g_norm, updates)
+    updates = jax.tree.map(
+        lambda u, g_n, max_n: (u / g_n.astype(u.dtype)) * max_n.astype(u.dtype),
+        updates,
+        g_norm_tree,
+        max_norm_tree,
+    )
+    return updates

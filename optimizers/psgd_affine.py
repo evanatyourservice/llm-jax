@@ -4,13 +4,13 @@ import numpy as np
 import jax
 from jax import numpy as jnp
 from jax.random import PRNGKey
-from optax import tree_utils as otu, global_norm
+from optax import tree_utils as otu
 from optax._src import base, transform
 from optax._src.numerics import safe_int32_increment
 from optax._src.utils import canonicalize_dtype
 from optax._src.combine import chain
 
-from optimizers.utils import add_eps, apply_momentum
+from optimizers.utils import add_eps, apply_momentum, global_clip
 
 
 class PSGDAffineState(NamedTuple):
@@ -30,7 +30,7 @@ def scale_by_affine(
     precond_init_scale: Optional[float] = None,
     mu_dtype: Optional[Union[str, jnp.dtype]] = None,
     precond_dtype: Optional[Union[str, jnp.dtype]] = None,
-    precision: str = "tensorfloat32",
+    precision: str = "bfloat16",
     reshaped_params_sharding: Any = None,
 ) -> base.GradientTransformationExtraArgs:
     """
@@ -209,6 +209,7 @@ def scale_by_affine(
             # use grads as Hvp, momentum before precond update
             Hvp = momentum_updates
 
+        # TODO switch to while loop trick to avoid wasteful XLA buffer allocation
         key, Qs = jax.lax.cond(
             update_preconditioner,
             _update_precond,
@@ -238,16 +239,7 @@ def scale_by_affine(
         # global clipping (sqrt(n_params) seems to work well empirically)
         n_params = sum(p.size for p in jax.tree.leaves(updates))
         max_norm = jnp.sqrt(n_params)
-        max_norm_tree = jax.tree.map(lambda _: max_norm, updates)
-        g_norm = global_norm(updates)
-        g_norm = jnp.maximum(max_norm, g_norm)
-        g_norm_tree = jax.tree.map(lambda _: g_norm, updates)
-        updates = jax.tree.map(
-            lambda u, g_n, max_n: (u / g_n.astype(u.dtype)) * max_n.astype(u.dtype),
-            updates,
-            g_norm_tree,
-            max_norm_tree,
-        )
+        updates = global_clip(updates, max_norm)
         # elementwise clipping
         updates = jax.tree.map(lambda x: jnp.clip(x, -1.0, 1.0), updates)
 
@@ -274,7 +266,7 @@ def affine(
     precond_init_scale: Optional[float] = None,
     mu_dtype: Optional[Union[str, jnp.dtype]] = None,
     precond_dtype: Optional[Union[str, jnp.dtype]] = None,
-    precision: str = "tensorfloat32",
+    precision: str = "bfloat16",
     reshaped_params_sharding: Any = None,
 ) -> base.GradientTransformationExtraArgs:
     """

@@ -426,8 +426,7 @@ def main(config: TrainConfig):
     elif platform == "gpu":
         device_prefetch = 2
         streaming = False
-    else:
-        # TPU
+    else:  # TPU
         device_prefetch = 1
         streaming = False
     train_ds_fn = partial(
@@ -476,7 +475,9 @@ def main(config: TrainConfig):
         # log to wandb every 10 steps
         if config.wandb is not None and jax.process_index() == 0 and step % 10 == 0:
             train_loss = np.mean(train_losses)
+            min_loss = min(min_loss, train_loss)
             train_acc = np.mean(train_accs)
+            max_acc = max(max_acc, train_acc)
             wandb.log(
                 {
                     "train_loss": train_loss,
@@ -493,6 +494,8 @@ def main(config: TrainConfig):
                 },
                 step=step,
             )
+            wandb.summary["min_train_loss"] = min_loss
+            wandb.summary["max_train_acc"] = max_acc
 
             train_losses = []
             train_accs = []
@@ -530,14 +533,16 @@ def main(config: TrainConfig):
         # eval hellaswag
         if step % config.hellaswag_eval_interval == 0:
             hs_accs = []
-            for _ in range(5 if platform == "cpu" else hellaswag_len):
+            for _ in range(10 if platform == "cpu" else hellaswag_len):
                 hs_batch = next(hellaswag_ds)
                 hs_acc = eval_hellaswag_jit(train_state, *hs_batch)
                 hs_accs.append(jax.device_get(hs_acc).item())
             hellaswag_acc = np.mean(hs_accs)
+            max_hellaswag_acc = max(max_hellaswag_acc, hellaswag_acc)
 
             if config.wandb is not None and jax.process_index() == 0:
                 wandb.log({"hellaswag_acc": hellaswag_acc}, step=step)
+                wandb.summary["max_hellaswag_acc"] = max_hellaswag_acc
 
             write_note(f"step: {step}, hellaswag_acc: {hellaswag_acc:.4f}")
 

@@ -282,16 +282,16 @@ def fineweb_edu_dataset(
                 max_length=block_size,
                 padding="max_length",
                 truncation=True,
-            )
+            )["input_ids"]
 
-        hf_ds = hf_ds.map(tokenize, num_proc=16)
-        hf_ds = hf_ds.shuffle().shuffle().shuffle()
+        hf_ds = hf_ds.map(tokenize, num_proc=32)
+        hf_ds = hf_ds.shuffle(seed=seed).shuffle(seed=seed + 1).shuffle(seed=seed + 2)
 
-        ds = hf_ds.to_tf_dataset(columns=["input_ids"], prefetch=False)
+        ds = hf_ds.to_tf_dataset(prefetch=False)
         ds = ds.batch(
             batch_size // jax.process_count(),
             drop_remainder=True,
-            num_parallel_calls=tf.data.AUTOTUNE,
+            num_parallel_calls=16,
         )
         ds = ds.with_options(OPTIONS)
         ds = ds.prefetch(tf_prefetch)
