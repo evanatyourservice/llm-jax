@@ -8,8 +8,8 @@ export LLM_CONFIG=config/gpt2.yaml  # base config
 python3 train.py \
     --out_dir=gs://uscentral2stuff/llm-jax/$EXPERIMENT \
     --attempt_to_load_checkpoint \
-    --hellaswag_eval_interval=100 \
-    --checkpoint_interval=100 \
+    --hellaswag_eval_interval=1000 \
+    --checkpoint_interval=1000 \
     --n_fineweb_edu_shards_dl=1 \
     --batch_size=256 \
     --optimizer.gradient_accumulation_steps=1 \
@@ -17,12 +17,12 @@ python3 train.py \
     --params_dtype=bfloat16 \
     --optimizer.type=affine \
     --optimizer.learning_rate=0.001 \
-    --optimizer.warmup_steps=0 \
+    --optimizer.warmup_steps=512 \
     --optimizer.no_nesterov \
     --optimizer.weight_decay=0.01 \
     --optimizer.grad_clip=0.0 \
     --optimizer.max_size_triangular=1000000000 \
     --optimizer.max_skew_triangular=0 \
     --optimizer.precond_lr=0.1 \
-    --optimizer.precond_init_scale=0.1 \
+    --optimizer.precond_init_scale=1.0 \
     --optimizer.preconditioner_dtype=bfloat16
