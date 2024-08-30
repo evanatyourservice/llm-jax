@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Tuple, Optional
 
 
@@ -49,6 +50,9 @@ class WandbConfig:
     notes: str = ""
 
 
+date_and_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+
+
 @dataclass(frozen=True)
 class TrainConfig:
     """training configuration.
@@ -57,9 +61,9 @@ class TrainConfig:
         seed: random seed.
         out_dir: output directory for checkpoints (can be gcs path).
         min_size_to_shard_mb: minimum size of shards to create.
-        shuffle_buffer_size: shuffle buffer size.
         hellaswag_eval_interval: interval to evaluate hellaswag.
         checkpoint_interval: interval to save checkpoints.
+        checkpoint_milestone: milestone to save checkpoints.
         keep_checkpoints: number of historical checkpoints to keep.
         batch_size: batch size.
         train_steps: total number of training iterations.
@@ -71,12 +75,13 @@ class TrainConfig:
     """
 
     seed: int = 0
-    out_dir: str = "gs://uscentral2stuff/llm-jax"
+    out_dir: str = f"gs://uscentral2stuff/llm-jax/run_{date_and_time}"
+    attempt_to_load_checkpoint: bool = False
     min_size_to_shard_mb: int = 4
-    shuffle_buffer_size: int = 128
     hellaswag_eval_interval: int = 1000
-    checkpoint_interval: int = 0
-    keep_checkpoints: int = 1  # number of historical checkpoints to keep
+    checkpoint_interval: int = 1000
+    keep_checkpoints: int = 2  # number of historical checkpoints to keep
+    checkpoint_milestone: int = 10000
     batch_size: int = 128
     train_steps: int = 100000  # total number of training iterations
     compute_dtype: str = "float32"  # "float32" or "bfloat16"
@@ -84,3 +89,7 @@ class TrainConfig:
     optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
     wandb: WandbConfig = field(default_factory=WandbConfig)  # wandb logging
     model: LlamaModelConfig = field(default_factory=LlamaModelConfig)
+
+    assert (
+        checkpoint_milestone % checkpoint_interval == 0
+    ), "checkpoint_milestone must be a multiple of checkpoint_interval"

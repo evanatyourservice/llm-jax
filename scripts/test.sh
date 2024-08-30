@@ -8,13 +8,15 @@ export LLM_CONFIG=config/llama3.yaml  # base config
 
 
 python3 train.py \
-    --out_dir=/Users/evanwalters/gpt_testing/$EXPERIMENT \
+    --out_dir=/Users/evanwalters/llm_testing/run_2024-08-29_20-34-46 \
+    --attempt_to_load_checkpoint \
     --compute_dtype=float32 \
     --params_dtype=float32 \
-    --shuffle_buffer_size=10 \
     --min_size_to_shard_mb=0 \
     --train_steps=200 \
     --hellaswag_eval_interval=100 \
+    --checkpoint_interval=100 \
+    --keep_checkpoints=2 \
     --batch_size=2 \
     --optimizer.type=affine \
     --optimizer.learning_rate=0.001 \
@@ -22,5 +24,4 @@ python3 train.py \
     --optimizer.preconditioner_dtype=float32 \
     --model.llama_huggingface_model_name="trl-internal-testing/tiny-random-LlamaForCausalLM" \
     --model.no_use_scan_mlp \
-    --model.block_size=128 \
-    --wandb.mode=disabled
+    --model.block_size=128

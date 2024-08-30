@@ -3,6 +3,7 @@ from pprint import pprint
 from typing import Tuple, Any
 from dataclasses import asdict
 import os
+import random
 import numpy as np
 import wandb
 import tyro
@@ -30,9 +31,10 @@ from utils import check_dtypes, reshard, write_note
 
 
 wandb.require("core")
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".95"
 tf.config.experimental.set_visible_devices([], "GPU")
 tf.config.experimental.set_visible_devices([], "TPU")
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 # Transfer guard will fail the program whenever that data between a host and
 # a device is transferred implicitly. This often catches subtle bugs that
 # cause slowdowns and memory fragmentation. Explicit transfers are done
@@ -165,10 +167,11 @@ def main(config: TrainConfig):
     write_note(f"Number of JAX processes: {jax.process_count()}")
 
     # set seeds
+    random.seed(config.seed)
     np.random.seed(config.seed)
-    # keeping tensorflow wild for now
+    tf.random.set_seed(config.seed)
 
-    # wandb
+    # wandb init
     if config.wandb is not None and jax.process_index() == 0:
         wandb.init(**asdict(config.wandb))
         wandb_config = asdict(config)
@@ -179,37 +182,13 @@ def main(config: TrainConfig):
     block_size = config.model.block_size
     platform = jax.devices()[0].platform
 
-    # ===== create device mesh =====
+    # ====== create device mesh ======
     write_note("creating 1D FSDP mesh")
     device_mesh = mesh_utils.create_device_mesh((jax.device_count(),))
     devices_flat = device_mesh.flatten()
     mesh = Mesh(devices=device_mesh, axis_names="fsdp")
 
-    # ===== datasets =====
-    write_note("creating datasets")
-    tokenizer = (
-        config.model.tokenizer_name
-        if config.model.tokenizer_name is not None
-        else config.model.llama_huggingface_model_name
-    )
-    train_ds = fineweb_edu_dataset(
-        flat_devices=devices_flat,
-        tokenizer_name=tokenizer,
-        batch_size=config.batch_size,
-        block_size=block_size,
-        shuffle_buffer_size=config.shuffle_buffer_size,
-        tf_prefetch=10,
-        device_prefetch=2 if platform == "gpu" else 1,
-    )
-    # hellaswag has 4 seqs per example
-    hellaswag_ds, hs_ds_length = prepare_hellaswag(
-        tokenizer,
-        max(config.batch_size // 4, jax.device_count()),
-        block_size,
-        devices_flat,
-    )
-
-    # ===== optimizer =====
+    # ====== optimizer ======
     write_note("creating optimizer")
     lr_schedule = optax.join_schedules(
         schedules=[
@@ -291,7 +270,7 @@ def main(config: TrainConfig):
 
         return optimizer
 
-    # ===== shard and transfer =====
+    # ====== train state ======
     write_note("creating and sharding train state")
     repl_sharding = NamedSharding(mesh, P())
     data_sharding = NamedSharding(mesh, P("fsdp"))
@@ -300,22 +279,14 @@ def main(config: TrainConfig):
 
     def init_train_state(key):
         model_config = easydel.modules.AutoEasyDeLConfig.from_pretrained(
-            config.model.llama_huggingface_model_name,
+            config.model.llama_huggingface_model_name
         )
         model_config.use_cache = False
         model_config.use_scan_mlp = config.model.use_scan_mlp
         model = easydel.modules.llama.FlaxLlamaForCausalLM(
-            model_config,
-            dtype=config.compute_dtype,
-            param_dtype=config.params_dtype,
+            model_config, dtype=config.compute_dtype, param_dtype=config.params_dtype
         )
-        params = model.init_weights(
-            key,
-            input_shape=(
-                1,
-                block_size,
-            ),
-        )
+        params = model.init_weights(key, input_shape=(1, block_size))
         # delay optimizer creation to pass in preconditioner sharding
         train_state = TrainState(
             step=0,
@@ -347,6 +318,7 @@ def main(config: TrainConfig):
         train_state.params
     )
 
+    # PSGD affine internal with_sharding_constraint stuff
     def get_reshaped_params_sharding(params):
         """Follows PSGD affine matrix reshaping and applies sharding strategy."""
         # returns tuples if (reshape_fn, unreshape_fn, shape)
@@ -360,7 +332,7 @@ def main(config: TrainConfig):
 
     reshaped_params_sharding = get_reshaped_params_sharding(train_state.params)
 
-    # remake optimizer with preconditioner sharding passed in
+    # remake optimizer with PSGD sharding passed in
     optimizer = make_opt(reshaped_params_sharding=reshaped_params_sharding)
 
     # finish making train state (pass in optimizer and opt_state)
@@ -373,24 +345,35 @@ def main(config: TrainConfig):
 
     num_params = count_params(train_state.params)
     if jax.process_index() == 0:
-        write_note("TRAIN STATE SHAPES:")
+        write_note("TRAIN STATE SHAPES AND DTYPES:")
         pprint(
-            jax.tree.map(lambda x: x.shape, train_state),
-            indent=2,
-            width=120,
-            compact=True,
+            jax.tree.map(lambda x: (x.shape, x.dtype), train_state), indent=2, width=120
         )
         write_note("TRAIN STATE SHARDING:")
-        pprint(train_state_sharding, indent=2, width=120, compact=True)
+        pprint(train_state_sharding, indent=2, width=120)
         write_note(f"PARAMETER COUNT: {num_params:,}")
 
     # ==== restore train state ====
-    # restore unreplicated optimizer + model state from last checkpoint.
-    # this is a no-op if no checkpoints exist
-    if config.keep_checkpoints > 0:  # TODO implement checkpointing to bucket
+    if config.attempt_to_load_checkpoint:
+        write_note(
+            f"Attempting to load checkpoint from "
+            f"{config.out_dir}/checkpoints/train_state if it exists."
+        )
+        write_note(
+            "If loading checkpoint is unintended, set "
+            "`attempt_to_load_checkpoint=False`."
+        )
         train_state = checkpoints.restore_checkpoint(
             f"{config.out_dir}/checkpoints/train_state", train_state
         )
+        # reshard for good measure
+        train_state = jax.device_put(train_state, train_state_sharding)
+
+    # grab start step from loaded train state
+    step = jax.device_get(train_state.step).item()
+    write_note(f"starting training at step {step}")
+    # calculate dataset start index
+    dataset_start = step * config.optimizer.gradient_accumulation_steps
 
     # ====== jit functions ========
     # we specify in_shardings for sake of clarity, but they are inferred
@@ -430,12 +413,48 @@ def main(config: TrainConfig):
     def step_minus_1(state):
         return state.replace(step=state.step - 1)
 
+    # ===== datasets =====
+    write_note("creating datasets")
+    tokenizer_name = (
+        config.model.tokenizer_name
+        if config.model.tokenizer_name is not None
+        else config.model.llama_huggingface_model_name
+    )
+    if platform == "cpu":
+        device_prefetch = 0
+        streaming = True
+    elif platform == "gpu":
+        device_prefetch = 2
+        streaming = False
+    else:
+        # TPU
+        device_prefetch = 1
+        streaming = False
+    train_ds_fn = partial(
+        fineweb_edu_dataset,
+        tokenizer_name=tokenizer_name,
+        batch_size=config.batch_size,
+        block_size=block_size,
+        flat_devices=devices_flat,
+        tf_prefetch=10,
+        device_prefetch=device_prefetch,
+        streaming=streaming,
+        seed=config.seed,
+    )
+    train_ds = train_ds_fn(start_index=dataset_start)
+    # hellaswag has 4 seqs per example
+    hellaswag_ds, hellaswag_len = prepare_hellaswag(
+        tokenizer_name,
+        max(config.batch_size // 4, jax.device_count()),
+        block_size,
+        devices_flat,
+    )
+
     # ======= train ========
-    # grab step from last checkpoint
-    step = jax.device_get(train_state.step).item()
-
     orig_dtypes = jax.tree.map(lambda x: x.dtype, train_state)
-
+    min_loss = float("inf")
+    max_acc = 0.0
+    max_hellaswag_acc = 0.0
     train_losses = []
     train_accs = []
     write_note("starting training")
@@ -444,15 +463,8 @@ def main(config: TrainConfig):
             try:
                 tokens = next(train_ds)
             except StopIteration:
-                train_ds = fineweb_edu_dataset(
-                    flat_devices=devices_flat,
-                    tokenizer_name=tokenizer,
-                    batch_size=config.batch_size,
-                    block_size=block_size,
-                    shuffle_buffer_size=config.shuffle_buffer_size,
-                    tf_prefetch=10,
-                    device_prefetch=2 if platform == "gpu" else 1,
-                )
+                # start over
+                train_ds = train_ds_fn(start_index=0)
                 tokens = next(train_ds)
             loss, acc, train_state = train_step_jit(train_state, tokens, rng)
             train_losses.append(jax.device_get(loss).item())
@@ -461,7 +473,7 @@ def main(config: TrainConfig):
                 # only update step if we're on the last accumulation step
                 train_state = step_minus_1(train_state)
 
-        # log every 10 steps
+        # log to wandb every 10 steps
         if config.wandb is not None and jax.process_index() == 0 and step % 10 == 0:
             train_loss = np.mean(train_losses)
             train_acc = np.mean(train_accs)
@@ -485,27 +497,14 @@ def main(config: TrainConfig):
             train_losses = []
             train_accs = []
 
+            # print every 100 steps
             if step % 100 == 0:
                 write_note(
                     f"step: {step}, loss: {train_loss:.4f}, accuracy: {train_acc:.4f}"
                 )
 
-                # double check dtypes
+                # double check dtypes are consistent
                 check_dtypes(orig_dtypes, jax.tree.map(lambda x: x.dtype, train_state))
-
-        # eval hellaswag
-        if step % config.hellaswag_eval_interval == 0:
-            hs_accs = []
-            for _ in range(5 if platform == "cpu" else hs_ds_length):
-                hs_batch = next(hellaswag_ds)
-                hs_acc = eval_hellaswag_jit(train_state, *hs_batch)
-                hs_accs.append(jax.device_get(hs_acc).item())
-            hellaswag_acc = np.mean(hs_accs)
-
-            if config.wandb is not None and jax.process_index() == 0:
-                wandb.log({"hellaswag_acc": hellaswag_acc}, step=step)
-
-            write_note(f"step: {step}, hellaswag_acc: {hellaswag_acc:.4f}")
 
         # checkpoint
         if (
@@ -515,14 +514,32 @@ def main(config: TrainConfig):
             and step > 0
         ):
             if jax.process_index() == 0:
-                # save train state in process 0
                 checkpoints.save_checkpoint(
                     f"{config.out_dir}/checkpoints/train_state",
                     jax.device_get(train_state),
                     step,
                     keep=config.keep_checkpoints,
                     overwrite=True,
+                    keep_every_n_steps=config.checkpoint_milestone,
                 )
+            if step % config.checkpoint_milestone == 0:
+                write_note(f"saved milestone checkpoint at step {step}")
+            else:
+                write_note(f"saved checkpoint at step {step}")
+
+        # eval hellaswag
+        if step % config.hellaswag_eval_interval == 0:
+            hs_accs = []
+            for _ in range(5 if platform == "cpu" else hellaswag_len):
+                hs_batch = next(hellaswag_ds)
+                hs_acc = eval_hellaswag_jit(train_state, *hs_batch)
+                hs_accs.append(jax.device_get(hs_acc).item())
+            hellaswag_acc = np.mean(hs_accs)
+
+            if config.wandb is not None and jax.process_index() == 0:
+                wandb.log({"hellaswag_acc": hellaswag_acc}, step=step)
+
+            write_note(f"step: {step}, hellaswag_acc: {hellaswag_acc:.4f}")
 
 
 if __name__ == "__main__":

@@ -65,7 +65,6 @@ def scale_by_affine(
         # momentum
         mu = None
         if b1 > 0:
-            print("PSGD: Using momentum.")
             mu = otu.tree_zeros_like(params, mu_dtype)
 
         # preconditioners
@@ -149,13 +148,7 @@ def scale_by_affine(
                 keys = jax.random.split(subkey, len(Qs))
                 Qs = [
                     _update_precond_affine_math_(
-                        k,
-                        Qlr[0],
-                        Qlr[1],
-                        v,
-                        h,
-                        precond_lr_in,
-                        precision,
+                        k, Qlr[0], Qlr[1], v, h, precond_lr_in, precision
                     )
                     for (k, Qlr, v, h) in zip(
                         keys, Qs, jax.tree.leaves(vs), jax.tree.leaves(Hvs)
@@ -187,13 +180,7 @@ def scale_by_affine(
                     flat_sharding = reshaped_params_sharding
                 Qs = [
                     _update_precond_affine_dropv_math(
-                        k,
-                        Qlr[0],
-                        Qlr[1],
-                        h,
-                        precond_lr_in,
-                        precision,
-                        s,
+                        k, Qlr[0], Qlr[1], h, precond_lr_in, precision, s
                     )
                     for (k, Qlr, h, s) in zip(keys, Qs, flat_hvs, flat_sharding)
                 ]

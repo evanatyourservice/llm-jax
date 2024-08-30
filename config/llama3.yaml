@@ -1,6 +1,5 @@
 # tyro YAML.
 !dataclass:TrainConfig
-shuffle_buffer_size: 1024
 hellaswag_eval_interval: 1000
 checkpoint_interval: 0
 batch_size: 1024
