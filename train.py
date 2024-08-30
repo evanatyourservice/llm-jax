@@ -520,33 +520,34 @@ def main(config: TrainConfig):
             # calculate seconds per step
             seconds_per_step = (end_time - start_time) / 10
             to_log["seconds_per_step"] = seconds_per_step
-            total_tokens = block_size * config.batch_size * step * jax.device_count()
-            to_log["total_tokens"] = total_tokens
 
-            # Calculate flops if available
-            flops_per_token = config.model.get("flops_per_token", None)
-            if flops_per_token:
-                total_flops = flops_per_token * total_tokens
-                to_log["total_gflops"] = total_flops / 1e9
+            # total_tokens = block_size * config.batch_size * step * jax.device_count()
+            # to_log["total_tokens"] = total_tokens
 
-            if seconds_per_step != 0.0:
-                to_log["examples_per_second"] = (
-                    config.batch_size * jax.device_count() / seconds_per_step
-                )
-                to_log["tokens_per_second"] = total_tokens / (step * seconds_per_step)
-                to_log["duration"] = seconds_per_step
+            # # Calculate flops if available
+            # flops_per_token = config.model.get("flops_per_token", None)
+            # if flops_per_token:
+            #     total_flops = flops_per_token * total_tokens
+            #     to_log["total_gflops"] = total_flops / 1e9
 
-                if flops_per_token is not None:
-                    model_flops_per_second = (
-                        flops_per_token * to_log["tokens_per_second"]
-                    )
-                    to_log["gflops_per_second"] = model_flops_per_second / 1e9
+            # if seconds_per_step != 0.0:
+            #     to_log["examples_per_second"] = (
+            #         config.batch_size * jax.device_count() / seconds_per_step
+            #     )
+            #     to_log["tokens_per_second"] = total_tokens / (step * seconds_per_step)
+            #     to_log["duration"] = seconds_per_step
 
-                    # Calculate MFU if theoretical flops are available
-                    theoretical_flops = config.model.get("theoretical_flops", None)
-                    if theoretical_flops is not None:
-                        mfu = model_flops_per_second / theoretical_flops * 100.0
-                        to_log["mfu"] = mfu
+            #     if flops_per_token is not None:
+            #         model_flops_per_second = (
+            #             flops_per_token * to_log["tokens_per_second"]
+            #         )
+            #         to_log["gflops_per_second"] = model_flops_per_second / 1e9
+
+            #         # Calculate MFU if theoretical flops are available
+            #         theoretical_flops = config.model.get("theoretical_flops", None)
+            #         if theoretical_flops is not None:
+            #             mfu = model_flops_per_second / theoretical_flops * 100.0
+            #             to_log["mfu"] = mfu
 
             wandb.log(to_log, step=step)
             wandb.summary["min_train_loss"] = min_loss
