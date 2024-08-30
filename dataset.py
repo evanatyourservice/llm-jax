@@ -171,7 +171,7 @@ def fineweb_edu_dataset(
     streaming: bool = False,
     start_index: int = 0,
     seed: int = 42,
-    num_shards_per_process: int = 2,
+    num_shards_per_process: int = 1,
 ):
     # awful way to shard but whatever
     idx = jax.process_index()

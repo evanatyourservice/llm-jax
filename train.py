@@ -1,5 +1,6 @@
 from functools import partial
 from pprint import pprint
+import time
 from typing import Tuple, Any
 from dataclasses import asdict
 import os
@@ -282,18 +283,26 @@ def main(config: TrainConfig):
     rng = jax.random.PRNGKey(jax.device_put(config.seed, jax.devices("cpu")[0]))
 
     def init_train_state(key):
+        # get easydel model config
         model_config = easydel.AutoEasyDeLConfig.from_pretrained(
             config.model.huggingface_model_name
         )
+
+        # override some settings
         model_config.use_cache = False
-        # override with config.model settings
         model_config.attn_mechanism = config.model.attn_mechanism
         model_config.use_scan_mlp = config.model.use_scan_mlp
+        if hasattr(model_config, "scale_attn_by_inverse_layer_idx"):
+            model_config.scale_attn_by_inverse_layer_idx = True
+        if hasattr(model_config, "reorder_and_upcast_attn"):
+            model_config.reorder_and_upcast_attn = True
         print(model_config)
 
+        # get easydel flax module
         model_type: str = model_config.model_type
         _, module, _ = easydel.get_modules_by_type(model_type)
 
+        # create model and params
         model = module(
             config=model_config,
             dtype=config.compute_dtype,
@@ -472,6 +481,7 @@ def main(config: TrainConfig):
     train_losses = []
     train_accs = []
     write_note("starting training")
+    start_time = time.time()
     for step in range(step, config.train_steps):
         for accum_step in range(config.optimizer.gradient_accumulation_steps):
             try:
@@ -493,22 +503,52 @@ def main(config: TrainConfig):
             min_loss = min(min_loss, train_loss)
             train_acc = np.mean(train_accs)
             max_acc = max(max_acc, train_acc)
-            wandb.log(
-                {
-                    "train_loss": train_loss,
-                    "train_acc": train_acc,
-                    "lr": (
-                        jax.device_get(get_lr(jax.device_put(step, repl_sharding)))
-                        if callable(lr_schedule)
-                        else lr_schedule
-                    ),
-                    "tokens": step
-                    * config.batch_size
-                    * jax.device_count()
-                    * block_size,
-                },
-                step=step,
-            )
+
+            to_log = {
+                "train_loss": train_loss,
+                "train_acc": train_acc,
+                "lr": (
+                    jax.device_get(get_lr(jax.device_put(step, repl_sharding)))
+                    if callable(lr_schedule)
+                    else lr_schedule
+                ),
+                "tokens": step * config.batch_size * jax.device_count() * block_size,
+            }
+
+            # performance metrics
+            end_time = time.time()
+            # calculate seconds per step
+            seconds_per_step = (end_time - start_time) / 10
+            to_log["seconds_per_step"] = seconds_per_step
+            total_tokens = block_size * config.batch_size * step * jax.device_count()
+            to_log["total_tokens"] = total_tokens
+
+            # Calculate flops if available
+            flops_per_token = config.model.get("flops_per_token", None)
+            if flops_per_token:
+                total_flops = flops_per_token * total_tokens
+                to_log["total_gflops"] = total_flops / 1e9
+
+            if seconds_per_step != 0.0:
+                to_log["examples_per_second"] = (
+                    config.batch_size * jax.device_count() / seconds_per_step
+                )
+                to_log["tokens_per_second"] = total_tokens / (step * seconds_per_step)
+                to_log["duration"] = seconds_per_step
+
+                if flops_per_token is not None:
+                    model_flops_per_second = (
+                        flops_per_token * to_log["tokens_per_second"]
+                    )
+                    to_log["gflops_per_second"] = model_flops_per_second / 1e9
+
+                    # Calculate MFU if theoretical flops are available
+                    theoretical_flops = config.model.get("theoretical_flops", None)
+                    if theoretical_flops is not None:
+                        mfu = model_flops_per_second / theoretical_flops * 100.0
+                        to_log["mfu"] = mfu
+
+            wandb.log(to_log, step=step)
             wandb.summary["min_train_loss"] = min_loss
             wandb.summary["max_train_acc"] = max_acc
 

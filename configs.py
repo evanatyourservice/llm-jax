@@ -120,7 +120,7 @@ class TrainConfig:
     train_steps: int = 100000
     compute_dtype: str = "float32"
     params_dtype: str = "float32"
-    n_fineweb_edu_shards_dl: int = 2
+    n_fineweb_edu_shards_dl: int = 1
     optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
     wandb: WandbConfig = field(default_factory=WandbConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
