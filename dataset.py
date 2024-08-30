@@ -258,19 +258,22 @@ def fineweb_edu_dataset(
     else:
         write_note("loading fineweb-edu")
 
-        hf_ds: Dataset = concatenate_datasets(
-            [
-                load_dataset(
-                    "HuggingFaceFW/fineweb-edu",
-                    name=name,
-                    split="train",
-                    cache_dir=cache_dir,
-                )
-                for name in names
-            ]
+        hf_ds = (
+            concatenate_datasets(
+                [
+                    load_dataset(
+                        "HuggingFaceFW/fineweb-edu",
+                        name=name,
+                        split="train",
+                        cache_dir=cache_dir,
+                    )
+                    for name in names
+                ]
+            )
+            .shuffle(seed=seed)
+            .shuffle(seed=seed + 1)
+            .shuffle(seed=seed + 2)
         )
-
-        hf_ds = hf_ds.shuffle(seed=seed).shuffle(seed=seed + 1).shuffle(seed=seed + 2)
 
         ds_len = len(hf_ds)
         hf_ds = hf_ds.skip(start_index % ds_len)
@@ -291,7 +294,6 @@ def fineweb_edu_dataset(
             )
 
         hf_ds = hf_ds.set_transform(tokenize)
-        hf_ds = hf_ds.shuffle(seed=seed).shuffle(seed=seed + 1).shuffle(seed=seed + 2)
 
         ds = hf_ds.to_tf_dataset(prefetch=False, label_cols=["input_ids"])
         ds = ds.batch(
