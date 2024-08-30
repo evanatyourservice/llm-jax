@@ -583,7 +583,7 @@ def main(config: TrainConfig):
                 write_note(f"saved checkpoint at step {step}")
 
         # eval hellaswag
-        if step % config.hellaswag_eval_interval == 0:
+        if step % config.hellaswag_eval_interval == 0 and step > 0:
             hs_accs = []
             for _ in range(10 if platform == "cpu" else hellaswag_len):
                 hs_batch = next(hellaswag_ds)
