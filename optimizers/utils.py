@@ -115,3 +115,19 @@ def global_clip(updates, max_norm):
         max_norm_tree,
     )
     return updates
+
+
+def efficient_cond(predicate, compute_fn, init_state, *args, **kwargs):
+    """Avoids wasteful buffer allocation with XLA."""
+
+    def _iter_body(unused_state):
+        results = compute_fn(*args, **kwargs)
+        return tuple([False] + list(results))
+
+    def _iter_condition(state):
+        return state[0]
+
+    results = jax.lax.while_loop(
+        _iter_condition, _iter_body, tuple([predicate] + init_state)
+    )
+    return tuple(results[1:])
