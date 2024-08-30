@@ -59,7 +59,9 @@ def train_step(
     def loss_fn(params):
         X, Y = tokens[:, :-1], tokens[:, 1:]
 
-        logits = state.apply_fn({"params": params}, X, deterministic=False)[0]
+        logits = state.apply_fn(
+            X, params={"params": params}, dropout_rng=rng_key, train=True
+        )[0]
 
         # compute loss in float32
         logits = logits.astype(jnp.float32)
@@ -108,7 +110,7 @@ def train_step(
 
 def eval_step_unreduced(state: TrainState, tokens: jnp.ndarray) -> jnp.ndarray:
     X, Y = tokens[:, :-1], tokens[:, 1:]
-    logits = state.apply_fn({"params": state.params}, X, deterministic=False)[0]
+    logits = state.apply_fn(X, params={"params": state.params}, train=False)[0]
     loss = optax.softmax_cross_entropy_with_integer_labels(logits, Y)
     return loss
 
@@ -298,18 +300,20 @@ def main(config: TrainConfig):
         _, module, _ = easydel.get_modules_by_type(model_type)
 
         # create model and params
-        model, params = module(
+        model = module(
             config=model_config,
             dtype=config.compute_dtype,
             param_dtype=config.params_dtype,
             precision=jax.lax.Precision.DEFAULT,
             seed=config.seed,
-            _do_init=True,
+            _do_init=False,
         )
+        params = model.init_weights(key, input_shape=(1, block_size))
         params = otu.tree_cast(params, config.params_dtype)
+        print(params.keys())
 
         # delay optimizer creation to pass in preconditioner sharding
-        apply_fn = partial(model.apply, return_dict=False)
+        apply_fn = partial(model.__call__, return_dict=False)
         train_state = TrainState(
             step=0, apply_fn=apply_fn, params=params, tx=None, opt_state=None
         )
