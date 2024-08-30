@@ -131,3 +131,20 @@ def efficient_cond(predicate, compute_fn, init_state, *args, **kwargs):
         _iter_condition, _iter_body, tuple([predicate] + init_state)
     )
     return tuple(results[1:])
+
+
+def norm_grad() -> base.GradientTransformation:
+    def init_fn(params):
+        del params
+        return base.EmptyState()
+
+    def update_fn(updates, state, params):
+        del params
+
+        norm = global_norm(updates)
+        norm = jnp.where(norm == 0, 1, norm)
+        normed = jax.tree.map(lambda x: x / norm.astype(x.dtype), updates)
+
+        return normed, state
+
+    return base.GradientTransformation(init_fn, update_fn)

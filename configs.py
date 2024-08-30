@@ -30,6 +30,7 @@ class OptimizerConfig:
         warmup_steps: warmup steps.
         weight_decay: weight decay.
         grad_clip: gradient clip.
+        norm_grads: whether to normalize gradients before optimizer.
         gradient_accumulation_steps: gradient accumulation steps.
         betas: betas.
         nesterov: whether to use nesterov momentum.
@@ -50,6 +51,7 @@ class OptimizerConfig:
     warmup_steps: int = 1000
     weight_decay: float = 0.01
     grad_clip: float = 1.0
+    norm_grads: bool = False
     gradient_accumulation_steps: int = 1
     betas: Tuple[float, float] = (0.9, 0.95)
     nesterov: bool = False

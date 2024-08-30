@@ -27,7 +27,7 @@ from configs import TrainConfig
 from optimizers.psgd_affine import affine, _shape_as_matrix
 from optimizers.tearfree import optimizer as tearfree_opt
 from optimizers.tearfree import shampoo, second_order
-from optimizers.utils import hessian_helper
+from optimizers.utils import hessian_helper, norm_grad
 from sharding import infer_sharding, fsdp_sharding
 from utils import check_dtypes, reshard, write_note
 
@@ -211,7 +211,9 @@ def main(config: TrainConfig):
             return out
 
         optimizer = []
-        if config.optimizer.grad_clip > 0.0:
+        if config.optimizer.norm_grads:
+            optimizer.append(norm_grad())
+        elif config.optimizer.grad_clip > 0.0:
             optimizer.append(optax.clip_by_global_norm(config.optimizer.grad_clip))
 
         # decays to 0.01 at around 2000 steps
