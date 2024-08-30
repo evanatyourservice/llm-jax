@@ -17,7 +17,6 @@ class ModelConfig:
     huggingface_model_name: str = "trl-internal-testing/tiny-random-LlamaForCausalLM"
     tokenizer_name: Optional[str] = None
     block_size: int = 1024
-    attn_mechanism: str = "jax_flash_attn2"
     use_scan_mlp: bool = False
 
 

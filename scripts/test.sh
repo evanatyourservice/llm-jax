@@ -9,9 +9,9 @@ export LLM_CONFIG=config/llama3.yaml  # base config
 
 python3 train.py \
     --out_dir=/Users/evanwalters/llm_testing/run_2024-08-29_20-34-46 \
-    --attempt_to_load_checkpoint \
-    --compute_dtype=float32 \
-    --params_dtype=float32 \
+    --no_attempt_to_load_checkpoint \
+    --compute_dtype=bfloat16 \
+    --params_dtype=bfloat16 \
     --min_size_to_shard_mb=0 \
     --train_steps=200 \
     --hellaswag_eval_interval=100 \
@@ -21,7 +21,7 @@ python3 train.py \
     --optimizer.type=affine \
     --optimizer.learning_rate=0.001 \
     --optimizer.warmup_steps=20 \
-    --optimizer.preconditioner_dtype=float32 \
+    --optimizer.preconditioner_dtype=bfloat16 \
     --model.huggingface_model_name="trl-internal-testing/tiny-random-LlamaForCausalLM" \
     --model.no_use_scan_mlp \
     --model.block_size=128

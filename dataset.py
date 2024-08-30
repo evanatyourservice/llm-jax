@@ -197,20 +197,22 @@ def fineweb_edu_dataset(
         write_note("streaming fineweb-edu")
 
         def gen():
-            hf_ds: Dataset = concatenate_datasets(
-                [
-                    load_dataset(
-                        "HuggingFaceFW/fineweb-edu",
-                        name=name,
-                        split="train",
-                        cache_dir=cache_dir,
-                        streaming=True,
-                    )
-                    for name in names
-                ]
-            )
-            hf_ds = (
-                hf_ds.shuffle(seed=seed).shuffle(seed=seed + 1).shuffle(seed=seed + 2)
+            hf_ds: Dataset = (
+                concatenate_datasets(
+                    [
+                        load_dataset(
+                            "HuggingFaceFW/fineweb-edu",
+                            name=name,
+                            split="train",
+                            cache_dir=cache_dir,
+                            streaming=True,
+                        )
+                        for name in names
+                    ]
+                )
+                .shuffle(seed=seed)
+                .shuffle(seed=seed + 1)
+                .shuffle(seed=seed + 2)
             )
 
             tokenizer = AutoTokenizer.from_pretrained(
@@ -229,6 +231,7 @@ def fineweb_edu_dataset(
                 )
 
             hf_ds = hf_ds.map(tokenize)
+
             hf_ds = hf_ds.with_format("tensorflow")
 
             for example in hf_ds:

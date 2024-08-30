@@ -14,6 +14,7 @@ import jax.numpy as jnp
 from jax.experimental import mesh_utils
 from jax.sharding import Mesh, PartitionSpec as P, NamedSharding
 import flax
+import flax.linen as nn
 from flax.training import checkpoints
 from flax.training.train_state import TrainState
 import optax
@@ -51,8 +52,6 @@ def train_step(
     rng_key,
     compute_hessian: bool = False,
     params_sharding: Any = None,
-    compute_dtype: str = "float32",
-    params_dtype: str = "float32",
 ) -> Tuple[jnp.ndarray, jnp.ndarray, TrainState]:
 
     rng_key = jax.random.fold_in(rng_key, state.step)  # same key each grad accum step
@@ -60,12 +59,10 @@ def train_step(
     def loss_fn(params):
         X, Y = tokens[:, :-1], tokens[:, 1:]
 
-        X = X.astype(compute_dtype)
-        params = otu.tree_cast(params, compute_dtype)
+        logits = state.apply_fn({"params": params}, X, deterministic=False)[0]
 
-        logits = state.apply_fn(X, params=params, dropout_rng=rng_key, train=True)[0]
+        # compute loss in float32
         logits = logits.astype(jnp.float32)
-
         loss = optax.softmax_cross_entropy_with_integer_labels(logits, Y).mean()
 
         # palm style z-loss
@@ -106,14 +103,12 @@ def train_step(
 
     check_dtypes(before_dtypes, jax.tree.map(lambda x: x.dtype, new_state))
 
-    new_state = new_state.replace(params=otu.tree_cast(new_state.params, params_dtype))
-
     return loss, acc, new_state
 
 
 def eval_step_unreduced(state: TrainState, tokens: jnp.ndarray) -> jnp.ndarray:
     X, Y = tokens[:, :-1], tokens[:, 1:]
-    logits = state.apply_fn(X, params=state.params, train=False)[0]
+    logits = state.apply_fn({"params": state.params}, X, deterministic=False)[0]
     loss = optax.softmax_cross_entropy_with_integer_labels(logits, Y)
     return loss
 
@@ -290,7 +285,6 @@ def main(config: TrainConfig):
 
         # override some settings
         model_config.use_cache = False
-        model_config.attn_mechanism = config.model.attn_mechanism
         model_config.use_scan_mlp = config.model.use_scan_mlp
         if hasattr(model_config, "scale_attn_by_inverse_layer_idx"):
             model_config.scale_attn_by_inverse_layer_idx = True
@@ -301,22 +295,21 @@ def main(config: TrainConfig):
         # get easydel flax module
         model_type: str = model_config.model_type
         _, module, _ = easydel.get_modules_by_type(model_type)
+        module = module.module_class
 
         # create model and params
-        model = module(
+        model: nn.Module = module(
             config=model_config,
             dtype=config.compute_dtype,
             param_dtype=config.params_dtype,
+            precision=jax.lax.Precision.DEFAULT,
         )
-        params = model.init_weights(key, input_shape=(1, block_size))
+        params = model.init(key, jnp.ones((1, block_size), dtype=jnp.uint16))["params"]
 
         # delay optimizer creation to pass in preconditioner sharding
+        apply_fn = partial(model.apply, return_dict=False)
         train_state = TrainState(
-            step=0,
-            apply_fn=model.__call__,
-            params={"params": params},
-            tx=None,
-            opt_state=None,
+            step=0, apply_fn=apply_fn, params=params, tx=None, opt_state=None
         )
         return train_state
 
@@ -404,8 +397,6 @@ def main(config: TrainConfig):
         train_step,
         compute_hessian=config.optimizer.psgd_use_hessian,
         params_sharding=train_state_sharding.params,
-        compute_dtype=config.compute_dtype,
-        params_dtype=config.params_dtype,
     )
     train_step_jit = jax.jit(
         train_step_w_sharding,
