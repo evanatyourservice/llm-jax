@@ -258,7 +258,7 @@ def fineweb_edu_dataset(
     else:
         write_note("loading fineweb-edu")
 
-        hf_ds = (
+        hf_ds: Dataset = (
             concatenate_datasets(
                 [
                     load_dataset(
@@ -295,7 +295,7 @@ def fineweb_edu_dataset(
 
         hf_ds.set_transform(tokenize)
 
-        ds = hf_ds.to_tf_dataset(prefetch=False, label_cols=["input_ids"])
+        ds = hf_ds.to_tf_dataset(columns="input_ids", prefetch=False)
         ds = ds.batch(
             batch_size // jax.process_count(),
             drop_remainder=True,
