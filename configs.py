@@ -4,7 +4,16 @@ from typing import Tuple, Optional
 
 
 @dataclass(frozen=True)
-class LlamaModelConfig:
+class ModelConfig:
+    """model configuration.
+
+    Attributes:
+        llama_huggingface_model_name: llama model name.
+        tokenizer_name: tokenizer name.
+        use_scan_mlp: whether to use scan mlp.
+        block_size: block size.
+    """
+
     llama_huggingface_model_name: str = (
         "trl-internal-testing/tiny-random-LlamaForCausalLM"
     )
@@ -15,6 +24,29 @@ class LlamaModelConfig:
 
 @dataclass(frozen=True)
 class OptimizerConfig:
+    """optimizer configuration.
+
+    Attributes:
+        type: optimizer type.
+        learning_rate: learning rate.
+        warmup_steps: warmup steps.
+        weight_decay: weight decay.
+        grad_clip: gradient clip.
+        gradient_accumulation_steps: gradient accumulation steps.
+        betas: betas.
+        nesterov: whether to use nesterov momentum.
+        preconditioner_update_probability: probability of updating the
+            preconditioner.
+        psgd_use_hessian: whether to use hessian for preconditioner.
+        max_size_triangular: max size for affine preconditioner to be
+            triangular.
+        max_skew_triangular: max skew for affine preconditioner to be
+            triangular.
+        precond_lr: learning rate for the preconditioner.
+        precond_init_scale: initial scale for the preconditioner.
+        preconditioner_dtype: dtype of the preconditioner.
+    """
+
     type: str = "adamw"
     learning_rate: float = 0.001
     warmup_steps: int = 1000
@@ -22,6 +54,7 @@ class OptimizerConfig:
     grad_clip: float = 1.0
     gradient_accumulation_steps: int = 1
     betas: Tuple[float, float] = (0.9, 0.95)
+    nesterov: bool = False
     preconditioner_update_probability: float = 1.0
     psgd_use_hessian: bool = False
     max_size_triangular: int = 0
@@ -60,6 +93,7 @@ class TrainConfig:
     Attributes:
         seed: random seed.
         out_dir: output directory for checkpoints (can be gcs path).
+        attempt_to_load_checkpoint: whether to attempt to load a checkpoint.
         min_size_to_shard_mb: minimum size of shards to create.
         hellaswag_eval_interval: interval to evaluate hellaswag.
         checkpoint_interval: interval to save checkpoints.
@@ -69,26 +103,28 @@ class TrainConfig:
         train_steps: total number of training iterations.
         compute_dtype: compute dtype.
         params_dtype: params dtype.
+        n_fineweb_edu_shards_dl: number of fineweb edu shards to download.
         optimizer: optimizer config.
         wandb: wandb logging config.
         model: model config.
     """
 
-    seed: int = 0
+    seed: int = 8
     out_dir: str = f"gs://uscentral2stuff/llm-jax/run_{date_and_time}"
     attempt_to_load_checkpoint: bool = False
     min_size_to_shard_mb: int = 4
     hellaswag_eval_interval: int = 1000
     checkpoint_interval: int = 1000
-    keep_checkpoints: int = 2  # number of historical checkpoints to keep
+    keep_checkpoints: int = 2
     checkpoint_milestone: int = 10000
     batch_size: int = 128
-    train_steps: int = 100000  # total number of training iterations
-    compute_dtype: str = "float32"  # "float32" or "bfloat16"
-    params_dtype: str = "float32"  # "float32" or "bfloat16"
+    train_steps: int = 100000
+    compute_dtype: str = "float32"
+    params_dtype: str = "float32"
+    n_fineweb_edu_shards_dl: int = 2
     optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
-    wandb: WandbConfig = field(default_factory=WandbConfig)  # wandb logging
-    model: LlamaModelConfig = field(default_factory=LlamaModelConfig)
+    wandb: WandbConfig = field(default_factory=WandbConfig)
+    model: ModelConfig = field(default_factory=ModelConfig)
 
     assert (
         checkpoint_milestone % checkpoint_interval == 0

@@ -26,6 +26,7 @@ from optimizers.psgd_affine import affine, _shape_as_matrix
 from optimizers.tearfree import optimizer as tearfree_opt
 from optimizers.tearfree import shampoo, second_order
 from optimizers.utils import hessian_helper
+from optimizers.make_optimizer import make_opt
 from sharding import infer_sharding, fsdp_sharding
 from utils import check_dtypes, reshard, write_note
 
@@ -142,15 +143,6 @@ def count_params(params) -> int:
     return jax.tree_util.tree_reduce(lambda a, b: a + b, p)
 
 
-def param_decay_mask(params):
-    """pytree mask for non-bias parameters"""
-    flat_params = flax.traverse_util.flatten_dict(params)
-    flat_param_mask = {
-        k: k[-1] not in ("bias", "embedding", "scale") for k in flat_params.keys()
-    }
-    return flax.traverse_util.unflatten_dict(flat_param_mask)
-
-
 def get_default_config() -> TrainConfig:
     # use this file to set default values
     path = os.environ.get("LLM_CONFIG", os.path.join("config", "llama3.yaml"))
@@ -207,10 +199,23 @@ def main(config: TrainConfig):
     def make_opt(reshaped_params_sharding=None):
         write_note(f"using {config.optimizer.type} optimizer")
 
+        def param_decay_mask(params):
+            """Only lets through kernel weights for weight decay."""
+            non_kernels = flax.traverse_util.ModelParamTraversal(
+                lambda p, _: "bias" in p
+                or "norm" in p
+                or "embedding" in p
+                or "scale" in p
+            )
+            all_true = jax.tree.map(lambda _: True, params)
+            out = non_kernels.update(lambda _: False, all_true)
+            return out
+
         optimizer = []
         if config.optimizer.grad_clip > 0.0:
             optimizer.append(optax.clip_by_global_norm(config.optimizer.grad_clip))
 
+        # decays to 0.01 at around 2000 steps
         update_prob_schedule = lambda n: jnp.maximum(jnp.exp(-0.002 * n), 0.01)
 
         if config.optimizer.type in ["adam", "adamw"]:
@@ -229,7 +234,7 @@ def main(config: TrainConfig):
                     lr_schedule,
                     update_prob_schedule,
                     b1=config.optimizer.betas[0],
-                    nesterov=False,
+                    nesterov=config.optimizer.nesterov,
                     weight_decay=config.optimizer.weight_decay,
                     mask=param_decay_mask,
                     max_size_triangular=config.optimizer.max_size_triangular,
@@ -238,7 +243,7 @@ def main(config: TrainConfig):
                     precond_init_scale=config.optimizer.precond_init_scale,
                     mu_dtype=jnp.bfloat16,
                     precond_dtype=config.optimizer.preconditioner_dtype,
-                    precision="tensorfloat32",
+                    precision="bfloat16",
                     reshaped_params_sharding=reshaped_params_sharding,
                 )
             )
@@ -439,6 +444,7 @@ def main(config: TrainConfig):
         device_prefetch=device_prefetch,
         streaming=streaming,
         seed=config.seed,
+        num_shards_per_process=config.n_fineweb_edu_shards_dl,
     )
     train_ds = train_ds_fn(start_index=dataset_start)
     # hellaswag has 4 seqs per example
