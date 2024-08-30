@@ -302,7 +302,7 @@ def fineweb_edu_dataset(
         ds = ds.batch(
             batch_size // jax.process_count(),
             drop_remainder=True,
-            num_parallel_calls=16,
+            num_parallel_calls=tf.data.AUTOTUNE,
         )
         ds = ds.with_options(OPTIONS)
         ds = ds.prefetch(tf_prefetch)

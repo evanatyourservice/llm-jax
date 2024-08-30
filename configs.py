@@ -55,8 +55,8 @@ class OptimizerConfig:
     nesterov: bool = False
     preconditioner_update_probability: float = 1.0
     psgd_use_hessian: bool = False
-    max_size_triangular: int = 0
-    max_skew_triangular: int = 0
+    max_size_triangular: int = 8192
+    max_skew_triangular: int = 16
     precond_lr: float = 0.1
     precond_init_scale: Optional[float] = 1.0
     preconditioner_dtype: str = "float32"

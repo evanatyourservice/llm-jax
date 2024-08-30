@@ -52,7 +52,7 @@ def train_step(
     rng_key,
     compute_hessian: bool = False,
     params_sharding: Any = None,
-) -> Tuple[jnp.ndarray, jnp.ndarray, TrainState]:
+) -> Tuple[jnp.ndarray, jnp.ndarray, TrainState, jnp.ndarray]:
 
     rng_key = jax.random.fold_in(rng_key, state.step)  # same key each grad accum step
 
@@ -105,7 +105,9 @@ def train_step(
 
     check_dtypes(before_dtypes, jax.tree.map(lambda x: x.dtype, new_state))
 
-    return loss, acc, new_state
+    grad_norm = optax.global_norm(grads)
+
+    return loss, acc, new_state, grad_norm
 
 
 def eval_step_unreduced(state: TrainState, tokens: jnp.ndarray) -> jnp.ndarray:
@@ -407,7 +409,12 @@ def main(config: TrainConfig):
         train_step_w_sharding,
         # donate_argnums=(0,),
         in_shardings=(train_state_sharding, data_sharding, rng.sharding),
-        out_shardings=(repl_sharding, repl_sharding, train_state_sharding),
+        out_shardings=(
+            repl_sharding,
+            repl_sharding,
+            train_state_sharding,
+            repl_sharding,
+        ),
     )
     eval_hellaswag_jit = jax.jit(
         eval_hellaswag,
@@ -476,8 +483,9 @@ def main(config: TrainConfig):
     max_hellaswag_acc = 0.0
     train_losses = []
     train_accs = []
+    grad_norms = []
+    start_time = None
     write_note("starting training")
-    start_time = time.time()
     for step in range(step, config.train_steps):
         for accum_step in range(config.optimizer.gradient_accumulation_steps):
             try:
@@ -486,64 +494,48 @@ def main(config: TrainConfig):
                 # start over
                 train_ds = train_ds_fn(start_index=0)
                 tokens = next(train_ds)
-            loss, acc, train_state = train_step_jit(train_state, tokens, rng)
+            loss, acc, train_state, g_norm = train_step_jit(train_state, tokens, rng)
             train_losses.append(jax.device_get(loss).item())
             train_accs.append(jax.device_get(acc).item())
+            grad_norms.append(jax.device_get(g_norm).item())
             if accum_step < config.optimizer.gradient_accumulation_steps - 1:
                 # only update step if we're on the last accumulation step
                 train_state = step_minus_1(train_state)
 
         # log to wandb every 10 steps
         if config.wandb is not None and jax.process_index() == 0 and step % 10 == 0:
+            train_state = jax.block_until_ready(train_state)
+            end_time = time.time()
+
             train_loss = np.mean(train_losses)
             min_loss = min(min_loss, train_loss)
             train_acc = np.mean(train_accs)
             max_acc = max(max_acc, train_acc)
+            grad_norm = np.mean(grad_norms)
 
+            tokens_per_batch = (
+                config.optimizer.gradient_accumulation_steps
+                * config.batch_size
+                * jax.device_count()
+                * block_size
+            )
             to_log = {
                 "train_loss": train_loss,
                 "train_acc": train_acc,
+                "grad_norm": grad_norm,
                 "lr": (
                     jax.device_get(get_lr(jax.device_put(step, repl_sharding)))
                     if callable(lr_schedule)
                     else lr_schedule
                 ),
-                "tokens": step * config.batch_size * jax.device_count() * block_size,
+                "tokens": step * tokens_per_batch,
             }
 
             # performance metrics
-            end_time = time.time()
-            # calculate seconds per step
-            seconds_per_step = (end_time - start_time) / 10
-            to_log["seconds_per_step"] = seconds_per_step
-
-            # total_tokens = block_size * config.batch_size * step * jax.device_count()
-            # to_log["total_tokens"] = total_tokens
-
-            # # Calculate flops if available
-            # flops_per_token = config.model.get("flops_per_token", None)
-            # if flops_per_token:
-            #     total_flops = flops_per_token * total_tokens
-            #     to_log["total_gflops"] = total_flops / 1e9
-
-            # if seconds_per_step != 0.0:
-            #     to_log["examples_per_second"] = (
-            #         config.batch_size * jax.device_count() / seconds_per_step
-            #     )
-            #     to_log["tokens_per_second"] = total_tokens / (step * seconds_per_step)
-            #     to_log["duration"] = seconds_per_step
-
-            #     if flops_per_token is not None:
-            #         model_flops_per_second = (
-            #             flops_per_token * to_log["tokens_per_second"]
-            #         )
-            #         to_log["gflops_per_second"] = model_flops_per_second / 1e9
-
-            #         # Calculate MFU if theoretical flops are available
-            #         theoretical_flops = config.model.get("theoretical_flops", None)
-            #         if theoretical_flops is not None:
-            #             mfu = model_flops_per_second / theoretical_flops * 100.0
-            #             to_log["mfu"] = mfu
+            if start_time is not None:
+                seconds_per_step = (end_time - start_time) / 10
+                to_log["seconds_per_step"] = seconds_per_step
+                to_log["tokens_per_second"] = tokens_per_batch / seconds_per_step
 
             wandb.log(to_log, step=step)
             wandb.summary["min_train_loss"] = min_loss
@@ -551,6 +543,7 @@ def main(config: TrainConfig):
 
             train_losses = []
             train_accs = []
+            grad_norms = []
 
             # print every 100 steps
             if step % 100 == 0:
@@ -584,6 +577,8 @@ def main(config: TrainConfig):
             else:
                 write_note(f"saved checkpoint at step {step}")
 
+            start_time = time.time()
+
         # eval hellaswag
         if step % config.hellaswag_eval_interval == 0 and step > 0:
             hs_accs = []
@@ -599,6 +594,8 @@ def main(config: TrainConfig):
                 wandb.summary["max_hellaswag_acc"] = max_hellaswag_acc
 
             write_note(f"step: {step}, hellaswag_acc: {hellaswag_acc:.4f}")
+
+            start_time = time.time()
 
 
 if __name__ == "__main__":

@@ -1,15 +1,15 @@
 # tyro YAML.
 !dataclass:TrainConfig
-hellaswag_eval_interval: 1000
-checkpoint_interval: 0
+hellaswag_eval_interval: 500
+checkpoint_interval: 1000
 batch_size: 1024
 train_steps: 50000
-compute_dtype: float32
-params_dtype: float32
+compute_dtype: bfloat16
+params_dtype: bfloat16
 optimizer: !dataclass:OptimizerConfig
-    type: "adamw"
+    type: "psgd"
     learning_rate: 0.001
-    warmup_steps: 1000
+    warmup_steps: 0
     weight_decay: 0.01
     grad_clip: 1.0
     gradient_accumulation_steps: 1
@@ -21,8 +21,8 @@ optimizer: !dataclass:OptimizerConfig
     max_size_triangular: 8192
     max_skew_triangular: 16
     precond_lr: 0.1
-    precond_init_scale: 1.0
-    preconditioner_dtype: float32
+    precond_init_scale: 0.01
+    preconditioner_dtype: bfloat16
 wandb: !dataclass:WandbConfig
     entity: evanatyourservice
     mode: online
