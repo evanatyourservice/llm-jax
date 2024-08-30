@@ -290,7 +290,7 @@ def fineweb_edu_dataset(
                 truncation=True,
             )
 
-        hf_ds = hf_ds.map(tokenize, num_proc=16)
+        hf_ds = hf_ds.set_transform(tokenize)
         hf_ds = hf_ds.shuffle(seed=seed).shuffle(seed=seed + 1).shuffle(seed=seed + 2)
 
         ds = hf_ds.to_tf_dataset(prefetch=False, label_cols=["input_ids"])
