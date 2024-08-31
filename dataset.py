@@ -261,28 +261,18 @@ def fineweb_edu_dataset(
     else:
         write_note("loading fineweb-edu")
 
-        hf_ds: Dataset = (
-            concatenate_datasets(
-                [
-                    load_dataset(
-                        "HuggingFaceFW/fineweb-edu",
-                        name=name,
-                        split="train",
-                        cache_dir=cache_dir,
-                    )
-                    for name in names
-                ]
-            )
-            .shuffle(seed=seed)
-            .shuffle(seed=seed + 1)
-            .shuffle(seed=seed + 2)
+        hf_ds: Dataset = load_dataset(
+            "HuggingFaceFW/fineweb-edu",
+            name=names[0],
+            split="train",
+            cache_dir=cache_dir,
         )
 
         ds_len = len(hf_ds)
         hf_ds = hf_ds.skip(start_index % ds_len)
 
         tokenizer = AutoTokenizer.from_pretrained(
-            tokenizer_name, trust_remote_code=True, use_fast=True
+            tokenizer_name, trust_remote_code=True
         )
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
@@ -299,16 +289,12 @@ def fineweb_edu_dataset(
         hf_ds.set_transform(tokenize)
 
         ds = hf_ds.to_tf_dataset(columns="input_ids", prefetch=False)
-        ds = ds.batch(
-            batch_size // jax.process_count(),
-            drop_remainder=True,
-            num_parallel_calls=tf.data.AUTOTUNE,
-        )
-        ds = ds.with_options(OPTIONS)
+        ds = ds.batch(batch_size // jax.process_count(), drop_remainder=True)
+        # ds = ds.with_options(OPTIONS)
         ds = ds.prefetch(tf_prefetch)
         ds = ds.as_numpy_iterator()
         ds = iter(ds)
-        ds = threadstart_iterator(ds)
+        # ds = threadstart_iterator(ds)
         ds = (
             jax.tree.map(lambda x: make_fsarray_from_local_slice(x, flat_devices), elem)
             for elem in ds
