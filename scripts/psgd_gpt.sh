@@ -16,9 +16,9 @@ python3 train.py \
     --compute_dtype=bfloat16 \
     --params_dtype=bfloat16 \
     --optimizer.type=affine \
-    --optimizer.learning_rate=0.001 \
+    --optimizer.learning_rate=0.003 \
     --optimizer.warmup_steps=0 \
-    --optimizer.no_nesterov \
+    --optimizer.nesterov \
     --optimizer.weight_decay=0.01 \
     --optimizer.grad_clip=1.0 \
     --optimizer.max_size_triangular=8192 \
