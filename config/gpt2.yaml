@@ -8,9 +8,9 @@ compute_dtype: bfloat16
 params_dtype: bfloat16
 optimizer: !dataclass:OptimizerConfig
     type: "psgd_affine"
-    learning_rate: 0.001
+    learning_rate: 0.003
     warmup_steps: 0
-    weight_decay: 0.1
+    weight_decay: 0.01
     grad_clip: 1.0
     gradient_accumulation_steps: 1
     betas:

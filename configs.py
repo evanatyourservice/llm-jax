@@ -100,7 +100,6 @@ class TrainConfig:
         train_steps: total number of training iterations.
         compute_dtype: compute dtype.
         params_dtype: params dtype.
-        n_fineweb_edu_shards_dl: number of fineweb edu shards to download.
         optimizer: optimizer config.
         wandb: wandb logging config.
         model: model config.
@@ -119,7 +118,6 @@ class TrainConfig:
     train_steps: int = 100000
     compute_dtype: str = "float32"
     params_dtype: str = "float32"
-    n_fineweb_edu_shards_dl: int = 1
     optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
     wandb: WandbConfig = field(default_factory=WandbConfig)
     model: ModelConfig = field(default_factory=ModelConfig)

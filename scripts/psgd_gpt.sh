@@ -10,7 +10,6 @@ python3 train.py \
     --attempt_to_load_checkpoint \
     --hellaswag_eval_interval=1000 \
     --checkpoint_interval=1000 \
-    --n_fineweb_edu_shards_dl=1 \
     --batch_size=256 \
     --optimizer.gradient_accumulation_steps=1 \
     --compute_dtype=bfloat16 \

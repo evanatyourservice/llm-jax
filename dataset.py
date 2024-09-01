@@ -1,3 +1,4 @@
+from itertools import chain
 import json
 import numpy as np
 from tqdm import tqdm
@@ -97,7 +98,7 @@ def prepare_hellaswag(
     return ds, ds_length
 
 
-def fineweb_edu_dataset(
+def smollm_corpus_dataset(
     tokenizer_name: str,
     batch_size: int,
     block_size: int,
@@ -108,41 +109,37 @@ def fineweb_edu_dataset(
     shard_idx: int = 0,
     start_index: int = 0,
 ):
+    """
+    Load the smollm corpus dataset.
+
+    For now we load in a weird way to save memory and from having to
+    use a bucket... not ideal.
+
+    fineweb edu deduplicated file structure:
+    `fineweb-edu-dedup/train-00000-of-00234.parquet`
+
+    cosmopedia v2 file structure:
+    `cosmopedia-v2/train-00000-of-00104.parquet`
+    """
     seq_len = block_size + 1
 
-    # awful way to shard but whatever
-    # grab this process's section of list
-    num_shards = len(_fw_shard_names)
-    shard_size = num_shards // jax.process_count()
-    start_idx = jax.process_index() * shard_size
-    end_idx = (
-        start_idx + shard_size
-        if jax.process_index() < jax.process_count() - 1
-        else num_shards
-    )
-    names = _fw_shard_names[start_idx:end_idx]
-    # use /dev/shm if on a TPU vm for more space
     platform = jax.devices()[0].platform
+    # use /dev/shm if on a TPU vm for more space
     if platform == "tpu":
         cache_dir = "/dev/shm/huggingface_cache"
     else:
         cache_dir = None
 
     if streaming:
-        write_note("streaming fineweb-edu")
+        write_note("streaming smollm-corpus fineweb-edu-dedup")
 
         def gen():
-            hf_ds = concatenate_datasets(
-                [
-                    load_dataset(
-                        "HuggingFaceFW/fineweb-edu",
-                        name=name,
-                        split="train",
-                        cache_dir=cache_dir,
-                        streaming=True,
-                    )
-                    for name in names
-                ]
+            hf_ds = load_dataset(
+                "HuggingFaceTB/smollm-corpus",
+                "fineweb-edu-dedup",
+                split="train",
+                cache_dir=cache_dir,
+                streaming=True,
             )
 
             tokenizer = AutoTokenizer.from_pretrained(
@@ -151,18 +148,14 @@ def fineweb_edu_dataset(
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
 
-            def tokenize(data_chunk):
+            def tokenize(text):
                 return tokenizer(
-                    data_chunk["text"],
-                    add_special_tokens=False,
-                    max_length=seq_len,
-                    padding="max_length",
-                    truncation=True,
+                    text, max_length=seq_len, padding="max_length", truncation=True
                 )
 
-            hf_ds = hf_ds.map(tokenize)
+            hf_ds = hf_ds.map(tokenize, input_columns="text")
 
-            hf_ds = hf_ds.with_format("tensorflow")
+            hf_ds = hf_ds.with_format("numpy")
 
             for example in hf_ds:
                 yield example["input_ids"]
@@ -190,32 +183,71 @@ def fineweb_edu_dataset(
         return ds
 
     else:
-        print(
-            f"loading fineweb-edu shard {shard_idx} for process {jax.process_index()}"
-        )
+        write_note("loading smollm-corpus")
+
+        fineweb_files_list = [
+            f"fineweb-edu-dedup/train-{i:05d}-of-00234.parquet" for i in range(234)
+        ]
+        cosmo_files_list = [
+            f"cosmopedia-v2/train-{i:05d}-of-00104.parquet" for i in range(104)
+        ]
+        # randomize, should stay consistent because we set random seed
+        fineweb_files_list.shuffle()
+        cosmo_files_list.shuffle()
+
+        n_procs = jax.process_count()
+        curr_proc = jax.process_index()
+
+        n_cosmo = n_procs // 4
+        n_fineweb = n_procs - n_cosmo
+
+        fineweb_shards = [fineweb_files_list[i::n_fineweb] for i in range(n_fineweb)]
+        cosmo_shards = [cosmo_files_list[i::n_cosmo] for i in range(n_cosmo)]
+
+        def chunks(L, n):
+            for i in range(0, len(L), n):
+                yield L[i : i + n]
+
+        # join the lists with every fourth shard being cosmopedia
+        if n_procs > 3:
+            zipper = zip(chunks(fineweb_shards, 3), cosmo_shards)
+            shards = list(chain.from_iterable((*x, y) for x, y in zipper))
+        else:
+            shards = fineweb_shards
+        assert len(shards) == n_procs
+
+        proc_shard = shards[curr_proc]
+        is_cosmo_shard = curr_proc + 1 % 4 == 0
+
+        if is_cosmo_shard and len(proc_shard) > 62:
+            # max 62 files per process
+            proc_shard = proc_shard[:62]
+        elif not is_cosmo_shard and len(proc_shard) > 31:
+            # max 31 files per process
+            proc_shard = proc_shard[:31]
+
+        print(f"process {curr_proc} data files ({len(proc_shard)} files): {proc_shard}")
 
         hf_ds: Dataset = load_dataset(
-            "HuggingFaceFW/fineweb-edu",
-            name=names[shard_idx],
+            "HuggingFaceTB/smollm-corpus",
+            "cosmopedia-v2" if is_cosmo_shard else "fineweb-edu-dedup",
             split="train",
+            data_files=proc_shard,
             cache_dir=cache_dir,
         )
 
         hf_ds = hf_ds.skip(start_index)
 
         tokenizer = AutoTokenizer.from_pretrained(
-            tokenizer_name, trust_remote_code=True
+            tokenizer_name, trust_remote_code=True, use_fast=True
         )
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
 
         def tokenize(data_chunk):
+            text = data_chunk["text"]
             return tokenizer(
-                data_chunk["text"],
-                add_special_tokens=False,
-                max_length=seq_len,
-                padding="max_length",
-                truncation=True,
+                text, max_length=seq_len, padding="max_length", truncation=True
             )
 
         hf_ds.set_transform(tokenize)
@@ -237,104 +269,3 @@ def fineweb_edu_dataset(
         if device_prefetch > 0:
             ds = prefetch_iterator(ds, device_prefetch)
         return ds
-
-
-# fineweb-edu has 96 shards
-_fw_shard_names = [
-    "CC-MAIN-2024-10",
-    "CC-MAIN-2023-50",
-    "CC-MAIN-2023-40",
-    "CC-MAIN-2023-23",
-    "CC-MAIN-2023-14",
-    "CC-MAIN-2023-06",
-    "CC-MAIN-2022-49",
-    "CC-MAIN-2022-40",
-    "CC-MAIN-2022-33",
-    "CC-MAIN-2022-27",
-    "CC-MAIN-2022-21",
-    "CC-MAIN-2022-05",
-    "CC-MAIN-2021-49",
-    "CC-MAIN-2021-43",
-    "CC-MAIN-2021-39",
-    "CC-MAIN-2021-31",
-    "CC-MAIN-2021-25",
-    "CC-MAIN-2021-21",
-    "CC-MAIN-2021-17",
-    "CC-MAIN-2021-13",
-    "CC-MAIN-2021-09",
-    "CC-MAIN-2021-04",
-    "CC-MAIN-2020-50",
-    "CC-MAIN-2020-45",
-    "CC-MAIN-2020-40",
-    "CC-MAIN-2020-34",
-    "CC-MAIN-2020-29",
-    "CC-MAIN-2020-24",
-    "CC-MAIN-2020-16",
-    "CC-MAIN-2020-10",
-    "CC-MAIN-2019-51",
-    "CC-MAIN-2019-47",
-    "CC-MAIN-2019-43",
-    "CC-MAIN-2019-39",
-    "CC-MAIN-2019-35",
-    "CC-MAIN-2019-30",
-    "CC-MAIN-2019-26",
-    "CC-MAIN-2019-22",
-    "CC-MAIN-2019-18",
-    "CC-MAIN-2019-13",
-    "CC-MAIN-2019-09",
-    "CC-MAIN-2019-04",
-    "CC-MAIN-2018-51",
-    "CC-MAIN-2018-47",
-    "CC-MAIN-2018-43",
-    "CC-MAIN-2018-39",
-    "CC-MAIN-2018-34",
-    "CC-MAIN-2018-30",
-    "CC-MAIN-2018-26",
-    "CC-MAIN-2018-22",
-    "CC-MAIN-2018-17",
-    "CC-MAIN-2018-13",
-    "CC-MAIN-2018-09",
-    "CC-MAIN-2018-05",
-    "CC-MAIN-2017-51",
-    "CC-MAIN-2017-47",
-    "CC-MAIN-2017-43",
-    "CC-MAIN-2017-39",
-    "CC-MAIN-2017-34",
-    "CC-MAIN-2017-30",
-    "CC-MAIN-2017-26",
-    "CC-MAIN-2017-22",
-    "CC-MAIN-2017-17",
-    "CC-MAIN-2017-13",
-    "CC-MAIN-2017-09",
-    "CC-MAIN-2017-04",
-    "CC-MAIN-2016-50",
-    "CC-MAIN-2016-44",
-    "CC-MAIN-2016-40",
-    "CC-MAIN-2016-36",
-    "CC-MAIN-2016-30",
-    "CC-MAIN-2016-26",
-    "CC-MAIN-2016-22",
-    "CC-MAIN-2016-18",
-    "CC-MAIN-2016-10",
-    "CC-MAIN-2016-07",
-    "CC-MAIN-2015-48",
-    "CC-MAIN-2015-40",
-    "CC-MAIN-2015-35",
-    "CC-MAIN-2015-32",
-    "CC-MAIN-2015-27",
-    "CC-MAIN-2015-22",
-    "CC-MAIN-2015-18",
-    "CC-MAIN-2015-14",
-    "CC-MAIN-2015-11",
-    "CC-MAIN-2015-06",
-    "CC-MAIN-2014-52",
-    "CC-MAIN-2014-49",
-    "CC-MAIN-2014-42",
-    "CC-MAIN-2014-41",
-    "CC-MAIN-2014-35",
-    "CC-MAIN-2014-23",
-    "CC-MAIN-2014-15",
-    "CC-MAIN-2014-10",
-    "CC-MAIN-2013-48",
-    "CC-MAIN-2013-20",
-]
