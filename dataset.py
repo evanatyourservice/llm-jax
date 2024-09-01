@@ -191,9 +191,9 @@ def smollm_corpus_dataset(
         cosmo_files_list = [
             f"cosmopedia-v2/train-{i:05d}-of-00104.parquet" for i in range(104)
         ]
-        # randomize, should stay consistent because we set random seed
-        fineweb_files_list.shuffle()
-        cosmo_files_list.shuffle()
+        # randomize, should stay consistent because we set random seed in train.py
+        np.random.shuffle(fineweb_files_list)
+        np.random.shuffle(cosmo_files_list)
 
         n_procs = jax.process_count()
         curr_proc = jax.process_index()
