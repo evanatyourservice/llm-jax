@@ -1,7 +1,8 @@
 from functools import partial
 from pprint import pprint
+import shutil
 import time
-from typing import Tuple, Any
+from typing import Tuple
 from dataclasses import asdict
 import os
 import random
@@ -14,7 +15,6 @@ import jax.numpy as jnp
 from jax.experimental import mesh_utils
 from jax.sharding import Mesh, PartitionSpec as P, NamedSharding
 import flax
-import flax.linen as nn
 from flax.training import checkpoints
 from flax.training.train_state import TrainState as ts
 import optax
@@ -46,12 +46,12 @@ jax.config.update("jax_threefry_partitionable", True)
 
 
 class TrainState(ts):
-    fw_shard_n: int = 0
-    fw_dataset_step: int = 0
+    shard_idx: int = 0
+    dataset_step: int = 0
 
 
 def train_step(
-    state: TrainState, tokens: jnp.ndarray, rng_key, params_sharding: Any = None
+    state: TrainState, tokens: jnp.ndarray, rng_key
 ) -> Tuple[jnp.ndarray, jnp.ndarray, TrainState, jnp.ndarray]:
 
     rng_key = jax.random.fold_in(rng_key, state.step)  # same key each grad accum step
@@ -78,6 +78,7 @@ def train_step(
 
     (loss, acc), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
     new_state = state.apply_gradients(grads=grads)
+    new_state = new_state.replace(dataset_step=state.dataset_step + 1)
 
     check_dtypes(before_dtypes, jax.tree.map(lambda x: x.dtype, new_state))
 
@@ -387,18 +388,11 @@ def main(config: TrainConfig):
     # grab start step from loaded train state
     step = jax.device_get(train_state.step).item()
     write_note(f"starting training at step {step}")
-    # calculate dataset start index
-    dataset_start = (
-        step * config.optimizer.gradient_accumulation_steps * config.batch_size
-    )
 
     # ====== jit functions ========
     # we specify in_shardings for sake of clarity, but they are inferred
-    train_step_w_sharding = partial(
-        train_step, params_sharding=train_state_sharding.params
-    )
     train_step_jit = jax.jit(
-        train_step_w_sharding,
+        train_step,
         # donate_argnums=(0,),
         in_shardings=(train_state_sharding, data_sharding, rng.sharding),
         out_shardings=(
@@ -431,6 +425,15 @@ def main(config: TrainConfig):
     def step_minus_1(state):
         return state.replace(step=state.step - 1)
 
+    @partial(
+        jax.jit,
+        in_shardings=(train_state_sharding,),
+        out_shardings=train_state_sharding,
+    )
+    def advance_shard_idx_and_zero_dataset_step(state):
+        """Used when current shard is exhausted and new one begins."""
+        return state.replace(shard_idx=state.shard_idx + 1, dataset_step=0)
+
     # ===== datasets =====
     write_note("creating datasets")
     tokenizer_name = (
@@ -447,7 +450,8 @@ def main(config: TrainConfig):
     else:  # TPU
         device_prefetch = 1
         streaming = False
-    train_ds_fn = partial(
+
+    make_train_ds = partial(
         fineweb_edu_dataset,
         tokenizer_name=tokenizer_name,
         batch_size=config.batch_size,
@@ -456,10 +460,17 @@ def main(config: TrainConfig):
         tf_prefetch=10,
         device_prefetch=device_prefetch,
         streaming=streaming,
-        seed=config.seed,
-        num_shards_per_process=config.n_fineweb_edu_shards_dl,
     )
-    train_ds = train_ds_fn(start_index=dataset_start)
+
+    current_shard_idx = jax.device_get(train_state.shard_idx)
+    # dataset step * process batch size
+    current_dataset_step = jax.device_get(train_state.dataset_step) * (
+        config.batch_size // jax.process_count()
+    )
+    train_ds = make_train_ds(
+        shard_idx=current_shard_idx, start_index=current_dataset_step
+    )
+
     # hellaswag has 4 seqs per example
     hellaswag_ds, hellaswag_len = prepare_hellaswag(
         tokenizer_name,
@@ -483,9 +494,27 @@ def main(config: TrainConfig):
             try:
                 tokens = next(train_ds)
             except StopIteration:
-                # start over
-                train_ds = train_ds_fn(start_index=0)
+                print(
+                    f"current dataset shard exhausted on process "
+                    f"{jax.process_index()}, loading next shard"
+                )
+                # delete huggingface datasets cache to save space
+                if platform == "tpu":
+                    hf_cache_dir = "/dev/shm/huggingface_cache"
+                else:
+                    hf_cache_dir = os.path.expanduser("~/.cache/huggingface/datasets")
+                if os.path.exists(hf_cache_dir):
+                    print(f"removing {hf_cache_dir} to save space")
+                    shutil.rmtree(hf_cache_dir)
+                # start next shard
+                train_ds = make_train_ds(
+                    shard_idx=train_state.shard_idx + 1, start_index=0
+                )
+                # advance shard idx and zero dataset step
+                train_state = advance_shard_idx_and_zero_dataset_step(train_state)
+                # continue training
                 tokens = next(train_ds)
+
             loss, acc, train_state, g_norm = train_step_jit(train_state, tokens, rng)
             train_losses.append(jax.device_get(loss).item())
             train_accs.append(jax.device_get(acc).item())

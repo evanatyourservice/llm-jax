@@ -22,74 +22,6 @@ OPTIONS.threading.max_intra_op_parallelism = 1
 OPTIONS.experimental_optimization.inject_prefetch = False
 
 
-def get_dataset(
-    pattern: str,
-    flat_devices,
-    batch_size: int,
-    block_size: int = 1024,
-    interleave_cycle_length: int = 1,
-    tf_prefetch: int = 5,
-    device_prefetch: int = 0,
-) -> tf.data.Dataset.as_numpy_iterator:
-    seq_len = block_size + 1
-
-    file_ds = tf.data.Dataset.list_files(pattern, shuffle=True)
-    file_ds = file_ds.shard(jax.process_count(), jax.process_index())
-    file_ds = file_ds.repeat()
-
-    if interleave_cycle_length > 1:
-        ds = file_ds.interleave(
-            lambda x: tf.data.TFRecordDataset(x, num_parallel_reads=tf.data.AUTOTUNE),
-            cycle_length=interleave_cycle_length,
-            block_length=1,
-            num_parallel_calls=tf.data.AUTOTUNE,
-        )
-    else:
-        ds = tf.data.TFRecordDataset(file_ds, num_parallel_reads=tf.data.AUTOTUNE)
-
-    # each element of the dataset is a tokenized string
-    feature_description = {
-        "ids": tf.io.FixedLenFeature([], tf.string, default_value="")
-    }
-
-    def parse_example(example_proto):
-        example = tf.io.parse_single_example(example_proto, feature_description)
-        return tf.io.decode_raw(example["ids"], tf.uint16)
-
-    ds = ds.map(parse_example, num_parallel_calls=tf.data.AUTOTUNE)
-
-    # here we shuffle each group of tokens and then unbatch into a single
-    # contiguous sequence of ids, we then chunk the sequence into blocks
-    if shuffle_buffer_size is not None:
-        ds = ds.shuffle(shuffle_buffer_size)
-
-    ds = ds.unbatch().batch(
-        seq_len, drop_remainder=True, num_parallel_calls=tf.data.AUTOTUNE
-    )
-
-    # blocks are then shuffled and batched
-    if shuffle_buffer_size is not None:
-        ds = ds.shuffle(shuffle_buffer_size)
-
-    ds = ds.batch(
-        batch_size // jax.process_count(),
-        drop_remainder=True,
-        num_parallel_calls=tf.data.AUTOTUNE,
-    )
-    ds = ds.with_options(OPTIONS)
-    ds = ds.prefetch(tf_prefetch)
-    ds = ds.as_numpy_iterator()
-    ds = iter(ds)
-    ds = threadstart_iterator(ds)
-    ds = (
-        jax.tree.map(lambda x: make_fsarray_from_local_slice(x, flat_devices), elem)
-        for elem in ds
-    )
-    if device_prefetch > 0:
-        ds = prefetch_iterator(ds, device_prefetch)
-    return ds
-
-
 def prepare_hellaswag(
     tokenizer_name: str,
     batch_size: int,
@@ -173,19 +105,22 @@ def fineweb_edu_dataset(
     tf_prefetch: int = 5,
     device_prefetch: int = 0,
     streaming: bool = False,
+    shard_idx: int = 0,
     start_index: int = 0,
-    seed: int = 42,
-    num_shards_per_process: int = 1,
 ):
     seq_len = block_size + 1
 
     # awful way to shard but whatever
-    idx = jax.process_index()
-    # download n shards for each process
-    names = _fw_shard_names[
-        idx * num_shards_per_process : idx * num_shards_per_process
-        + num_shards_per_process
-    ]
+    # grab this process's section of list
+    num_shards = len(_fw_shard_names)
+    shard_size = num_shards // jax.process_count()
+    start_idx = jax.process_index() * shard_size
+    end_idx = (
+        start_idx + shard_size
+        if jax.process_index() < jax.process_count() - 1
+        else num_shards
+    )
+    names = _fw_shard_names[start_idx:end_idx]
     # use /dev/shm if on a TPU vm for more space
     platform = jax.devices()[0].platform
     if platform == "tpu":
@@ -197,26 +132,21 @@ def fineweb_edu_dataset(
         write_note("streaming fineweb-edu")
 
         def gen():
-            hf_ds: Dataset = (
-                concatenate_datasets(
-                    [
-                        load_dataset(
-                            "HuggingFaceFW/fineweb-edu",
-                            name=name,
-                            split="train",
-                            cache_dir=cache_dir,
-                            streaming=True,
-                        )
-                        for name in names
-                    ]
-                )
-                .shuffle(seed=seed)
-                .shuffle(seed=seed + 1)
-                .shuffle(seed=seed + 2)
+            hf_ds = concatenate_datasets(
+                [
+                    load_dataset(
+                        "HuggingFaceFW/fineweb-edu",
+                        name=name,
+                        split="train",
+                        cache_dir=cache_dir,
+                        streaming=True,
+                    )
+                    for name in names
+                ]
             )
 
             tokenizer = AutoTokenizer.from_pretrained(
-                tokenizer_name, trust_remote_code=True, use_fast=True
+                tokenizer_name, trust_remote_code=True
             )
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
@@ -240,6 +170,7 @@ def fineweb_edu_dataset(
         ds = tf.data.Dataset.from_generator(
             gen, output_signature=tf.TensorSpec(shape=(seq_len,), dtype=tf.int32)
         )
+        ds = ds.shuffle(10000)
         ds = ds.batch(
             batch_size // jax.process_count(),
             drop_remainder=True,
@@ -259,17 +190,18 @@ def fineweb_edu_dataset(
         return ds
 
     else:
-        write_note("loading fineweb-edu")
+        print(
+            f"loading fineweb-edu shard {shard_idx} for process {jax.process_index()}"
+        )
 
         hf_ds: Dataset = load_dataset(
             "HuggingFaceFW/fineweb-edu",
-            name=names[0],
+            name=names[shard_idx],
             split="train",
             cache_dir=cache_dir,
         )
 
-        ds_len = len(hf_ds)
-        hf_ds = hf_ds.skip(start_index % ds_len)
+        hf_ds = hf_ds.skip(start_index)
 
         tokenizer = AutoTokenizer.from_pretrained(
             tokenizer_name, trust_remote_code=True
@@ -293,11 +225,11 @@ def fineweb_edu_dataset(
         ds = hf_ds.to_tf_dataset(columns="input_ids", prefetch=False)
         ds = ds.shuffle(10000)
         ds = ds.batch(batch_size // jax.process_count(), drop_remainder=True)
-        # ds = ds.with_options(OPTIONS)
+        ds = ds.with_options(OPTIONS)
         ds = ds.prefetch(tf_prefetch)
         ds = ds.as_numpy_iterator()
         ds = iter(ds)
-        # ds = threadstart_iterator(ds)
+        ds = threadstart_iterator(ds)
         ds = (
             jax.tree.map(lambda x: make_fsarray_from_local_slice(x, flat_devices), elem)
             for elem in ds
