@@ -11,4 +11,4 @@ optax
 einops
 psgd-jax
 chex
-easydel
+easydel @ git+https://github.com/erfanzar/EasyDeL@main

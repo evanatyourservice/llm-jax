@@ -7,10 +7,10 @@ train_steps: 50000
 compute_dtype: bfloat16
 params_dtype: bfloat16
 optimizer: !dataclass:OptimizerConfig
-    type: "affine"
+    type: "psgd_affine"
     learning_rate: 0.001
     warmup_steps: 0
-    weight_decay: 0.01
+    weight_decay: 0.1
     grad_clip: 1.0
     gradient_accumulation_steps: 1
     betas:
@@ -18,7 +18,6 @@ optimizer: !dataclass:OptimizerConfig
       - 0.95
     nesterov: False
     preconditioner_update_probability: 1.0
-    psgd_use_hessian: False
     max_size_triangular: 8192
     max_skew_triangular: 16
     precond_lr: 0.1

@@ -288,6 +288,8 @@ def fineweb_edu_dataset(
 
         hf_ds.set_transform(tokenize)
 
+        hf_ds.cleanup_cache_files()
+
         ds = hf_ds.to_tf_dataset(columns="input_ids", prefetch=False)
         ds = ds.shuffle(10000)
         ds = ds.batch(batch_size // jax.process_count(), drop_remainder=True)

@@ -45,7 +45,7 @@ def infer_sharding(params, mesh, op):
     return jax.tree.map(lambda spec: NamedSharding(mesh, spec), specs)
 
 
-def fsdp_sharding(axis, min_size_to_shard_mb=4, reverse_shape=True):
+def fsdp_sharding(axis, min_size_to_shard_mb=1):
     """FSDP sharding rule.
 
     Shards the largest dimension that is not sharded already and is divisible
@@ -54,7 +54,6 @@ def fsdp_sharding(axis, min_size_to_shard_mb=4, reverse_shape=True):
     Args:
       axis: mesh axis name for FSDP, or a collection of names.
       min_size_to_shard_mb: minimal tensor size to bother with sharding.
-      reverse_shape: if True, we shard the last axis first for dims of same size.
 
     Returns:
       A function that updates the sharding spec.
@@ -63,39 +62,40 @@ def fsdp_sharding(axis, min_size_to_shard_mb=4, reverse_shape=True):
     axis_tuple = axis if isinstance(axis, tuple) else (axis,)
 
     def _update_spec(cur_spec, mesh, name, x):
-        # CHANGED: we assume preconditioners are kept in lists.
-        # This is at least the case for tearfree shampoo and PSGD affine.
-        if isinstance(x, list):
-            if len(x) > 2:
-                # might be shampoo, just shard everything in first dim, opposite params
-                return [(axis,) if len(y.shape) > 1 else (None,) for y in x]
-            else:
-                # For psgd, we replicate vectors and shard matrices.
-                # if both triangular, shard opposite from each other
-                return [
-                    (axis,) if len(x[0].shape) > 1 else (None,),
-                    (None, axis) if len(x[1].shape) > 1 else (None,),
-                ]
-
-        shape = x.shape
         axis_size = np.prod([mesh.shape[a] for a in axis_tuple])
 
+        # Preconditioner sharding
+        # We're assuming preconditioners are kept in lists.
+        # This is at least the case for tearfree shampoo and PSGD affine.
+        if isinstance(x, list):
+            # Replicate diag preconditioners and shard matrices.
+            # Params mostly sharded in later dims, so we shard preconditioners
+            # in first dim.
+            return [
+                (
+                    (axis,)
+                    if len(p.shape) > 1
+                    and np.prod(p.shape) * p.dtype.itemsize
+                    > min_size_to_shard_mb * (2**20)
+                    and p.shape[0] % axis_size == 0
+                    else (None,)
+                )
+                for p in x
+            ]
+
+        shape = x.shape
+
+        # Params sharding
         if np.prod(shape) * x.dtype.itemsize <= min_size_to_shard_mb * (2**20):
             return cur_spec
 
-        # Partition along largest axis that is divisible and not taken.
-        idx = np.argsort(shape)
-        if reverse_shape:
-            idx = idx[::-1]
-            for i in idx:
-                if shape[i] % axis_size == 0:
-                    if cur_spec[i] is None:
-                        return cur_spec[:i] + (axis,) + cur_spec[i + 1 :]
-        else:
-            for i in idx:
-                if shape[i] % axis_size == 0:
-                    if cur_spec[i] is None:
-                        return cur_spec[:i] + (axis,) + cur_spec[i + 1 :]
+        # Partition along largest axis that is divisible and not taken starting
+        # from last dimension.
+        idx = np.argsort(shape)[::-1]
+        for i in idx:
+            if shape[i] % axis_size == 0:
+                if cur_spec[i] is None:
+                    return cur_spec[:i] + (axis,) + cur_spec[i + 1 :]
 
         write_note(
             f"Failed to apply `fsdp` rule to the parameter {name}:{shape}, "

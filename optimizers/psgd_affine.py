@@ -1,16 +1,15 @@
-from typing import Any, Optional, Union, Callable, NamedTuple
-import numpy as np
+from collections import defaultdict
+from typing import Any, Optional, Union, Callable, NamedTuple, List, Tuple
 
 import jax
 from jax import numpy as jnp
 from jax.random import PRNGKey
 from optax import tree_utils as otu
 from optax._src import base, transform
+from optax._src.linear_algebra import global_norm
 from optax._src.numerics import safe_int32_increment
 from optax._src.utils import canonicalize_dtype
 from optax._src.combine import chain
-
-from optimizers.utils import add_eps, apply_momentum, global_clip
 
 
 class PSGDAffineState(NamedTuple):
@@ -27,11 +26,12 @@ def scale_by_affine(
     max_size_triangular: int = 4096,
     max_skew_triangular: int = 16,
     precond_lr: Union[float, Callable[[int], float]] = 0.1,
-    precond_init_scale: Optional[float] = None,
+    precond_init_scale: float = 1.0,
     mu_dtype: Optional[Union[str, jnp.dtype]] = None,
     precond_dtype: Optional[Union[str, jnp.dtype]] = None,
     precision: str = "bfloat16",
     reshaped_params_sharding: Any = None,
+    best_effort_scan: bool = True,
 ) -> base.GradientTransformationExtraArgs:
     """
     Implements Affine PSGD from https://github.com/lixilinx/psgd_torch.
@@ -46,12 +46,14 @@ def scale_by_affine(
         max_skew_triangular: int, max skew for affine preconditioner to be
             triangular.
         precond_lr: float or callable, learning rate for the preconditioner.
-        precond_init_scale: optional float, initial scale for the preconditioner.
+        precond_init_scale: float, initial scale for the preconditioner.
         mu_dtype: optional str or jnp.dtype, dtype of the momentum accumulator.
             Defaults to the same dtype as the parameters.
         precond_dtype: optional str or jnp.dtype, dtype of the preconditioner.
         precision: str, precision for matmul, 'bfloat16', 'tensorfloat32', 'float32'.
-        reshaped_params_sharding: optional Any, sharding spec for parameters.
+        reshaped_params_sharding: optional Any, sharding spec for reshaped parameters.
+        best_effort_scan: bool, try to automatically stack same-shaped matrices
+            and use lax.map to update them to save on compile time and memory.
 
     Returns:
         optax.GradientTransformationExtraArgs
@@ -68,44 +70,23 @@ def scale_by_affine(
             mu = otu.tree_zeros_like(params, mu_dtype)
 
         # preconditioners
-        params_struct = jax.tree.structure(params)
         affine_reshapers = [_shape_as_matrix(x) for x in jax.tree.leaves(params)]
         Qs = [
             _initQ(s[2], max_size_triangular, max_skew_triangular, precond_dtype)
             for s in affine_reshapers
         ]
-        Qs = params_struct.unflatten(Qs)
+        Qs = jax.tree.structure(params).unflatten(Qs)
+        Qs = jax.tree.map(lambda q: jnp.sqrt(precond_init_scale) * q, Qs)
 
         # initial state
         return PSGDAffineState(count=jnp.zeros([], jnp.int32), key=key, mu=mu, Qs=Qs)
 
     def update_fn(
-        updates: base.Updates,
-        state: PSGDAffineState,
-        params: base.Params = None,
-        Hvp: Optional[base.Updates] = None,
-        vector: Optional[base.Updates] = None,
-        update_preconditioner: Optional[bool] = None,
+        updates: base.Updates, state: PSGDAffineState, params: base.Params = None
     ):
         del params
-        # use hessian preconditioning if hessian provided
-        # otherwise use gg^T whitening type preconditioning
-        hessian_based_preconditioning = Hvp is not None
-        if hessian_based_preconditioning and (
-            vector is None or update_preconditioner is None
-        ):
-            raise ValueError(
-                "If using Hessian-based preconditioning, must also pass in random vector and "
-                "update_preconditioner to PSGD's update function. See README for more info."
-            )
-
         count_inc = safe_int32_increment(state.count)
         key = state.key
-        # get reshapers
-        affine_reshapers = [_shape_as_matrix(x) for x in jax.tree.leaves(updates)]
-        # flatten Qs
-        params_struct = jax.tree.structure(updates)
-        Qs = params_struct.flatten_up_to(state.Qs)
 
         update_prob_in = preconditioner_update_probability
         if isinstance(preconditioner_update_probability, Callable):
@@ -115,135 +96,100 @@ def scale_by_affine(
         if isinstance(precond_lr, Callable):
             precond_lr_in = precond_lr(count_inc)
 
-        def _update_precond(key: PRNGKey, Qs, Hvs, vs, count):
-            # flatten Hvs
-            Hvs = [r[0](x) for x, r in zip(jax.tree.leaves(Hvs), affine_reshapers)]
-            if reshaped_params_sharding is not None:
-                Hvs = jax.lax.with_sharding_constraint(Hvs, reshaped_params_sharding)
-
-            if hessian_based_preconditioning:
-                # flatten vs
-                vs = [r[0](x) for x, r in zip(jax.tree.leaves(vs), affine_reshapers)]
-                if reshaped_params_sharding is not None:
-                    vs = jax.lax.with_sharding_constraint(vs, reshaped_params_sharding)
-
-                # init Qs
-                def init_q(v, h):
-                    if precond_init_scale is not None:
-                        return precond_init_scale
-                    else:
-                        return (jnp.sum(v * v.conj()) / jnp.sum(h * h.conj())) ** 0.25
-
-                Qs = jax.lax.cond(
-                    count == 0,
-                    lambda: [
-                        [init_q(v, h) ** 0.5 * q for q in Qlr]
-                        for v, h, Qlr in zip(vs, Hvs, Qs)
-                    ],
-                    lambda: Qs,
-                )
-
-                # update preconditioner
-                key, subkey = jax.random.split(key)
-                keys = jax.random.split(subkey, len(Qs))
-                Qs = [
-                    _update_precond_affine_math_(
-                        k, Qlr[0], Qlr[1], v, h, precond_lr_in, precision
-                    )
-                    for (k, Qlr, v, h) in zip(
-                        keys, Qs, jax.tree.leaves(vs), jax.tree.leaves(Hvs)
-                    )
-                ]
-            else:
-                # init Qs
-                def init_q(g):
-                    if precond_init_scale is not None:
-                        return precond_init_scale
-                    else:
-                        return (g.size / jnp.sum(g * g.conj())) ** 0.25
-
-                Qs = jax.lax.cond(
-                    count == 0,
-                    lambda: [
-                        [init_q(g) ** 0.5 * q for q in Qlr] for g, Qlr in zip(Hvs, Qs)
-                    ],
-                    lambda: Qs,
-                )
-
-                # update preconditioner
-                key, subkey = jax.random.split(key)
-                keys = jax.random.split(subkey, len(Qs))
-                flat_hvs = jax.tree.leaves(Hvs)
-                if reshaped_params_sharding is None:
-                    flat_sharding = [None] * len(flat_hvs)
-                else:
-                    flat_sharding = reshaped_params_sharding
-                Qs = [
-                    _update_precond_affine_dropv_math(
-                        k, Qlr[0], Qlr[1], h, precond_lr_in, precision, s
-                    )
-                    for (k, Qlr, h, s) in zip(keys, Qs, flat_hvs, flat_sharding)
-                ]
-
-            Qs = otu.tree_cast(Qs, precond_dtype)
-            return key, Qs
-
-        def _dont_update_precond(key, Qs, Hvs, vs, count):
-            return key, Qs
-
         # momentum
         mu = None
-        momentum_updates = updates
         if state.mu is not None:
-            momentum_updates, mu = apply_momentum(
-                updates, state.mu, count_inc, b1, nesterov
-            )
+            updates, mu = _apply_momentum(updates, state.mu, count_inc, b1, nesterov)
 
-        if not hessian_based_preconditioning:
-            # update cond not passed in, create here
-            key, subkey = jax.random.split(key)
-            update_preconditioner = jnp.logical_or(
-                jax.random.uniform(subkey) < update_prob_in, state.count < 2
-            )
+        # get reshapers
+        affine_reshapers = jax.tree.map(_shape_as_matrix, updates)
 
-            # use grads as Hvp, momentum before precond update
-            Hvp = momentum_updates
+        # flatten pytrees
+        updates, grads_structure = jax.tree.flatten(updates)
+        Qs = grads_structure.flatten_up_to(state.Qs)
+        affine_reshapers = grads_structure.flatten_up_to(affine_reshapers)
+        flat_sharding = grads_structure.flatten_up_to(reshaped_params_sharding)
 
-        # TODO switch to while loop trick to avoid wasteful XLA buffer allocation
-        key, Qs = jax.lax.cond(
-            update_preconditioner,
-            _update_precond,
-            _dont_update_precond,
-            key,
-            Qs,
-            Hvp,
-            vector,
-            state.count,
+        # reshape updates using affine reshapers
+        gs = [r[0](x) for x, r in zip(updates, affine_reshapers)]
+        if flat_sharding is not None:
+            gs = jax.lax.with_sharding_constraint(gs, flat_sharding)
+
+        # stack same-shaped matrices to scan over
+        if best_effort_scan:
+            gs, Qs, revert_indices = _stack_matrices(gs, Qs)
+
+        map_batch_size = 2  # interpolates between scan and vmap, 1 being scan unroll=1
+
+        # update preconditioner
+        key, subkey = jax.random.split(key)
+        do_update = jnp.logical_or(
+            jax.random.uniform(subkey, dtype=jnp.float32) < update_prob_in,
+            state.count < 2,
         )
 
-        # preconditioning
-        flat_updates = [
-            r[0](u) for u, r in zip(jax.tree.leaves(momentum_updates), affine_reshapers)
-        ]
-        if reshaped_params_sharding is not None:
-            flat_updates = jax.lax.with_sharding_constraint(
-                flat_updates, reshaped_params_sharding
+        def update_preconditioner():
+            ukey = key
+            if best_effort_scan:
+                key_list = []
+                for g in gs:
+                    n_keys = jax.random.split(ukey, g.shape[0] + 1)
+                    ukey, keys = n_keys[0], n_keys[1:]
+                    key_list.append(keys)
+
+                new_Qs = [
+                    jax.lax.map(
+                        lambda xs: _update_precond_affine_dropv_math(
+                            *xs, precond_lr_in, precision
+                        ),
+                        (k, Ql, Qr, g),
+                        batch_size=map_batch_size,
+                    )
+                    for (k, (Ql, Qr), g) in zip(key_list, Qs, gs)
+                ]
+            else:
+                keys = jax.random.split(ukey, len(Qs))
+                new_Qs = [
+                    _update_precond_affine_dropv_math(
+                        k, Ql, Qr, g, precond_lr_in, precision
+                    )
+                    for (k, (Ql, Qr), g) in zip(keys, Qs, gs)
+                ]
+
+            new_Qs = otu.tree_cast(new_Qs, precond_dtype)
+            return new_Qs
+
+        Qs = _efficient_cond(do_update, update_preconditioner, Qs)
+
+        # precondition grads
+        if best_effort_scan:
+            precond_grad_fn = lambda l, r, g: jax.lax.map(
+                lambda xs: _precond_grad_affine_math(*xs),
+                (l, r, g),
+                batch_size=map_batch_size,
             )
-        flat_updates = [
-            _precond_grad_affine_math(Qlr[0], Qlr[1], g)
-            for (Qlr, g) in zip(Qs, flat_updates)
-        ]
-        flat_updates = [r[1](u) for u, r in zip(flat_updates, affine_reshapers)]
-        updates = params_struct.unflatten(flat_updates)
+        else:
+            precond_grad_fn = _precond_grad_affine_math
 
-        # global clipping (sqrt(n_params) seems to work well empirically)
-        n_params = sum(p.size for p in jax.tree.leaves(updates))
-        max_norm = jnp.sqrt(n_params)
-        updates = global_clip(updates, max_norm)
-        # elementwise clipping
-        updates = jax.tree.map(lambda x: jnp.clip(x, -1.0, 1.0), updates)
+        gs = [precond_grad_fn(Ql, Qr, g) for ((Ql, Qr), g) in zip(Qs, gs)]
 
-        Qs = params_struct.unflatten(Qs)
+        # unstack matrices
+        if best_effort_scan:
+            gs, Qs = _unstack_matrices(gs, Qs, revert_indices)
+            if flat_sharding is not None:
+                gs = jax.lax.with_sharding_constraint(gs, flat_sharding)
+
+        # global clipping, sqrt(n_params) / 2 seems to work well empirically
+        n_params = sum(p.size for p in jax.tree.leaves(gs))
+        max_norm = jnp.sqrt(n_params) / 2
+        gs = _global_clip(gs, max_norm)
+        # element-wise clipping
+        gs = jax.tree.map(lambda x: jnp.clip(x, -1.0, 1.0), gs)
+
+        # reshape updates back to original shapes and unflatten pytrees
+        updates = [r[1](u) for u, r in zip(gs, affine_reshapers)]
+        updates = grads_structure.unflatten(updates)
+        Qs = grads_structure.unflatten(Qs)
 
         mu = otu.tree_cast(mu, mu_dtype)
         Qs = otu.tree_cast(Qs, precond_dtype)
@@ -263,11 +209,12 @@ def affine(
     max_size_triangular: int = 4096,
     max_skew_triangular: int = 16,
     precond_lr: Union[float, Callable[[int], float]] = 0.1,
-    precond_init_scale: Optional[float] = None,
+    precond_init_scale: float = 1.0,
     mu_dtype: Optional[Union[str, jnp.dtype]] = None,
     precond_dtype: Optional[Union[str, jnp.dtype]] = None,
     precision: str = "bfloat16",
     reshaped_params_sharding: Any = None,
+    best_effort_scan: bool = True,
 ) -> base.GradientTransformationExtraArgs:
     """
     Implements Affine PSGD from https://github.com/lixilinx/psgd_torch.
@@ -285,12 +232,14 @@ def affine(
         max_skew_triangular: int, max skew for affine preconditioner to be
             triangular.
         precond_lr: float or callable, learning rate for the preconditioner.
-        precond_init_scale: optional float, initial scale for the preconditioner.
+        precond_init_scale: float, initial scale for the preconditioner.
         mu_dtype: optional str or jnp.dtype, dtype of the momentum accumulator.
             Defaults to the same dtype as the parameters.
         precond_dtype: optional str or jnp.dtype, dtype of the preconditioner.
         precision: str, precision for matmul, 'bfloat16', 'tensorfloat32', 'float32'.
         reshaped_params_sharding: optional Any, sharding spec for parameters.
+        best_effort_scan: bool, try to automatically stack same-shaped matrices
+            and use lax.map to update them to save on compile time and memory.
 
     Returns:
         optax.GradientTransformationExtraArgs
@@ -308,12 +257,46 @@ def affine(
             precond_dtype=precond_dtype,
             precision=precision,
             reshaped_params_sharding=reshaped_params_sharding,
+            best_effort_scan=best_effort_scan,
         )
     ]
     if weight_decay > 0:
         opt.append(transform.add_decayed_weights(weight_decay, mask=mask))
     opt.append(transform.scale_by_learning_rate(learning_rate))
     return chain(*opt)
+
+
+def _apply_momentum(
+    updates: base.Updates, momentum: base.Updates, step, b1, nesterov
+) -> Tuple[base.Updates, base.Updates]:
+    # ema
+    mu = otu.tree_update_moment(updates, momentum, b1, 1)
+    if nesterov:
+        # nesterov momentum for ema with bias correction
+        # https://openreview.net/pdf?id=OM0jvwB8jIp57ZJjtNEZ
+        updates = jax.tree.map(
+            lambda m, g: b1 * m + (1 - b1) * g,
+            otu.tree_bias_correction(mu, b1, safe_int32_increment(step)),
+            otu.tree_bias_correction(updates, b1, step),
+        )
+    else:
+        # bias correction only
+        updates = otu.tree_bias_correction(mu, b1, step)
+
+    return updates, mu
+
+
+def _add_eps(x):
+    return jnp.clip(x, 1e-25, None)
+
+
+def _global_clip(updates, max_norm):
+    g_norm = global_norm(updates)
+    g_norm = jnp.maximum(max_norm, g_norm)
+    updates = jax.tree.map(
+        lambda u: (u / g_norm.astype(u.dtype)) * max_norm.astype(u.dtype), updates
+    )
+    return updates
 
 
 def _norm_lower_bound(A: jax.Array):
@@ -456,6 +439,7 @@ def _solve_triangular(a, b, upper, left=True):
 
 def _update_precond_affine_math_(key, Ql, Qr, dX, dG, precond_lr, precision):
     step_normalizer = "2nd"
+
     with jax.default_matmul_precision(precision):
         if Ql.ndim == 2:
             if Qr.ndim == 2:  # Ql.dim()=2 and Qr.dim()=2:
@@ -472,11 +456,11 @@ def _update_precond_affine_math_(key, Ql, Qr, dX, dG, precond_lr, precision):
                 grad2 = jnp.triu(AhA - BBh)
 
                 if step_normalizer == "2nd":
-                    step1 = precond_lr / add_eps(_norm_lower_bound(AAh + BhB))
-                    step2 = precond_lr / add_eps(_norm_lower_bound(AhA + BBh))
+                    step1 = precond_lr / _add_eps(_norm_lower_bound(AAh + BhB))
+                    step2 = precond_lr / _add_eps(_norm_lower_bound(AhA + BBh))
                 else:
-                    step1 = precond_lr / add_eps(_norm_lower_bound(grad1))
-                    step2 = precond_lr / add_eps(_norm_lower_bound(grad2))
+                    step1 = precond_lr / _add_eps(_norm_lower_bound(grad1))
+                    step2 = precond_lr / _add_eps(_norm_lower_bound(grad2))
 
                 Ql -= step1 * grad1 @ Ql
                 Qr -= step2 * grad2 @ Qr
@@ -492,11 +476,11 @@ def _update_precond_affine_math_(key, Ql, Qr, dX, dG, precond_lr, precision):
                 grad2 = AAc - BBc
 
                 if step_normalizer == "2nd":
-                    step1 = precond_lr / add_eps(_norm_lower_bound(AAh + BhB))
-                    step2 = precond_lr / add_eps(jnp.max(jnp.real(AAc + BBc)))
+                    step1 = precond_lr / _add_eps(_norm_lower_bound(AAh + BhB))
+                    step2 = precond_lr / _add_eps(jnp.max(jnp.real(AAc + BBc)))
                 else:
-                    step1 = precond_lr / add_eps(_norm_lower_bound(grad1))
-                    step2 = precond_lr / add_eps(jnp.max(jnp.abs(grad2)))
+                    step1 = precond_lr / _add_eps(_norm_lower_bound(grad1))
+                    step2 = precond_lr / _add_eps(jnp.max(jnp.abs(grad2)))
 
                 Ql -= step1 * grad1 @ Ql
                 Qr -= step2 * grad2 * Qr
@@ -515,11 +499,11 @@ def _update_precond_affine_math_(key, Ql, Qr, dX, dG, precond_lr, precision):
                 grad2 = jnp.triu(AhA - BBh)
 
                 if step_normalizer == "2nd":
-                    step1 = precond_lr / add_eps(jnp.max(jnp.real(AAc + BBc)))
-                    step2 = precond_lr / add_eps(_norm_lower_bound(AhA + BBh))
+                    step1 = precond_lr / _add_eps(jnp.max(jnp.real(AAc + BBc)))
+                    step2 = precond_lr / _add_eps(_norm_lower_bound(AhA + BBh))
                 else:
-                    step1 = precond_lr / add_eps(jnp.max(jnp.abs(grad1)))
-                    step2 = precond_lr / add_eps(_norm_lower_bound(grad2))
+                    step1 = precond_lr / _add_eps(jnp.max(jnp.abs(grad1)))
+                    step2 = precond_lr / _add_eps(_norm_lower_bound(grad2))
 
                 Ql -= step1 * grad1 * Ql
                 Qr -= step2 * grad2 @ Qr
@@ -537,57 +521,34 @@ def _update_precond_affine_math_(key, Ql, Qr, dX, dG, precond_lr, precision):
                 grad2 = AAc2 - BBc2
 
                 if step_normalizer == "2nd":
-                    step1 = precond_lr / add_eps(jnp.max(jnp.real(AAc1 + BBc1)))
-                    step2 = precond_lr / add_eps(jnp.max(jnp.real(AAc2 + BBc2)))
+                    step1 = precond_lr / _add_eps(jnp.max(jnp.real(AAc1 + BBc1)))
+                    step2 = precond_lr / _add_eps(jnp.max(jnp.real(AAc2 + BBc2)))
                 else:
-                    step1 = precond_lr / add_eps(jnp.max(jnp.abs(grad1)))
-                    step2 = precond_lr / add_eps(jnp.max(jnp.abs(grad2)))
+                    step1 = precond_lr / _add_eps(jnp.max(jnp.abs(grad1)))
+                    step2 = precond_lr / _add_eps(jnp.max(jnp.abs(grad2)))
 
                 Ql -= step1 * grad1 * Ql
                 Qr -= step2 * grad2 * Qr
 
-        def _balance(Ql, Qr):
+        def _balance():
             max_l = jnp.max(jnp.abs(Ql))
             max_r = jnp.max(jnp.abs(Qr))
 
             rho = jnp.sqrt(max_l / max_r)
-            Ql /= rho
-            Qr *= rho
-            return Ql, Qr
+            new_Ql = Ql / rho
+            new_Qr = Qr * rho
+            return new_Ql, new_Qr
 
         key, subkey = jax.random.split(key)
-        Ql, Qr = jax.lax.cond(
-            jax.random.uniform(subkey) < 0.01, _balance, lambda ql, qr: (ql, qr), Ql, Qr
-        )
+        Ql, Qr = _efficient_cond(jax.random.uniform(subkey) < 0.01, _balance, (Ql, Qr))
 
         return [Ql, Qr]
 
 
-def _update_precond_affine_dropv_math(
-    key, Ql, Qr, dG, precond_lr, precision, precond_sharding
-):
+def _update_precond_affine_dropv_math(key, Ql, Qr, dG, precond_lr, precision):
     step_normalizer = "2nd"
+
     with jax.default_matmul_precision(precision):
-
-        def balance(key, Ql, Qr):
-            def _balance(Ql, Qr):
-                max_l = jnp.max(jnp.abs(Ql))
-                max_r = jnp.max(jnp.abs(Qr))
-
-                rho = jnp.sqrt(max_l / max_r)
-                Ql /= rho
-                Qr *= rho
-                return Ql, Qr
-
-            Ql, Qr = jax.lax.cond(
-                jax.random.uniform(key) < 0.01,
-                _balance,
-                lambda ql, qr: (ql, qr),
-                Ql,
-                Qr,
-            )
-            return Ql, Qr
-
         if Ql.ndim == 1 and Qr.ndim == 1:
             # drop v when both dims use diagonal preconditioners
             A = Ql[:, None] * dG * Qr.conj()
@@ -599,18 +560,14 @@ def _update_precond_affine_dropv_math(
             grad2 = AAc2 - BBc2
 
             if step_normalizer == "2nd":
-                step1 = precond_lr / add_eps(jnp.max(jnp.real(AAc1 + BBc1)))
-                step2 = precond_lr / add_eps(jnp.max(jnp.real(AAc2 + BBc2)))
+                step1 = precond_lr / _add_eps(jnp.max(jnp.real(AAc1 + BBc1)))
+                step2 = precond_lr / _add_eps(jnp.max(jnp.real(AAc2 + BBc2)))
             else:
-                step1 = precond_lr / add_eps(jnp.max(jnp.abs(grad1)))
-                step2 = precond_lr / add_eps(jnp.max(jnp.abs(grad2)))
+                step1 = precond_lr / _add_eps(jnp.max(jnp.abs(grad1)))
+                step2 = precond_lr / _add_eps(jnp.max(jnp.abs(grad2)))
 
             Ql = Ql - step1 * grad1 * Ql
             Qr = Qr - step2 * grad2 * Qr
-
-            key, subkey = jax.random.split(key)
-            Ql, Qr = balance(subkey, Ql, Qr)
-
         elif Ql.ndim == 1 and Qr.ndim == 2 and Ql.shape[0] >= Qr.shape[0]:
             # drop v when left is diagonal, right is dense, and gradient is a tall matrix
             A = (Ql[:, None] * dG) @ Qr.conj().T
@@ -626,18 +583,14 @@ def _update_precond_affine_dropv_math(
             grad2 = jnp.triu(AhA - BBh)
 
             if step_normalizer == "2nd":
-                step1 = precond_lr / add_eps(jnp.max(jnp.real(AAc + BBc)))
-                step2 = precond_lr / add_eps(_norm_lower_bound(AhA + BBh))
+                step1 = precond_lr / _add_eps(jnp.max(jnp.real(AAc + BBc)))
+                step2 = precond_lr / _add_eps(_norm_lower_bound(AhA + BBh))
             else:
-                step1 = precond_lr / add_eps(jnp.max(jnp.abs(grad1)))
-                step2 = precond_lr / add_eps(_norm_lower_bound(grad2))
+                step1 = precond_lr / _add_eps(jnp.max(jnp.abs(grad1)))
+                step2 = precond_lr / _add_eps(_norm_lower_bound(grad2))
 
             Ql -= step1 * grad1 * Ql
             Qr -= step2 * grad2 @ Qr
-
-            key, subkey = jax.random.split(key)
-            Ql, Qr = balance(subkey, Ql, Qr)
-
         elif Qr.ndim == 1 and Ql.ndim == 2 and Qr.shape[0] >= Ql.shape[0]:
             # drop v when right is diagonal, left is dense, and gradient is a short matrix
             A = Ql @ (dG * Qr.conj())
@@ -653,31 +606,38 @@ def _update_precond_affine_dropv_math(
             grad2 = AAc - BBc
 
             if step_normalizer == "2nd":
-                step1 = precond_lr / add_eps(_norm_lower_bound(AAh + BhB))
-                step2 = precond_lr / add_eps(jnp.max(jnp.real(AAc + BBc)))
+                step1 = precond_lr / _add_eps(_norm_lower_bound(AAh + BhB))
+                step2 = precond_lr / _add_eps(jnp.max(jnp.real(AAc + BBc)))
             else:
-                step1 = precond_lr / add_eps(_norm_lower_bound(grad1))
-                step2 = precond_lr / add_eps(jnp.max(jnp.abs(grad2)))
+                step1 = precond_lr / _add_eps(_norm_lower_bound(grad1))
+                step2 = precond_lr / _add_eps(jnp.max(jnp.abs(grad2)))
 
             Ql -= step1 * grad1 @ Ql
             Qr -= step2 * grad2 * Qr
-
-            key, subkey = jax.random.split(key)
-            Ql, Qr = balance(subkey, Ql, Qr)
-
         else:
             # keeping v as an auxiliary variable could save computations (tradeoff of performance, similar to Hutchinson’s trick) when
             #   1) gradient is a tall matrix, but left side is a dense preconditioner, right side is diagonal
             #   2) gradient is a short matrix, but left side is a diagonal preconditioner, right side is dense
             #   3) both sides use dense preconditioner, but gradient is skewed (no saving for square shape gradient)
             key, subkey = jax.random.split(key)
+            # JAX does an ok job at sharding this so let's leave alone for now
             v = jax.random.normal(subkey, dG.shape, dtype=dG.dtype)
-            if precond_sharding is not None:
-                v = jax.lax.with_sharding_constraint(v, precond_sharding)
             key, subkey = jax.random.split(key)
             return _update_precond_affine_math_(
                 subkey, Ql, Qr, v, dG, precond_lr, precision
             )
+
+        def _balance():
+            max_l = jnp.max(jnp.abs(Ql))
+            max_r = jnp.max(jnp.abs(Qr))
+
+            rho = jnp.sqrt(max_l / max_r)
+            new_Ql = Ql / rho
+            new_Qr = Qr * rho
+            return new_Ql, new_Qr
+
+        key, subkey = jax.random.split(key)
+        Ql, Qr = _efficient_cond(jax.random.uniform(subkey) < 0.01, _balance, (Ql, Qr))
 
         return [Ql, Qr]
 
@@ -695,3 +655,93 @@ def _precond_grad_affine_math(Ql, Qr, grad):
             )
         else:  # Ql.ndim=1 and Qr.ndim=1:
             return (Ql * Ql.conj())[:, None] * grad * (Qr * Qr.conj())
+
+
+def _sort_and_group_matrices(matrix_shapes: List[Tuple[int, ...]]):
+    """Sorts and groups matrices by shape."""
+    indexed_list = list(enumerate(matrix_shapes))
+    sorted_indexed = sorted(indexed_list, key=lambda x: x[1])
+
+    sorted_shapes = [shape for _, shape in sorted_indexed]
+    change_indices = [original_index for original_index, _ in sorted_indexed]
+    revert_indices = [0] * len(matrix_shapes)
+    for new_pos, (original_index, _) in enumerate(sorted_indexed):
+        revert_indices[original_index] = new_pos
+
+    shape_groups = defaultdict(list)
+    for i, shape in enumerate(sorted_shapes):
+        shape_groups[shape].append(i)
+
+    unique_sorted_shapes = list(shape_groups.keys())
+
+    return unique_sorted_shapes, dict(shape_groups), change_indices, revert_indices
+
+
+def _stack_matrices(gs: List[jnp.ndarray], Qs: List[Tuple[jnp.ndarray, jnp.ndarray]]):
+    """Sorts and stacks grads and preconditioners for scan."""
+    shapes = [g.shape for g in gs]
+
+    unique_shapes, shape_groups, change_indices, revert_indices = (
+        _sort_and_group_matrices(shapes)
+    )
+
+    sorted_gs = [gs[i] for i in change_indices]
+    sorted_Qs = [Qs[i] for i in change_indices]
+
+    stacked_gs = []
+    stacked_Qs = []
+
+    for shape in unique_shapes:
+        indices = shape_groups[shape]
+        stacked_g = jnp.stack([sorted_gs[i] for i in indices])
+        stacked_gs.append(stacked_g)
+        stacked_Q = [
+            jnp.stack([sorted_Qs[i][0] for i in indices]),
+            jnp.stack([sorted_Qs[i][1] for i in indices]),
+        ]
+        stacked_Qs.append(stacked_Q)
+
+    return stacked_gs, stacked_Qs, revert_indices
+
+
+def _unstack_matrices(
+    stacked_gs: List[jnp.ndarray],
+    stacked_Qs: List[Tuple[jnp.ndarray, jnp.ndarray]],
+    revert_indices: List[int],
+):
+    """Unstacks and reverts matrices to their original order."""
+    unstacked_gs = []
+    unstacked_Qs = []
+
+    for g, Q in zip(stacked_gs, stacked_Qs):
+        unstacked_gs.extend(jnp.split(g, g.shape[0]))
+        unstacked_Qs.extend(
+            zip(jnp.split(Q[0], Q[0].shape[0]), jnp.split(Q[1], Q[1].shape[0]))
+        )
+
+    gs = [jnp.squeeze(unstacked_gs[i], axis=0) for i in revert_indices]
+    Qs = [
+        [jnp.squeeze(q[0], axis=0), jnp.squeeze(q[1], axis=0)]
+        for q in [unstacked_Qs[i] for i in revert_indices]
+    ]
+
+    return gs, Qs
+
+
+def _efficient_cond(
+    predicate: bool, compute_fn: Callable, init_state: Any, *args, **kwargs
+) -> Tuple:
+    """Avoids wasteful buffer allocation with XLA.
+
+    Useful when the False branch of the cond is only a pass-through. `init_state`
+    must be same structure as the output of `compute_fn`."""
+
+    def _iter_body(_):
+        return (False, compute_fn(*args, **kwargs))
+
+    def _iter_condition(state):
+        return state[0]
+
+    results = jax.lax.while_loop(_iter_condition, _iter_body, (predicate, init_state))
+
+    return results[1]

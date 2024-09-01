@@ -16,7 +16,7 @@ from jax.sharding import Mesh, PartitionSpec as P, NamedSharding
 import flax
 import flax.linen as nn
 from flax.training import checkpoints
-from flax.training.train_state import TrainState
+from flax.training.train_state import TrainState as ts
 import optax
 import optax.tree_utils as otu
 import tensorflow as tf
@@ -27,7 +27,6 @@ from configs import TrainConfig
 from optimizers.psgd_affine import affine, _shape_as_matrix
 from optimizers.tearfree import optimizer as tearfree_opt
 from optimizers.tearfree import shampoo, second_order
-from optimizers.utils import hessian_helper, norm_grad
 from sharding import infer_sharding, fsdp_sharding
 from utils import check_dtypes, reshard, write_note
 
@@ -46,12 +45,13 @@ jax.config.update("jax_transfer_guard", "disallow")
 jax.config.update("jax_threefry_partitionable", True)
 
 
+class TrainState(ts):
+    fw_shard_n: int = 0
+    fw_dataset_step: int = 0
+
+
 def train_step(
-    state: TrainState,
-    tokens: jnp.ndarray,
-    rng_key,
-    compute_hessian: bool = False,
-    params_sharding: Any = None,
+    state: TrainState, tokens: jnp.ndarray, rng_key, params_sharding: Any = None
 ) -> Tuple[jnp.ndarray, jnp.ndarray, TrainState, jnp.ndarray]:
 
     rng_key = jax.random.fold_in(rng_key, state.step)  # same key each grad accum step
@@ -76,32 +76,8 @@ def train_step(
 
     before_dtypes = jax.tree.map(lambda x: x.dtype, state)
 
-    if compute_hessian:
-        update_prob_schedule = lambda n: jnp.maximum(0.5 * jnp.exp(-0.002 * n), 0.01)
-        (loss, acc), grads, hvp, vector, update_precond = hessian_helper(
-            jax.random.split(rng_key, 1)[0],
-            state.step,
-            loss_fn=loss_fn,
-            params=state.params,
-            has_aux=True,
-            preconditioner_update_probability=update_prob_schedule(state.step),
-            params_sharding=params_sharding,
-        )
-        updates, new_opt_state = state.tx.update(
-            grads,
-            state.opt_state,
-            state.params,
-            Hvp=hvp,
-            vector=vector,
-            update_preconditioner=update_precond,
-        )
-        new_params = optax.apply_updates(state.params, updates)
-        new_state = state.replace(
-            step=state.step + 1, params=new_params, opt_state=new_opt_state
-        )
-    else:
-        (loss, acc), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
-        new_state = state.apply_gradients(grads=grads)
+    (loss, acc), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
+    new_state = state.apply_gradients(grads=grads)
 
     check_dtypes(before_dtypes, jax.tree.map(lambda x: x.dtype, new_state))
 
@@ -211,9 +187,7 @@ def main(config: TrainConfig):
             return out
 
         optimizer = []
-        if config.optimizer.norm_grads:
-            optimizer.append(norm_grad())
-        elif config.optimizer.grad_clip > 0.0:
+        if config.optimizer.grad_clip > 0.0:
             optimizer.append(optax.clip_by_global_norm(config.optimizer.grad_clip))
 
         # decays to 0.01 at around 2000 steps
@@ -229,7 +203,7 @@ def main(config: TrainConfig):
                     mu_dtype=jnp.bfloat16,
                 )
             )
-        elif config.optimizer.type in ["psgd_affine", "affine"]:
+        elif config.optimizer.type in ["psgd", "psgd_affine", "affine"]:
             optimizer.append(
                 affine(
                     lr_schedule,
@@ -246,6 +220,7 @@ def main(config: TrainConfig):
                     precond_dtype=config.optimizer.preconditioner_dtype,
                     precision="bfloat16",
                     reshaped_params_sharding=reshaped_params_sharding,
+                    best_effort_scan=True,
                 )
             )
         elif config.optimizer.type == "shampoo":
@@ -327,6 +302,18 @@ def main(config: TrainConfig):
     op = fsdp_sharding("fsdp", min_size_to_shard_mb=config.min_size_to_shard_mb)
     train_state_sharding = infer_sharding(params=train_state_shapes, mesh=mesh, op=op)
 
+    if config.only_print_model:
+        print("TRAIN STATE SHAPES:")
+        pprint(
+            jax.tree.map(lambda x: (x.shape, x.dtype), train_state_shapes),
+            indent=2,
+            width=120,
+            compact=True,
+        )
+        print("TRAIN STATE SHARDING:")
+        pprint(train_state_sharding, indent=2, width=120)
+        raise KeyboardInterrupt("Only printing model")
+
     rng, rng_init = jax.random.split(rng, 2)
     rng_init = reshard(rng_init, repl_sharding)
 
@@ -343,21 +330,24 @@ def main(config: TrainConfig):
         train_state.params
     )
 
-    # PSGD affine internal with_sharding_constraint stuff
+    # PSGD reshapes params into matrices. Here we get sharding rules for them
+    # similarly to how we shard params. We can pass this into PSGD for internal
+    # sharding constraints, although it's not absolutely necessary.
     def get_reshaped_params_sharding(params):
-        """Follows PSGD affine matrix reshaping and applies sharding strategy."""
-        # returns tuples if (reshape_fn, unreshape_fn, shape)
-        affine_reshapers = [_shape_as_matrix(x) for x in jax.tree.leaves(params)]
-        # grab preconditioner shapes and make jax.ShapeDtypeStructs
-        precond_shapes = [
+        # returns tuples of (reshape_fn, unreshape_fn, shape)
+        affine_reshapers = jax.tree.map(_shape_as_matrix, params)
+        p_struct = jax.tree.structure(params)
+        affine_reshapers = p_struct.flatten_up_to(affine_reshapers)
+        matrix_shapes = [
             jax.ShapeDtypeStruct(r[2], jnp.float32) for r in affine_reshapers
         ]
-        # apply sharding strategy
-        return infer_sharding(params=precond_shapes, mesh=mesh, op=op)
+        matrix_shapes = p_struct.unflatten(matrix_shapes)
+        return infer_sharding(params=matrix_shapes, mesh=mesh, op=op)
 
     reshaped_params_sharding = get_reshaped_params_sharding(train_state.params)
 
-    # remake optimizer with PSGD sharding passed in
+    # remake optimizer with reshaped params sharding passed in
+    # again, not strictly necessary, but could ensure things stay well-sharded
     optimizer = make_opt(reshaped_params_sharding=reshaped_params_sharding)
 
     # finish making train state (pass in optimizer and opt_state)
@@ -398,14 +388,14 @@ def main(config: TrainConfig):
     step = jax.device_get(train_state.step).item()
     write_note(f"starting training at step {step}")
     # calculate dataset start index
-    dataset_start = step * config.optimizer.gradient_accumulation_steps
+    dataset_start = (
+        step * config.optimizer.gradient_accumulation_steps * config.batch_size
+    )
 
     # ====== jit functions ========
     # we specify in_shardings for sake of clarity, but they are inferred
     train_step_w_sharding = partial(
-        train_step,
-        compute_hessian=config.optimizer.psgd_use_hessian,
-        params_sharding=train_state_sharding.params,
+        train_step, params_sharding=train_state_sharding.params
     )
     train_step_jit = jax.jit(
         train_step_w_sharding,
