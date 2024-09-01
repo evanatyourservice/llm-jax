@@ -22,7 +22,7 @@ import optax.tree_utils as otu
 import tensorflow as tf
 import easydel as ed
 
-from dataset import prepare_hellaswag, smollm_corpus_dataset
+from dataset import prepare_hellaswag, fineweb_edu_dataset
 from configs import TrainConfig
 from optimizers.psgd_affine import affine, _shape_as_matrix
 from optimizers.tearfree import optimizer as tearfree_opt
@@ -452,7 +452,7 @@ def main(config: TrainConfig):
         streaming = False
 
     make_train_ds = partial(
-        smollm_corpus_dataset,
+        fineweb_edu_dataset,
         tokenizer_name=tokenizer_name,
         batch_size=config.batch_size,
         block_size=block_size,
@@ -462,11 +462,11 @@ def main(config: TrainConfig):
         streaming=streaming,
     )
 
+    # get current shard idx and dataset step from train state
     current_shard_idx = jax.device_get(train_state.shard_idx)
-    # dataset step * process batch size
     current_dataset_step = jax.device_get(train_state.dataset_step) * (
         config.batch_size // jax.process_count()
-    )
+    )  # dataset step * process batch size
     train_ds = make_train_ds(
         shard_idx=current_shard_idx, start_index=current_dataset_step
     )

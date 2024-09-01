@@ -98,7 +98,7 @@ def prepare_hellaswag(
     return ds, ds_length
 
 
-def smollm_corpus_dataset(
+def fineweb_edu_dataset(
     tokenizer_name: str,
     batch_size: int,
     block_size: int,
@@ -109,17 +109,10 @@ def smollm_corpus_dataset(
     shard_idx: int = 0,
     start_index: int = 0,
 ):
-    """
-    Load the smollm corpus dataset.
+    """Load the fineweb-edu dataset.
 
     For now we load in a weird way to save memory and from having to
     use a bucket... not ideal.
-
-    fineweb edu deduplicated file structure:
-    `fineweb-edu-dedup/train-00000-of-00234.parquet`
-
-    cosmopedia v2 file structure:
-    `cosmopedia-v2/train-00000-of-00104.parquet`
     """
     seq_len = block_size + 1
 
@@ -131,12 +124,11 @@ def smollm_corpus_dataset(
         cache_dir = None
 
     if streaming:
-        write_note("streaming smollm-corpus fineweb-edu-dedup")
+        write_note("streaming fineweb-edu")
 
         def gen():
             hf_ds = load_dataset(
-                "HuggingFaceTB/smollm-corpus",
-                "fineweb-edu-dedup",
+                "HuggingFaceFW/fineweb-edu",
                 split="train",
                 cache_dir=cache_dir,
                 streaming=True,
@@ -183,69 +175,31 @@ def smollm_corpus_dataset(
         return ds
 
     else:
-        write_note("loading smollm-corpus")
+        write_note("loading fineweb-edu")
 
-        fineweb_files_list = [
-            f"fineweb-edu-dedup/train-{i:05d}-of-00234.parquet" for i in range(234)
-        ]
-        cosmo_files_list = [
-            f"cosmopedia-v2/train-{i:05d}-of-00104.parquet" for i in range(104)
-        ]
+        fineweb_files_list = _fw_shard_names
         rng = np.random.RandomState(100)
         rng.shuffle(fineweb_files_list)
-        rng.shuffle(cosmo_files_list)
 
         n_procs = jax.process_count()
         curr_proc = jax.process_index()
 
-        n_cosmo = n_procs // 4
-        n_fineweb = n_procs - n_cosmo
+        # split into n_procs shards
+        fineweb_shards = [
+            fineweb_files_list[curr_proc::n_procs] for _ in range(n_procs)
+        ]
 
-        fineweb_shards = [fineweb_files_list[i::n_fineweb] for i in range(n_fineweb)]
-        cosmo_shards = [cosmo_files_list[i::n_cosmo] for i in range(n_cosmo)]
+        # grab current shard and subshard using shard_idx
+        proc_shard = fineweb_shards[curr_proc]
+        proc_subshard = proc_shard[shard_idx % len(proc_shard)]
 
-        def chunks(L, n):
-            for i in range(0, len(L), n):
-                yield L[i : i + n]
-
-        # join the lists with every fourth shard being cosmopedia
-        if n_procs > 3:
-            zipper = zip(chunks(fineweb_shards, 3), cosmo_shards)
-            shards = list(chain.from_iterable((*x, y) for x, y in zipper))
-        else:
-            shards = fineweb_shards
-        assert len(shards) == n_procs
-
-        proc_shard = shards[curr_proc]
-        is_cosmo_shard = curr_proc + 1 % 4 == 0
-
-        if is_cosmo_shard:
-            max_files_per_subshard = 20
-        else:  # fineweb
-            max_files_per_subshard = 10
-
-        # grab current subshard using shard_idx
-        n_shard_files = len(proc_shard)
-        n_subshards = n_shard_files // max_files_per_subshard
-        temp_shard_idx = shard_idx % n_subshards
-        start_idx = temp_shard_idx * max_files_per_subshard
-        end_idx = (
-            start_idx + max_files_per_subshard
-            if temp_shard_idx < n_subshards - 1
-            else n_shard_files
-        )
-        proc_subshard = proc_shard[start_idx:end_idx]
-
-        print(
-            f"process {curr_proc} data files ({len(proc_subshard)} files): "
-            f"{proc_subshard}"
-        )
+        print(f"process {curr_proc} shard {proc_shard}")
+        print(f"process {curr_proc} subshard {proc_subshard}")
 
         hf_ds: Dataset = load_dataset(
-            "HuggingFaceTB/smollm-corpus",
-            "cosmopedia-v2" if is_cosmo_shard else "fineweb-edu-dedup",
+            "HuggingFaceFW/fineweb-edu",
+            name=proc_subshard,
             split="train",
-            data_files={"train": proc_subshard},
             cache_dir=cache_dir,
         )
 
@@ -282,3 +236,104 @@ def smollm_corpus_dataset(
         if device_prefetch > 0:
             ds = prefetch_iterator(ds, device_prefetch)
         return ds
+
+
+# fineweb-edu has 96 shards
+_fw_shard_names = [
+    "CC-MAIN-2024-10",
+    "CC-MAIN-2023-50",
+    "CC-MAIN-2023-40",
+    "CC-MAIN-2023-23",
+    "CC-MAIN-2023-14",
+    "CC-MAIN-2023-06",
+    "CC-MAIN-2022-49",
+    "CC-MAIN-2022-40",
+    "CC-MAIN-2022-33",
+    "CC-MAIN-2022-27",
+    "CC-MAIN-2022-21",
+    "CC-MAIN-2022-05",
+    "CC-MAIN-2021-49",
+    "CC-MAIN-2021-43",
+    "CC-MAIN-2021-39",
+    "CC-MAIN-2021-31",
+    "CC-MAIN-2021-25",
+    "CC-MAIN-2021-21",
+    "CC-MAIN-2021-17",
+    "CC-MAIN-2021-13",
+    "CC-MAIN-2021-09",
+    "CC-MAIN-2021-04",
+    "CC-MAIN-2020-50",
+    "CC-MAIN-2020-45",
+    "CC-MAIN-2020-40",
+    "CC-MAIN-2020-34",
+    "CC-MAIN-2020-29",
+    "CC-MAIN-2020-24",
+    "CC-MAIN-2020-16",
+    "CC-MAIN-2020-10",
+    "CC-MAIN-2019-51",
+    "CC-MAIN-2019-47",
+    "CC-MAIN-2019-43",
+    "CC-MAIN-2019-39",
+    "CC-MAIN-2019-35",
+    "CC-MAIN-2019-30",
+    "CC-MAIN-2019-26",
+    "CC-MAIN-2019-22",
+    "CC-MAIN-2019-18",
+    "CC-MAIN-2019-13",
+    "CC-MAIN-2019-09",
+    "CC-MAIN-2019-04",
+    "CC-MAIN-2018-51",
+    "CC-MAIN-2018-47",
+    "CC-MAIN-2018-43",
+    "CC-MAIN-2018-39",
+    "CC-MAIN-2018-34",
+    "CC-MAIN-2018-30",
+    "CC-MAIN-2018-26",
+    "CC-MAIN-2018-22",
+    "CC-MAIN-2018-17",
+    "CC-MAIN-2018-13",
+    "CC-MAIN-2018-09",
+    "CC-MAIN-2018-05",
+    "CC-MAIN-2017-51",
+    "CC-MAIN-2017-47",
+    "CC-MAIN-2017-43",
+    "CC-MAIN-2017-39",
+    "CC-MAIN-2017-34",
+    "CC-MAIN-2017-30",
+    "CC-MAIN-2017-26",
+    "CC-MAIN-2017-22",
+    "CC-MAIN-2017-17",
+    "CC-MAIN-2017-13",
+    "CC-MAIN-2017-09",
+    "CC-MAIN-2017-04",
+    "CC-MAIN-2016-50",
+    "CC-MAIN-2016-44",
+    "CC-MAIN-2016-40",
+    "CC-MAIN-2016-36",
+    "CC-MAIN-2016-30",
+    "CC-MAIN-2016-26",
+    "CC-MAIN-2016-22",
+    "CC-MAIN-2016-18",
+    "CC-MAIN-2016-10",
+    "CC-MAIN-2016-07",
+    "CC-MAIN-2015-48",
+    "CC-MAIN-2015-40",
+    "CC-MAIN-2015-35",
+    "CC-MAIN-2015-32",
+    "CC-MAIN-2015-27",
+    "CC-MAIN-2015-22",
+    "CC-MAIN-2015-18",
+    "CC-MAIN-2015-14",
+    "CC-MAIN-2015-11",
+    "CC-MAIN-2015-06",
+    "CC-MAIN-2014-52",
+    "CC-MAIN-2014-49",
+    "CC-MAIN-2014-42",
+    "CC-MAIN-2014-41",
+    "CC-MAIN-2014-35",
+    "CC-MAIN-2014-23",
+    "CC-MAIN-2014-15",
+    "CC-MAIN-2014-10",
+    "CC-MAIN-2013-48",
+    "CC-MAIN-2013-20",
+]
