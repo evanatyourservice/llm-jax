@@ -143,7 +143,7 @@ def smollm_corpus_dataset(
             )
 
             tokenizer = AutoTokenizer.from_pretrained(
-                tokenizer_name, trust_remote_code=True
+                tokenizer_name, trust_remote_code=True, use_fast=True
             )
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
@@ -191,9 +191,9 @@ def smollm_corpus_dataset(
         cosmo_files_list = [
             f"cosmopedia-v2/train-{i:05d}-of-00104.parquet" for i in range(104)
         ]
-        # randomize, should stay consistent because we set random seed in train.py
-        np.random.shuffle(fineweb_files_list)
-        np.random.shuffle(cosmo_files_list)
+        rng = np.random.RandomState(100)
+        rng.shuffle(fineweb_files_list)
+        rng.shuffle(cosmo_files_list)
 
         n_procs = jax.process_count()
         curr_proc = jax.process_index()
