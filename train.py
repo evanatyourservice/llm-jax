@@ -495,9 +495,10 @@ def main(config: TrainConfig):
                 tokens = next(train_ds)
             except StopIteration:
                 print(
-                    f"current dataset shard exhausted on process "
-                    f"{jax.process_index()}, loading next shard"
+                    f"current dataset subshard exhausted on process "
+                    f"{jax.process_index()}, loading next subshard"
                 )
+
                 # delete huggingface datasets cache to save space
                 if platform == "tpu":
                     hf_cache_dir = "/dev/shm/huggingface_cache"
@@ -505,14 +506,19 @@ def main(config: TrainConfig):
                     hf_cache_dir = os.path.expanduser("~/.cache/huggingface/datasets")
                 if os.path.exists(hf_cache_dir):
                     print(f"removing {hf_cache_dir} to save space")
-                    shutil.rmtree(hf_cache_dir)
-                # start next shard
+                    try:
+                        shutil.rmtree(hf_cache_dir)
+                    except Exception as e:
+                        print(f"Error removing {hf_cache_dir}: {e}")
+
+                # start next subshard
                 train_ds = make_train_ds(
                     shard_idx=train_state.shard_idx + 1, start_index=0
                 )
+
                 # advance shard idx and zero dataset step
                 train_state = advance_shard_idx_and_zero_dataset_step(train_state)
-                # continue training
+
                 tokens = next(train_ds)
 
             loss, acc, train_state, g_norm = train_step_jit(train_state, tokens, rng)

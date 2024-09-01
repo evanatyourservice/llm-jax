@@ -219,20 +219,33 @@ def smollm_corpus_dataset(
         proc_shard = shards[curr_proc]
         is_cosmo_shard = curr_proc + 1 % 4 == 0
 
-        if is_cosmo_shard and len(proc_shard) > 62:
-            # max 62 files per process
-            proc_shard = proc_shard[:62]
-        elif not is_cosmo_shard and len(proc_shard) > 31:
-            # max 31 files per process
-            proc_shard = proc_shard[:31]
+        if is_cosmo_shard:
+            max_files_per_subshard = 20
+        else:  # fineweb
+            max_files_per_subshard = 10
 
-        print(f"process {curr_proc} data files ({len(proc_shard)} files): {proc_shard}")
+        # grab current subshard using shard_idx
+        n_shard_files = len(proc_shard)
+        n_subshards = n_shard_files // max_files_per_subshard
+        temp_shard_idx = shard_idx % n_subshards
+        start_idx = temp_shard_idx * max_files_per_subshard
+        end_idx = (
+            start_idx + max_files_per_subshard
+            if temp_shard_idx < n_subshards - 1
+            else n_shard_files
+        )
+        proc_subshard = proc_shard[start_idx:end_idx]
+
+        print(
+            f"process {curr_proc} data files ({len(proc_subshard)} files): "
+            f"{proc_subshard}"
+        )
 
         hf_ds: Dataset = load_dataset(
             "HuggingFaceTB/smollm-corpus",
             "cosmopedia-v2" if is_cosmo_shard else "fineweb-edu-dedup",
             split="train",
-            data_files=proc_shard,
+            data_files=proc_subshard,
             cache_dir=cache_dir,
         )
 
