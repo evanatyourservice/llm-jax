@@ -245,7 +245,7 @@ def smollm_corpus_dataset(
             "HuggingFaceTB/smollm-corpus",
             "cosmopedia-v2" if is_cosmo_shard else "fineweb-edu-dedup",
             split="train",
-            data_files=proc_subshard,
+            data_files={"train": proc_subshard},
             cache_dir=cache_dir,
         )
 
