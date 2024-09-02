@@ -585,12 +585,13 @@ def main(config: TrainConfig):
             and step % config.checkpoint_interval == 0
             and config.keep_checkpoints > 0
             and step > 0
+            and jax.process_index() == 0
         ):
-            gathered_train_state = gather_train_state(train_state)
-            if jax.process_index() == 0:
+            gathered_train_state = jax.device_get(gather_train_state(train_state))
+            with jax.default_device(jax.devices("cpu")[0]):
                 checkpoints.save_checkpoint(
                     f"{config.out_dir}/checkpoints/train_state",
-                    jax.device_get(gathered_train_state),
+                    gathered_train_state,
                     step,
                     keep=config.keep_checkpoints,
                     overwrite=True,
