@@ -25,7 +25,7 @@ python3 train.py \
     --batch_size=1024 \
     --optimizer.gradient_accumulation_steps=1 \
     --compute_dtype=bfloat16 \
-    --params_dtype=bfloat16 \
+    --params_dtype=float32 \
     --optimizer.type=psgd_affine \
     --optimizer.learning_rate=0.005 \
     --optimizer.warmup_steps=1000 \
@@ -35,6 +35,6 @@ python3 train.py \
     --optimizer.max_size_triangular=16384 \
     --optimizer.max_skew_triangular=16 \
     --optimizer.precond_lr=0.1 \
-    --optimizer.precond_init_scale=1.0 \
-    --optimizer.preconditioner_dtype=bfloat16
+    --optimizer.precond_init_scale=0.1 \
+    --optimizer.preconditioner_dtype=float32
 "

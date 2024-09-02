@@ -158,7 +158,7 @@ def fineweb_edu_dataset(
             yield example["input_ids"]
 
     ds = tf.data.Dataset.from_generator(
-        gen, output_signature=tf.TensorSpec(shape=(seq_len,), dtype=tf.int32)
+        gen, output_signature=tf.TensorSpec(shape=(seq_len,), dtype=tf.uint16)
     )
     ds = ds.shuffle(10000)
     ds = ds.batch(

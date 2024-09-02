@@ -459,7 +459,7 @@ def main(config: TrainConfig):
         batch_size=config.batch_size,
         block_size=block_size,
         flat_devices=devices_flat,
-        tf_prefetch=10,
+        tf_prefetch=20,
         device_prefetch=device_prefetch,
     )
 
@@ -472,6 +472,7 @@ def main(config: TrainConfig):
         max(config.batch_size // 4, jax.device_count()),
         block_size,
         devices_flat,
+        tf_prefetch=5,
     )
 
     # ======= train ========
