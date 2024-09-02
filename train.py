@@ -538,7 +538,13 @@ def main(config: TrainConfig):
                 "train_acc": train_acc,
                 "grad_norm": grad_norm,
                 "lr": (
-                    jax.device_get(get_lr(jax.device_put(step, repl_sharding)))
+                    jax.device_get(
+                        get_lr(
+                            jax.make_array_from_single_device_arrays(
+                                [], repl_sharding, jnp.array(step)
+                            )
+                        )
+                    )
                     if callable(lr_schedule)
                     else lr_schedule
                 ),

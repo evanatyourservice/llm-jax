@@ -119,7 +119,7 @@ def scale_by_affine(
         if best_effort_scan:
             gs, Qs, revert_indices = _stack_matrices(gs, Qs)
 
-        map_batch_size = 2  # interpolates between scan and vmap, 1 being scan unroll=1
+        map_batch_size = 1  # interpolates between scan and vmap, 1 being scan unroll=1
 
         # update preconditioner
         key, subkey = jax.random.split(key)

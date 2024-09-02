@@ -28,5 +28,5 @@ wandb: !dataclass:WandbConfig
     mode: online
 model: !dataclass:ModelConfig
     huggingface_model_name: "gpt2"
-    use_scan_mlp: False
+    use_scan_mlp: True
     block_size: 1024
