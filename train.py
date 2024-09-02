@@ -153,12 +153,13 @@ def main(config: TrainConfig):
     block_size = config.model.block_size
     platform = jax.devices()[0].platform
 
-    checkpoint_manager_options = ocp.CheckpointManagerOptions(
-        max_to_keep=2, save_interval_steps=config.checkpoint_interval
-    )
-    checkpoint_manager = ocp.CheckpointManager(
-        config.out_dir, options=checkpoint_manager_options
-    )
+    if jax.process_index() == 0:
+        checkpoint_manager_options = ocp.CheckpointManagerOptions(
+            max_to_keep=2, save_interval_steps=config.checkpoint_interval
+        )
+        checkpoint_manager = ocp.CheckpointManager(
+            config.out_dir, options=checkpoint_manager_options
+        )
 
     # ====== create device mesh ======
     write_note("creating 1D FSDP mesh")
@@ -395,13 +396,14 @@ def main(config: TrainConfig):
             "If loading checkpoint is unintended, set "
             "`attempt_to_load_checkpoint=False`."
         )
-        abstract_train_state = jax.tree_util.tree_map(
-            ocp.utils.to_shape_dtype_struct, train_state
-        )
-        checkpoint_manager.restore(
-            checkpoint_manager.latest_step(),
-            args=ocp.args.StandardRestore(abstract_train_state),
-        )
+        if jax.process_index() == 0:
+            abstract_train_state = jax.tree_util.tree_map(
+                ocp.utils.to_shape_dtype_struct, train_state
+            )
+            checkpoint_manager.restore(
+                checkpoint_manager.latest_step(),
+                args=ocp.args.StandardRestore(abstract_train_state),
+            )
 
     # grab start step from loaded train state
     step = jax.device_get(train_state.step).item()
@@ -589,7 +591,8 @@ def main(config: TrainConfig):
             start_time = time.time()
 
         # checkpoint
-        checkpoint_manager.save(step, train_state)
+        if jax.process_index() == 0:
+            checkpoint_manager.save(step, train_state)
 
         # eval hellaswag
         if step % config.hellaswag_eval_interval == 0 and step > 0:
@@ -609,8 +612,9 @@ def main(config: TrainConfig):
 
             start_time = time.time()
 
-    wandb.finish()
-    checkpoint_manager.wait_until_finished()
+    if jax.process_index() == 0:
+        wandb.finish()
+        checkpoint_manager.wait_until_finished()
 
 
 if __name__ == "__main__":
