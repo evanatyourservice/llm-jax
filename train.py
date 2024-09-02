@@ -2,7 +2,7 @@ from functools import partial
 from pprint import pprint
 import shutil
 import time
-from typing import Tuple
+from typing import Callable, Tuple
 from dataclasses import asdict
 import os
 import random
@@ -15,6 +15,7 @@ import jax.numpy as jnp
 from jax.experimental import mesh_utils
 from jax.sharding import Mesh, PartitionSpec as P, NamedSharding
 import flax
+from flax import struct
 from flax.training import checkpoints
 from flax.training.train_state import TrainState as ts
 import optax
@@ -48,11 +49,12 @@ jax.config.update("jax_threefry_partitionable", True)
 class TrainState(ts):
     shard_idx: int = 0
     dataset_step: int = 0
+    lr_fn: Callable = struct.field(pytree_node=False)
 
 
 def train_step(
     state: TrainState, tokens: jnp.ndarray, rng_key
-) -> Tuple[jnp.ndarray, jnp.ndarray, TrainState, jnp.ndarray]:
+) -> Tuple[jnp.ndarray, jnp.ndarray, TrainState, jnp.ndarray, jnp.ndarray]:
 
     rng_key = jax.random.fold_in(rng_key, state.step)  # same key each grad accum step
 
@@ -83,8 +85,9 @@ def train_step(
     check_dtypes(before_dtypes, jax.tree.map(lambda x: x.dtype, new_state))
 
     grad_norm = optax.global_norm(grads)
+    lr = state.lr_fn(state.step)
 
-    return loss, acc, new_state, grad_norm
+    return loss, acc, new_state, grad_norm, lr
 
 
 def eval_step_unreduced(state: TrainState, tokens: jnp.ndarray) -> jnp.ndarray:
@@ -400,6 +403,7 @@ def main(config: TrainConfig):
             repl_sharding,
             train_state_sharding,
             repl_sharding,
+            repl_sharding,
         ),
     )
     eval_hellaswag_jit = jax.jit(
@@ -411,9 +415,6 @@ def main(config: TrainConfig):
             data_sharding,
         ),
         out_shardings=repl_sharding,
-    )
-    get_lr = jax.jit(
-        lr_schedule, in_shardings=repl_sharding, out_shardings=repl_sharding
     )
 
     @partial(
@@ -431,7 +432,6 @@ def main(config: TrainConfig):
         out_shardings=train_state_sharding,
     )
     def advance_shard_idx_and_zero_dataset_step(state):
-        """Used when current shard is exhausted and new one begins."""
         return state.replace(shard_idx=state.shard_idx + 1, dataset_step=0)
 
     # ===== datasets =====
@@ -508,7 +508,9 @@ def main(config: TrainConfig):
 
                 tokens = next(train_ds)
 
-            loss, acc, train_state, g_norm = train_step_jit(train_state, tokens, rng)
+            loss, acc, train_state, g_norm, lr = train_step_jit(
+                train_state, tokens, rng
+            )
             train_losses.append(jax.device_get(loss).item())
             train_accs.append(jax.device_get(acc).item())
             grad_norms.append(jax.device_get(g_norm).item())
@@ -537,19 +539,7 @@ def main(config: TrainConfig):
                 "train_loss": train_loss,
                 "train_acc": train_acc,
                 "grad_norm": grad_norm,
-                "lr": (
-                    jax.device_get(
-                        get_lr(
-                            jax.make_array_from_single_device_arrays(
-                                [],
-                                repl_sharding,
-                                jnp.array(step, device=jax.devices("cpu")[0]),
-                            )
-                        )
-                    ).item()
-                    if callable(lr_schedule)
-                    else lr_schedule
-                ),
+                "lr": jax.device_get(lr).item(),
                 "tokens": step * tokens_per_batch,
             }
 
