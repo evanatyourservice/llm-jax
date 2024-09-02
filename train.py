@@ -272,6 +272,7 @@ def main(config: TrainConfig):
         # override some settings
         model_config.use_cache = False
         model_config.use_scan_mlp = config.model.use_scan_mlp
+        model_config.scan_attention_layers = config.model.scan_attention_layers
         if hasattr(model_config, "scale_attn_by_inverse_layer_idx"):
             model_config.scale_attn_by_inverse_layer_idx = True
         if hasattr(model_config, "reorder_and_upcast_attn"):
