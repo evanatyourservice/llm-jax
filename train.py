@@ -297,7 +297,12 @@ def main(config: TrainConfig):
         # delay optimizer creation to pass in preconditioner sharding
         apply_fn = partial(model.__call__, return_dict=False)
         train_state = TrainState(
-            step=0, apply_fn=apply_fn, params=params, tx=None, opt_state=None
+            step=0,
+            apply_fn=apply_fn,
+            params=params,
+            tx=None,
+            opt_state=None,
+            lr_fn=lr_schedule,
         )
         return train_state
 
