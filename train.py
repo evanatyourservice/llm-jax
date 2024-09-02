@@ -134,7 +134,13 @@ def get_default_config() -> TrainConfig:
 
 
 def main(config: TrainConfig):
-    jax.distributed.initialize()
+    checkpoint_manager_options = ocp.CheckpointManagerOptions(
+        max_to_keep=2, save_interval_steps=config.checkpoint_interval
+    )
+    checkpoint_manager = ocp.CheckpointManager(
+        config.out_dir, options=checkpoint_manager_options
+    )
+    checkpoint_manager.restore(checkpoint_manager.latest_step())
 
     write_note(f"Number of JAX devices: {jax.device_count()}")
     write_note(f"Number of JAX processes: {jax.process_count()}")
@@ -154,14 +160,6 @@ def main(config: TrainConfig):
 
     block_size = config.model.block_size
     platform = jax.devices()[0].platform
-
-    checkpoint_manager_options = ocp.CheckpointManagerOptions(
-        max_to_keep=2, save_interval_steps=config.checkpoint_interval
-    )
-    checkpoint_manager = ocp.CheckpointManager(
-        config.out_dir, options=checkpoint_manager_options
-    )
-    checkpoint_manager.restore(checkpoint_manager.latest_step())
 
     # ====== create device mesh ======
     write_note("creating 1D FSDP mesh")
