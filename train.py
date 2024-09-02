@@ -541,7 +541,9 @@ def main(config: TrainConfig):
                     jax.device_get(
                         get_lr(
                             jax.make_array_from_single_device_arrays(
-                                [], repl_sharding, jnp.array(step)
+                                [],
+                                repl_sharding,
+                                jnp.array(step, device=jax.devices("cpu")[0]),
                             )
                         )
                     ).item()
