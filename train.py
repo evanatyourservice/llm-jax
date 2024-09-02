@@ -154,11 +154,12 @@ def main(config: TrainConfig):
     platform = jax.devices()[0].platform
 
     if jax.process_index() == 0:
-        checkpoint_manager_options = ocp.CheckpointManagerOptions(
+        checkpointer_options = ocp.CheckpointManagerOptions(
             max_to_keep=2, save_interval_steps=config.checkpoint_interval
         )
+        orbax_checkpointer = orbax.checkpoint.PyTreeCheckpointer()
         checkpoint_manager = ocp.CheckpointManager(
-            config.out_dir, options=checkpoint_manager_options
+            config.out_dir, orbax_checkpointer, checkpointer_options
         )
 
     # ====== create device mesh ======
@@ -396,14 +397,13 @@ def main(config: TrainConfig):
             "If loading checkpoint is unintended, set "
             "`attempt_to_load_checkpoint=False`."
         )
-        if jax.process_index() == 0:
-            abstract_train_state = jax.tree_util.tree_map(
-                ocp.utils.to_shape_dtype_struct, train_state
-            )
-            checkpoint_manager.restore(
-                checkpoint_manager.latest_step(),
-                args=ocp.args.StandardRestore(abstract_train_state),
-            )
+        abstract_train_state = jax.tree_util.tree_map(
+            ocp.utils.to_shape_dtype_struct, train_state
+        )
+        train_state = checkpoint_manager.restore(
+            checkpoint_manager.latest_step(),
+            args=ocp.args.StandardRestore(abstract_train_state),
+        )
 
     # grab start step from loaded train state
     step = jax.device_get(train_state.step).item()
@@ -591,8 +591,7 @@ def main(config: TrainConfig):
             start_time = time.time()
 
         # checkpoint
-        if jax.process_index() == 0:
-            checkpoint_manager.save(step, train_state)
+        checkpoint_manager.save(step, train_state)
 
         # eval hellaswag
         if step % config.hellaswag_eval_interval == 0 and step > 0:
@@ -614,7 +613,8 @@ def main(config: TrainConfig):
 
     if jax.process_index() == 0:
         wandb.finish()
-        checkpoint_manager.wait_until_finished()
+
+    checkpoint_manager.wait_until_finished()
 
 
 if __name__ == "__main__":
