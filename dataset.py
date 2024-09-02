@@ -1,3 +1,4 @@
+import os
 import json
 import numpy as np
 from tqdm import tqdm
@@ -6,7 +7,7 @@ import random
 import jax
 import tensorflow as tf
 import datasets
-from datasets import load_dataset
+from datasets import load_dataset, IterableDataset
 from transformers import AutoTokenizer
 
 from utils import (
@@ -17,6 +18,7 @@ from utils import (
 )
 
 
+os.environ["TOKENIZERS_PARALLELISM="] = "true"
 datasets.config.STREAMING_READ_MAX_RETRIES = 17280  # 17280 * 5 = 1 day
 datasets.config.STREAMING_READ_RETRY_INTERVAL = 5
 
@@ -93,7 +95,7 @@ def prepare_hellaswag(
     ds = ds.prefetch(tf_prefetch)
     ds = ds.as_numpy_iterator()
     ds = iter(ds)
-    ds = threadstart_iterator(ds)
+    # ds = threadstart_iterator(ds)
     ds = (
         jax.tree.map(lambda x: make_fsarray_from_local_slice(x, flat_devices), elem)
         for elem in ds
@@ -131,7 +133,7 @@ def fineweb_edu_dataset(
     proc_subshard = proc_shard[shard_idx % len(proc_shard)]
 
     def gen():
-        hf_ds = load_dataset(
+        hf_ds: IterableDataset = load_dataset(
             "HuggingFaceFW/fineweb-edu",
             split="train",
             name=proc_subshard,
@@ -145,12 +147,15 @@ def fineweb_edu_dataset(
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
 
-        def tokenize(text):
+        def tokenize(example):
             return tokenizer(
-                text, max_length=seq_len, padding="max_length", truncation=True
+                example["text"],
+                max_length=seq_len,
+                padding="max_length",
+                truncation=True,
             )
 
-        hf_ds = hf_ds.map(tokenize, input_columns="text")
+        hf_ds = hf_ds.map(tokenize, batched=True)
 
         hf_ds = hf_ds.with_format("numpy")
 
@@ -170,7 +175,7 @@ def fineweb_edu_dataset(
     ds = ds.prefetch(tf_prefetch)
     ds = ds.as_numpy_iterator()
     ds = iter(ds)
-    ds = threadstart_iterator(ds)
+    # ds = threadstart_iterator(ds)
     ds = (
         jax.tree.map(lambda x: make_fsarray_from_local_slice(x, flat_devices), elem)
         for elem in ds

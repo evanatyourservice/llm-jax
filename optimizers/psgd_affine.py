@@ -123,10 +123,7 @@ def scale_by_affine(
 
         # update preconditioner
         key, subkey = jax.random.split(key)
-        do_update = jnp.logical_or(
-            jax.random.uniform(subkey, dtype=jnp.float32) < update_prob_in,
-            state.count < 2,
-        )
+        do_update = jax.random.uniform(subkey, dtype=jnp.float32) < update_prob_in
 
         def update_preconditioner():
             ukey = key

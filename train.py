@@ -194,8 +194,8 @@ def main(config: TrainConfig):
         if config.optimizer.grad_clip > 0.0:
             optimizer.append(optax.clip_by_global_norm(config.optimizer.grad_clip))
 
-        # decays to 0.01 at around 2000 steps
-        update_prob_schedule = lambda n: jnp.maximum(jnp.exp(-0.002 * n), 0.01)
+        # decays to 0.01 by around 2000 steps
+        update_prob_schedule = lambda n: jnp.maximum(0.5 * jnp.exp(-0.002 * n), 0.01)
 
         if config.optimizer.type in ["adam", "adamw"]:
             optimizer.append(
@@ -401,7 +401,7 @@ def main(config: TrainConfig):
     # we specify in_shardings for sake of clarity, but they are inferred
     train_step_jit = jax.jit(
         train_step,
-        # donate_argnums=(0,),
+        donate_argnums=(0,),
         in_shardings=(train_state_sharding, data_sharding, rng.sharding),
         out_shardings=(
             repl_sharding,
@@ -424,7 +424,7 @@ def main(config: TrainConfig):
 
     @partial(
         jax.jit,
-        # donate_argnums=(0,),
+        donate_argnums=(0,),
         in_shardings=(train_state_sharding,),
         out_shardings=train_state_sharding,
     )
@@ -438,6 +438,15 @@ def main(config: TrainConfig):
     )
     def advance_shard_idx_and_zero_dataset_step(state):
         return state.replace(shard_idx=state.shard_idx + 1, dataset_step=0)
+
+    train_state_gather = jax.jit(
+        lambda x: x,
+        in_shardings=train_state_sharding,
+        out_shardings=NamedSharding(mesh, P()),
+    )
+
+    def train_state_gather_fn(train_state: TrainState) -> TrainState:
+        return jax.device_get(train_state_gather(train_state))
 
     # ===== datasets =====
     write_note("creating datasets")
@@ -584,7 +593,7 @@ def main(config: TrainConfig):
             if jax.process_index() == 0:
                 checkpoints.save_checkpoint(
                     f"{config.out_dir}/checkpoints/train_state",
-                    jax.device_get(train_state),
+                    train_state_gather_fn(train_state),
                     step,
                     keep=config.keep_checkpoints,
                     overwrite=True,

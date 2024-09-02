@@ -5,7 +5,7 @@ checkpoint_interval: 1000
 batch_size: 256
 train_steps: 50000
 compute_dtype: bfloat16
-params_dtype: bfloat16
+params_dtype: float32
 optimizer: !dataclass:OptimizerConfig
     type: "psgd_affine"
     learning_rate: 0.003
@@ -28,5 +28,6 @@ wandb: !dataclass:WandbConfig
     mode: online
 model: !dataclass:ModelConfig
     huggingface_model_name: "gpt2"
-    use_scan_mlp: True
     block_size: 1024
+    use_scan_mlp: True
+    scan_attention_layers: True
