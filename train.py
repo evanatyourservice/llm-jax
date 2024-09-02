@@ -589,10 +589,11 @@ def main(config: TrainConfig):
             and config.keep_checkpoints > 0
             and step > 0
         ):
+            gathered_train_state = train_state_gather_fn(train_state)
             if jax.process_index() == 0:
                 checkpoints.save_checkpoint(
                     f"{config.out_dir}/checkpoints/train_state",
-                    train_state_gather_fn(train_state),
+                    gathered_train_state,
                     step,
                     keep=config.keep_checkpoints,
                     overwrite=True,
