@@ -544,7 +544,7 @@ def main(config: TrainConfig):
                                 [], repl_sharding, jnp.array(step)
                             )
                         )
-                    )
+                    ).item()
                     if callable(lr_schedule)
                     else lr_schedule
                 ),
