@@ -587,16 +587,16 @@ def main(config: TrainConfig):
             and step > 0
             and jax.process_index() == 0
         ):
-            gathered_train_state = jax.device_get(gather_train_state(train_state))
-            with jax.default_device(jax.devices("cpu")[0]):
+            with jax.transfer_guard("allow"):
                 checkpoints.save_checkpoint(
                     f"{config.out_dir}/checkpoints/train_state",
-                    gathered_train_state,
+                    train_state,
                     step,
                     keep=config.keep_checkpoints,
                     overwrite=True,
                     keep_every_n_steps=config.checkpoint_milestone,
                 )
+
             if step % config.checkpoint_milestone == 0:
                 write_note(f"saved milestone checkpoint at step {step}")
             else:
