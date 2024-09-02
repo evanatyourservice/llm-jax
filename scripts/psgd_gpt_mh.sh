@@ -27,7 +27,7 @@ python3 train.py \
     --compute_dtype=bfloat16 \
     --params_dtype=bfloat16 \
     --optimizer.type=psgd_affine \
-    --optimizer.learning_rate=0.003 \
+    --optimizer.learning_rate=0.005 \
     --optimizer.warmup_steps=0 \
     --optimizer.nesterov \
     --optimizer.weight_decay=0.01 \
