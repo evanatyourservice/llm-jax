@@ -18,7 +18,7 @@ from utils import (
 )
 
 
-os.environ["TOKENIZERS_PARALLELISM="] = "true"
+os.environ["TOKENIZERS_PARALLELISM"] = "true"
 datasets.config.STREAMING_READ_MAX_RETRIES = 17280  # 17280 * 5 = 1 day
 datasets.config.STREAMING_READ_RETRY_INTERVAL = 5
 
