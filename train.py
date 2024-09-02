@@ -157,7 +157,10 @@ def main(config: TrainConfig):
         checkpointer_options = ocp.CheckpointManagerOptions(
             max_to_keep=2, save_interval_steps=config.checkpoint_interval
         )
-        checkpoint_manager = ocp.CheckpointManager(config.out_dir, checkpointer_options)
+        orbax_checkpointer = ocp.PyTreeCheckpointer()
+        checkpoint_manager = ocp.CheckpointManager(
+            config.out_dir, orbax_checkpointer, checkpointer_options
+        )
 
     # ====== create device mesh ======
     write_note("creating 1D FSDP mesh")
