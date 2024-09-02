@@ -157,10 +157,7 @@ def main(config: TrainConfig):
         checkpointer_options = ocp.CheckpointManagerOptions(
             max_to_keep=2, save_interval_steps=config.checkpoint_interval
         )
-        orbax_checkpointer = ocp.PyTreeCheckpointer()
-        checkpoint_manager = ocp.CheckpointManager(
-            config.out_dir, orbax_checkpointer, checkpointer_options
-        )
+        checkpoint_manager = ocp.CheckpointManager(config.out_dir, checkpointer_options)
 
     # ====== create device mesh ======
     write_note("creating 1D FSDP mesh")
@@ -397,13 +394,15 @@ def main(config: TrainConfig):
             "If loading checkpoint is unintended, set "
             "`attempt_to_load_checkpoint=False`."
         )
-        abstract_train_state = jax.tree_util.tree_map(
-            ocp.utils.to_shape_dtype_struct, train_state
-        )
-        train_state = checkpoint_manager.restore(
-            checkpoint_manager.latest_step(),
-            args=ocp.args.StandardRestore(abstract_train_state),
-        )
+        with jax.transfer_guard("allow"):
+            if checkpoint_manager.latest_step() is not None:
+                abstract_train_state = jax.tree_util.tree_map(
+                    ocp.utils.to_shape_dtype_struct, train_state
+                )
+                train_state = checkpoint_manager.restore(
+                    checkpoint_manager.latest_step(),
+                    args=ocp.args.StandardRestore(abstract_train_state),
+                )
 
     # grab start step from loaded train state
     step = jax.device_get(train_state.step).item()
