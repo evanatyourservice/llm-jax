@@ -440,12 +440,11 @@ def main(config: TrainConfig):
     def advance_shard_idx_and_zero_dataset_step(state):
         return state.replace(shard_idx=state.shard_idx + 1, dataset_step=0)
 
-    train_state_gather = jax.jit(
-        lambda x: x, in_shardings=(train_state_sharding,), out_shardings=repl_sharding
+    gather_train_state = jax.jit(
+        lambda x: x,
+        in_shardings=(train_state_sharding,),
+        out_shardings=jax.tree.map(lambda _: repl_sharding, train_state_shapes),
     )
-
-    def train_state_gather_fn(train_state: TrainState) -> TrainState:
-        return jax.device_get(train_state_gather(train_state))
 
     # ===== datasets =====
     write_note("creating datasets")
@@ -589,11 +588,11 @@ def main(config: TrainConfig):
             and config.keep_checkpoints > 0
             and step > 0
         ):
-            gathered_train_state = train_state_gather_fn(train_state)
+            gathered_train_state = gather_train_state(train_state)
             if jax.process_index() == 0:
                 checkpoints.save_checkpoint(
                     f"{config.out_dir}/checkpoints/train_state",
-                    gathered_train_state,
+                    jax.device_get(gathered_train_state),
                     step,
                     keep=config.keep_checkpoints,
                     overwrite=True,
