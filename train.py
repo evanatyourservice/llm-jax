@@ -153,7 +153,7 @@ def main(config: TrainConfig):
     block_size = config.model.block_size
     platform = jax.devices()[0].platform
 
-    if jax.process_index() == 0:
+    with jax.transfer_guard("allow"):
         checkpointer_options = ocp.CheckpointManagerOptions(
             max_to_keep=2, save_interval_steps=config.checkpoint_interval
         )
