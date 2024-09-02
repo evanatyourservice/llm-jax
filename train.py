@@ -157,7 +157,7 @@ def main(config: TrainConfig):
         checkpointer_options = ocp.CheckpointManagerOptions(
             max_to_keep=2, save_interval_steps=config.checkpoint_interval
         )
-        orbax_checkpointer = orbax.checkpoint.PyTreeCheckpointer()
+        orbax_checkpointer = ocp.PyTreeCheckpointer()
         checkpoint_manager = ocp.CheckpointManager(
             config.out_dir, orbax_checkpointer, checkpointer_options
         )
