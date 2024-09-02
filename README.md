@@ -33,14 +33,3 @@ cd llm-jax && pip install -U pip && pip install -r requirements.txt && pip insta
 The base settings are in `config/llama3.yaml`. This is loaded in scripts using `export LLM_CONFIG=config/llama3.yaml`. 
 You can override with your own settings by either loading your own config in a script, or using flags 
 like in `scripts/psgd.sh`.
-
-To run on multi-host TPU, install requirements on all hosts
-```shell
-gcloud compute tpus tpu-vm ssh llm-jax --zone=us-central2-a --worker=all --command="cd llm-jax && pip install -r requirements.txt"
-```
-
-Then run a script on all hosts
-
-```shell
-gcloud compute tpus tpu-vm ssh llm-jax --zone=us-central2-a --worker=all --command="cd llm-jax && bash scripts/psgd.sh"
-```
