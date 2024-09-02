@@ -22,12 +22,12 @@ python3 train.py \
     --hellaswag_eval_interval=500 \
     --checkpoint_interval=1000 \
     --train_steps=1000000 \
-    --batch_size=1536 \
+    --batch_size=2048 \
     --optimizer.gradient_accumulation_steps=1 \
     --compute_dtype=bfloat16 \
     --params_dtype=bfloat16 \
     --optimizer.type=psgd_affine \
-    --optimizer.learning_rate=0.01 \
+    --optimizer.learning_rate=0.003 \
     --optimizer.warmup_steps=0 \
     --optimizer.nesterov \
     --optimizer.weight_decay=0.01 \
@@ -35,6 +35,6 @@ python3 train.py \
     --optimizer.max_size_triangular=16384 \
     --optimizer.max_skew_triangular=16 \
     --optimizer.precond_lr=0.1 \
-    --optimizer.precond_init_scale=0.0001 \
+    --optimizer.precond_init_scale=0.000001 \
     --optimizer.preconditioner_dtype=bfloat16
 "
