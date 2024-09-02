@@ -47,9 +47,9 @@ jax.config.update("jax_threefry_partitionable", True)
 
 
 class TrainState(ts):
+    lr_fn: Callable = struct.field(pytree_node=False)
     shard_idx: int = 0
     dataset_step: int = 0
-    lr_fn: Callable = struct.field(pytree_node=False)
 
 
 def train_step(
