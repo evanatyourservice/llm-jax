@@ -441,9 +441,7 @@ def main(config: TrainConfig):
         return state.replace(shard_idx=state.shard_idx + 1, dataset_step=0)
 
     train_state_gather = jax.jit(
-        lambda x: x,
-        in_shardings=train_state_sharding,
-        out_shardings=NamedSharding(mesh, P()),
+        lambda x: x, in_shardings=(train_state_sharding,), out_shardings=repl_sharding
     )
 
     def train_state_gather_fn(train_state: TrainState) -> TrainState:
