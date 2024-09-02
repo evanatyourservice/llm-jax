@@ -542,6 +542,10 @@ def main(config: TrainConfig):
                 # only update step if we're on the last accumulation step
                 train_state = step_minus_1(train_state)
 
+        # checkpoint
+        with jax.transfer_guard("allow"):
+            checkpoint_manager.save(step, train_state)
+
         # log to wandb every 10 steps
         if config.wandb is not None and jax.process_index() == 0 and step % 10 == 0:
             train_state = jax.block_until_ready(train_state)
@@ -592,9 +596,6 @@ def main(config: TrainConfig):
 
             start_time = time.time()
 
-        # checkpoint
-        checkpoint_manager.save(step, train_state)
-
         # eval hellaswag
         if step % config.hellaswag_eval_interval == 0 and step > 0:
             hs_accs = []
@@ -613,10 +614,8 @@ def main(config: TrainConfig):
 
             start_time = time.time()
 
-    if jax.process_index() == 0:
+    if config.wandb is not None and jax.process_index() == 0:
         wandb.finish()
-
-    checkpoint_manager.wait_until_finished()
 
 
 if __name__ == "__main__":
