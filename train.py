@@ -12,11 +12,11 @@ import tyro
 
 import jax
 import jax.numpy as jnp
-from jax.experimental import mesh_utils
+from jax.experimental import mesh_utils, multihost_utils
 from jax.sharding import Mesh, PartitionSpec as P, NamedSharding
 import flax
 from flax import struct
-from flax.training import checkpoints
+import orbax.checkpoint as ocp
 from flax.training.train_state import TrainState as ts
 import optax
 import optax.tree_utils as otu
@@ -152,6 +152,14 @@ def main(config: TrainConfig):
 
     block_size = config.model.block_size
     platform = jax.devices()[0].platform
+
+    checkpoint_manager_options = ocp.CheckpointManagerOptions(
+        max_to_keep=2, save_interval_steps=config.checkpoint_interval
+    )
+    checkpoint_manager = ocp.CheckpointManager(
+        config.out_dir, options=checkpoint_manager_options
+    )
+    checkpoint_manager.restore(checkpoint_manager.latest_step())
 
     # ====== create device mesh ======
     write_note("creating 1D FSDP mesh")
@@ -388,11 +396,13 @@ def main(config: TrainConfig):
             "If loading checkpoint is unintended, set "
             "`attempt_to_load_checkpoint=False`."
         )
-        train_state = checkpoints.restore_checkpoint(
-            f"{config.out_dir}/checkpoints/train_state", train_state
+        abstract_train_state = jax.tree_util.tree_map(
+            ocp.utils.to_shape_dtype_struct, train_state
         )
-        # reshard for good measure
-        train_state = jax.device_put(train_state, train_state_sharding)
+        checkpoint_manager.restore(
+            checkpoint_manager.latest_step(),
+            args=ocp.args.StandardRestore(abstract_train_state),
+        )
 
     # grab start step from loaded train state
     step = jax.device_get(train_state.step).item()
@@ -580,29 +590,7 @@ def main(config: TrainConfig):
             start_time = time.time()
 
         # checkpoint
-        if (
-            config.checkpoint_interval > 0
-            and step % config.checkpoint_interval == 0
-            and config.keep_checkpoints > 0
-            and step > 0
-            and jax.process_index() == 0
-        ):
-            with jax.transfer_guard("allow"):
-                checkpoints.save_checkpoint(
-                    f"{config.out_dir}/checkpoints/train_state",
-                    train_state,
-                    step,
-                    keep=config.keep_checkpoints,
-                    overwrite=True,
-                    keep_every_n_steps=config.checkpoint_milestone,
-                )
-
-            if step % config.checkpoint_milestone == 0:
-                write_note(f"saved milestone checkpoint at step {step}")
-            else:
-                write_note(f"saved checkpoint at step {step}")
-
-            start_time = time.time()
+        checkpoint_manager.save(step, train_state)
 
         # eval hellaswag
         if step % config.hellaswag_eval_interval == 0 and step > 0:
@@ -621,6 +609,9 @@ def main(config: TrainConfig):
             write_note(f"step: {step}, hellaswag_acc: {hellaswag_acc:.4f}")
 
             start_time = time.time()
+
+    wandb.finish()
+    checkpoint_manager.wait_until_finished()
 
 
 if __name__ == "__main__":
