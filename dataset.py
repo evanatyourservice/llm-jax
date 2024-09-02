@@ -1,11 +1,12 @@
-from itertools import chain
 import json
 import numpy as np
 from tqdm import tqdm
+import random
 
 import jax
 import tensorflow as tf
-from datasets import load_dataset, concatenate_datasets, Dataset
+import datasets
+from datasets import load_dataset
 from transformers import AutoTokenizer
 
 from utils import (
@@ -14,6 +15,10 @@ from utils import (
     threadstart_iterator,
     write_note,
 )
+
+
+datasets.config.STREAMING_READ_MAX_RETRIES = 17280  # 17280 * 5 = 1 day
+datasets.config.STREAMING_READ_RETRY_INTERVAL = 5
 
 OPTIONS = tf.data.Options()
 OPTIONS.deterministic = False
@@ -105,15 +110,11 @@ def fineweb_edu_dataset(
     flat_devices,
     tf_prefetch: int = 5,
     device_prefetch: int = 0,
-    streaming: bool = False,
+    streaming: bool = True,
     shard_idx: int = 0,
     start_index: int = 0,
 ):
-    """Load the fineweb-edu dataset.
-
-    For now we load in a weird way to save memory and from having to
-    use a bucket... not ideal.
-    """
+    """Load the fineweb-edu dataset."""
     seq_len = block_size + 1
 
     platform = jax.devices()[0].platform
@@ -123,87 +124,20 @@ def fineweb_edu_dataset(
     else:
         cache_dir = None
 
-    if streaming:
-        write_note("streaming fineweb-edu")
+    # grab current shard and shuffle
+    proc_shard = _fw_shard_names[jax.process_index() :: jax.process_count()]
+    random.shuffle(proc_shard)
 
-        def gen():
-            hf_ds = load_dataset(
-                "HuggingFaceFW/fineweb-edu",
-                split="train",
-                cache_dir=cache_dir,
-                streaming=True,
-            )
+    proc_subshard = proc_shard[shard_idx % len(proc_shard)]
 
-            tokenizer = AutoTokenizer.from_pretrained(
-                tokenizer_name, trust_remote_code=True, use_fast=True
-            )
-            if tokenizer.pad_token is None:
-                tokenizer.pad_token = tokenizer.eos_token
-
-            def tokenize(text):
-                return tokenizer(
-                    text, max_length=seq_len, padding="max_length", truncation=True
-                )
-
-            hf_ds = hf_ds.map(tokenize, input_columns="text")
-
-            hf_ds = hf_ds.with_format("numpy")
-
-            for example in hf_ds:
-                yield example["input_ids"]
-
-        ds = tf.data.Dataset.from_generator(
-            gen, output_signature=tf.TensorSpec(shape=(seq_len,), dtype=tf.int32)
-        )
-        ds = ds.shuffle(10000)
-        ds = ds.batch(
-            batch_size // jax.process_count(),
-            drop_remainder=True,
-            num_parallel_calls=tf.data.AUTOTUNE,
-        )
-        ds = ds.with_options(OPTIONS)
-        ds = ds.prefetch(tf_prefetch)
-        ds = ds.as_numpy_iterator()
-        ds = iter(ds)
-        ds = threadstart_iterator(ds)
-        ds = (
-            jax.tree.map(lambda x: make_fsarray_from_local_slice(x, flat_devices), elem)
-            for elem in ds
-        )
-        if device_prefetch > 0:
-            ds = prefetch_iterator(ds, device_prefetch)
-        return ds
-
-    else:
-        write_note("loading fineweb-edu")
-
-        fineweb_files_list = _fw_shard_names
-        rng = np.random.RandomState(100)
-        rng.shuffle(fineweb_files_list)
-
-        n_procs = jax.process_count()
-        curr_proc = jax.process_index()
-
-        # split into n_procs shards
-        fineweb_shards = [
-            fineweb_files_list[curr_proc::n_procs] for _ in range(n_procs)
-        ]
-
-        # grab current shard and subshard using shard_idx
-        proc_shard = fineweb_shards[curr_proc]
-        proc_subshard = proc_shard[shard_idx % len(proc_shard)]
-
-        print(f"process {curr_proc} shard {proc_shard}")
-        print(f"process {curr_proc} subshard {proc_subshard}")
-
-        hf_ds: Dataset = load_dataset(
+    def gen():
+        hf_ds = load_dataset(
             "HuggingFaceFW/fineweb-edu",
-            name=proc_subshard,
             split="train",
+            name=proc_subshard,
             cache_dir=cache_dir,
+            streaming=True,
         )
-
-        hf_ds = hf_ds.skip(start_index)
 
         tokenizer = AutoTokenizer.from_pretrained(
             tokenizer_name, trust_remote_code=True, use_fast=True
@@ -211,31 +145,39 @@ def fineweb_edu_dataset(
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
 
-        def tokenize(data_chunk):
-            text = data_chunk["text"]
+        def tokenize(text):
             return tokenizer(
                 text, max_length=seq_len, padding="max_length", truncation=True
             )
 
-        hf_ds.set_transform(tokenize)
+        hf_ds = hf_ds.map(tokenize, input_columns="text")
 
-        hf_ds.cleanup_cache_files()
+        hf_ds = hf_ds.with_format("numpy")
 
-        ds = hf_ds.to_tf_dataset(columns="input_ids", prefetch=False)
-        ds = ds.shuffle(10000)
-        ds = ds.batch(batch_size // jax.process_count(), drop_remainder=True)
-        ds = ds.with_options(OPTIONS)
-        ds = ds.prefetch(tf_prefetch)
-        ds = ds.as_numpy_iterator()
-        ds = iter(ds)
-        ds = threadstart_iterator(ds)
-        ds = (
-            jax.tree.map(lambda x: make_fsarray_from_local_slice(x, flat_devices), elem)
-            for elem in ds
-        )
-        if device_prefetch > 0:
-            ds = prefetch_iterator(ds, device_prefetch)
-        return ds
+        for example in hf_ds:
+            yield example["input_ids"]
+
+    ds = tf.data.Dataset.from_generator(
+        gen, output_signature=tf.TensorSpec(shape=(seq_len,), dtype=tf.int32)
+    )
+    ds = ds.shuffle(10000)
+    ds = ds.batch(
+        batch_size // jax.process_count(),
+        drop_remainder=True,
+        num_parallel_calls=tf.data.AUTOTUNE,
+    )
+    ds = ds.with_options(OPTIONS)
+    ds = ds.prefetch(tf_prefetch)
+    ds = ds.as_numpy_iterator()
+    ds = iter(ds)
+    ds = threadstart_iterator(ds)
+    ds = (
+        jax.tree.map(lambda x: make_fsarray_from_local_slice(x, flat_devices), elem)
+        for elem in ds
+    )
+    if device_prefetch > 0:
+        ds = prefetch_iterator(ds, device_prefetch)
+    return ds
 
 
 # fineweb-edu has 96 shards

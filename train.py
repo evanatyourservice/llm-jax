@@ -78,7 +78,7 @@ def train_step(
 
     (loss, acc), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
     new_state = state.apply_gradients(grads=grads)
-    new_state = new_state.replace(dataset_step=state.dataset_step + 1)
+    # new_state = new_state.replace(dataset_step=state.dataset_step + 1)
 
     check_dtypes(before_dtypes, jax.tree.map(lambda x: x.dtype, new_state))
 
@@ -135,8 +135,8 @@ def main(config: TrainConfig):
     write_note(f"Number of JAX processes: {jax.process_count()}")
 
     # set seeds
-    random.seed(config.seed)
-    np.random.seed(config.seed)
+    # random.seed(config.seed)
+    # np.random.seed(config.seed)
     tf.random.set_seed(config.seed)
 
     # wandb init
@@ -443,13 +443,10 @@ def main(config: TrainConfig):
     )
     if platform == "cpu":
         device_prefetch = 0
-        streaming = True
     elif platform == "gpu":
         device_prefetch = 2
-        streaming = False
-    else:  # TPU
+    else:  # tpu
         device_prefetch = 1
-        streaming = False
 
     make_train_ds = partial(
         fineweb_edu_dataset,
@@ -459,17 +456,10 @@ def main(config: TrainConfig):
         flat_devices=devices_flat,
         tf_prefetch=10,
         device_prefetch=device_prefetch,
-        streaming=streaming,
     )
 
-    # get current shard idx and dataset step from train state
-    current_shard_idx = jax.device_get(train_state.shard_idx)
-    current_dataset_step = jax.device_get(train_state.dataset_step) * (
-        config.batch_size // jax.process_count()
-    )  # dataset step * process batch size
-    train_ds = make_train_ds(
-        shard_idx=current_shard_idx, start_index=current_dataset_step
-    )
+    shard_idx = 0
+    train_ds = make_train_ds(shard_idx=shard_idx)
 
     # hellaswag has 4 seqs per example
     hellaswag_ds, hellaswag_len = prepare_hellaswag(
@@ -498,6 +488,7 @@ def main(config: TrainConfig):
                     f"current dataset subshard exhausted on process "
                     f"{jax.process_index()}, loading next subshard"
                 )
+                del train_ds
 
                 # delete huggingface datasets cache to save space
                 if platform == "tpu":
@@ -512,12 +503,8 @@ def main(config: TrainConfig):
                         print(f"Error removing {hf_cache_dir}: {e}")
 
                 # start next subshard
-                train_ds = make_train_ds(
-                    shard_idx=train_state.shard_idx + 1, start_index=0
-                )
-
-                # advance shard idx and zero dataset step
-                train_state = advance_shard_idx_and_zero_dataset_step(train_state)
+                shard_idx += 1
+                train_ds = make_train_ds(shard_idx=shard_idx)
 
                 tokens = next(train_ds)
 
