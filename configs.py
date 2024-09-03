@@ -11,14 +11,14 @@ class ModelConfig:
         huggingface_model_name: llama model name.
         tokenizer_name: tokenizer name.
         block_size: block size.
-        use_scan_mlp: whether to use scan mlp.
+        scan_mlp: whether to use scan mlp.
         scan_attention_layers: whether to use scan for attention layers.
     """
 
     huggingface_model_name: str = "trl-internal-testing/tiny-random-LlamaForCausalLM"
     tokenizer_name: Optional[str] = None
     block_size: int = 1024
-    use_scan_mlp: bool = False
+    scan_mlp: bool = False
     scan_attention_layers: bool = False
 
 

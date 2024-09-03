@@ -16,7 +16,8 @@ from jax.experimental import mesh_utils, multihost_utils
 from jax.sharding import Mesh, PartitionSpec as P, NamedSharding
 import flax
 from flax import struct
-import orbax.checkpoint as ocp
+import orbax.checkpoint
+from flax.training import orbax_utils
 from flax.training.train_state import TrainState as ts
 import optax
 import optax.tree_utils as otu
@@ -154,12 +155,14 @@ def main(config: TrainConfig):
     platform = jax.devices()[0].platform
 
     with jax.transfer_guard("allow"):
-        checkpointer_options = ocp.CheckpointManagerOptions(
-            max_to_keep=2, save_interval_steps=config.checkpoint_interval
+        async_checkpointer = orbax.checkpoint.AsyncCheckpointer(
+            orbax.checkpoint.PyTreeCheckpointHandler(), timeout_secs=60
         )
-        orbax_checkpointer = ocp.PyTreeCheckpointer()
-        checkpoint_manager = ocp.CheckpointManager(
-            config.out_dir, orbax_checkpointer, checkpointer_options
+        options = orbax.checkpoint.CheckpointManagerOptions(
+            save_interval_steps=config.checkpoint_interval, max_to_keep=2, create=True
+        )
+        checkpoint_manager = orbax.checkpoint.CheckpointManager(
+            config.out_dir, async_checkpointer, options
         )
 
     # ====== create device mesh ======
@@ -280,7 +283,7 @@ def main(config: TrainConfig):
 
         # override some settings
         model_config.use_cache = False
-        model_config.use_scan_mlp = config.model.use_scan_mlp
+        model_config.use_scan_mlp = config.model.scan_mlp
         model_config.scan_attention_layers = config.model.scan_attention_layers
         if hasattr(model_config, "scale_attn_by_inverse_layer_idx"):
             model_config.scale_attn_by_inverse_layer_idx = True
@@ -399,12 +402,11 @@ def main(config: TrainConfig):
         )
         with jax.transfer_guard("allow"):
             if checkpoint_manager.latest_step() is not None:
-                abstract_train_state = jax.tree_util.tree_map(
-                    ocp.utils.to_shape_dtype_struct, train_state
-                )
-                train_state = checkpoint_manager.restore(
+                restore_args = orbax_utils.restore_args_from_target(train_state)
+                checkpoint_manager.restore(
                     checkpoint_manager.latest_step(),
-                    args=ocp.args.StandardRestore(abstract_train_state),
+                    items=train_state,
+                    restore_kwargs={"restore_args": restore_args},
                 )
 
     # grab start step from loaded train state
@@ -452,10 +454,6 @@ def main(config: TrainConfig):
     )
     def advance_shard_idx_and_zero_dataset_step(state):
         return state.replace(shard_idx=state.shard_idx + 1, dataset_step=0)
-
-    gather_train_state = jax.jit(
-        lambda x: x, in_shardings=(train_state_sharding,), out_shardings=repl_sharding
-    )
 
     # ===== datasets =====
     write_note("creating datasets")
@@ -544,7 +542,10 @@ def main(config: TrainConfig):
 
         # checkpoint
         with jax.transfer_guard("allow"):
-            checkpoint_manager.save(step, train_state)
+            save_args = orbax_utils.save_args_from_target(train_state)
+            checkpoint_manager.save(
+                step, train_state, save_kwargs={"save_args": save_args}
+            )
 
         # log to wandb every 10 steps
         if config.wandb is not None and jax.process_index() == 0 and step % 10 == 0:
@@ -619,5 +620,6 @@ def main(config: TrainConfig):
 
 
 if __name__ == "__main__":
+    jax.distributed.initialize()
     config = tyro.cli(TrainConfig, default=get_default_config(), use_underscores=True)
     main(config)

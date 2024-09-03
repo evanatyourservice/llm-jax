@@ -21,13 +21,13 @@ python3 train.py \
     --attempt_to_load_checkpoint \
     --hellaswag_eval_interval=500 \
     --checkpoint_interval=20 \
-    --train_steps=1000000 \
+    --train_steps=100 \
     --batch_size=128 \
     --optimizer.gradient_accumulation_steps=1 \
     --compute_dtype=bfloat16 \
     --params_dtype=float32 \
     --optimizer.type=psgd_affine \
-    --optimizer.learning_rate=0.001 \
+    --optimizer.learning_rate=0.0001 \
     --optimizer.warmup_steps=1000 \
     --optimizer.nesterov \
     --optimizer.weight_decay=0.01 \
@@ -37,4 +37,8 @@ python3 train.py \
     --optimizer.precond_lr=0.1 \
     --optimizer.precond_init_scale=0.1 \
     --optimizer.preconditioner_dtype=float32
+    --model.huggingface_model_name="trl-internal-testing/tiny-random-LlamaForCausalLM" \
+    --model.no_scan_mlp \
+    --model.no_scan_attention_layers \
+    --model.block_size=128
 "

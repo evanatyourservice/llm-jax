@@ -155,7 +155,7 @@ def fineweb_edu_dataset(
                 truncation=True,
             )
 
-        hf_ds = hf_ds.map(tokenize, batched=True)
+        hf_ds = hf_ds.map(tokenize, batched=True, batch_size=1024)
 
         hf_ds = hf_ds.with_format("numpy")
 
@@ -165,7 +165,7 @@ def fineweb_edu_dataset(
     ds = tf.data.Dataset.from_generator(
         gen, output_signature=tf.TensorSpec(shape=(seq_len,), dtype=tf.uint16)
     )
-    ds = ds.shuffle(10000)
+    ds = ds.shuffle(10240)
     ds = ds.batch(
         batch_size // jax.process_count(),
         drop_remainder=True,

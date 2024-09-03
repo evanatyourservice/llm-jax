@@ -28,5 +28,5 @@ wandb: !dataclass:WandbConfig
     mode: online
 model: !dataclass:ModelConfig
     huggingface_model_name: "meta-llama/Meta-Llama-3.1-8B"
-    use_scan_mlp: True
+    scan_mlp: True
     block_size: 2048

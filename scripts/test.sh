@@ -23,5 +23,5 @@ python3 train.py \
     --optimizer.warmup_steps=20 \
     --optimizer.preconditioner_dtype=float32 \
     --model.huggingface_model_name="trl-internal-testing/tiny-random-LlamaForCausalLM" \
-    --model.no_use_scan_mlp \
+    --model.no_scan_mlp \
     --model.block_size=128
