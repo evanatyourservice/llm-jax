@@ -8,8 +8,8 @@ export LLM_CONFIG=config/llama3.yaml  # base config
 
 
 python3 train.py \
-    --out_dir=/Users/evanwalters/llm_testing/run_2024-08-29_20-34-46 \
-    --no_attempt_to_load_checkpoint \
+    --out_dir=/Users/evanwalters/llm_testing/run_checkpointing_test \
+    --attempt_to_load_checkpoint \
     --compute_dtype=float32 \
     --params_dtype=float32 \
     --min_size_to_shard_mb=0 \
@@ -24,4 +24,5 @@ python3 train.py \
     --optimizer.preconditioner_dtype=float32 \
     --model.huggingface_model_name="trl-internal-testing/tiny-random-LlamaForCausalLM" \
     --model.no_scan_mlp \
+    --model.no_scan_attention_layers \
     --model.block_size=128

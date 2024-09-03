@@ -25,6 +25,10 @@ from utils import tree_flatten_with_names, write_note
 
 
 def infer_sharding(params, mesh, op):
+    """Infer sharding spec for the given parameters.
+
+    Return a sharding tree and a spec tree.
+    """
     x_with_names, tree_def = tree_flatten_with_names(params)
     names = tree_def.unflatten(list(zip(*x_with_names))[0])
 
@@ -42,7 +46,8 @@ def infer_sharding(params, mesh, op):
 
     # Two-level tree_map to prevent it from doing traversal inside the spec.
     specs = jax.tree.map(lambda _, spec: P(*spec), nn.unbox(params), specs)
-    return jax.tree.map(lambda spec: NamedSharding(mesh, spec), specs)
+    sharding = jax.tree.map(lambda spec: NamedSharding(mesh, spec), specs)
+    return sharding, specs
 
 
 def fsdp_sharding(axis, min_size_to_shard_mb=1):

@@ -6,6 +6,8 @@ import dataclasses
 import numpy as np
 
 import jax
+import jax.numpy as jnp
+from jax import jit
 import flax
 
 
@@ -91,7 +93,7 @@ def threadstart_iterator(it):
     """Starts an iterator right away in a background thread."""
     # We already want to "start" the iterator in order to start the underlying
     # dataset prefetch mechanisms, so here we get the first element. But we don't
-    # want to lose it from training, so we yield that one afterwards.
+    # want to lose it from training, so we yield that one afterward.
     # (internal link)
     pool = ThreadPool(processes=1)
     first_ex_promise = pool.apply_async(lambda: next(it))

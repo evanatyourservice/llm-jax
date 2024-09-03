@@ -1,3 +1,4 @@
+import builtins
 from functools import partial
 from pprint import pprint
 import shutil
@@ -12,12 +13,11 @@ import tyro
 
 import jax
 import jax.numpy as jnp
-from jax.experimental import mesh_utils, multihost_utils
+from jaxlib import xla_client
+from jax.experimental import mesh_utils
 from jax.sharding import Mesh, PartitionSpec as P, NamedSharding
 import flax
 from flax import struct
-import orbax.checkpoint
-from flax.training import orbax_utils
 from flax.training.train_state import TrainState as ts
 import optax
 import optax.tree_utils as otu
@@ -31,7 +31,11 @@ from optimizers.tearfree import optimizer as tearfree_opt
 from optimizers.tearfree import shampoo, second_order
 from sharding import infer_sharding, fsdp_sharding
 from utils import check_dtypes, reshard, write_note
+from checkpointing import Checkpointer
 
+
+# hack to allow pickling of bfloat16 arrays
+builtins.bfloat16 = xla_client.bfloat16
 
 wandb.require("core")
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
@@ -53,17 +57,37 @@ class TrainState(ts):
     dataset_step: int = 0
 
 
+def train_state_to_dict(state: TrainState) -> dict:
+    return {
+        "params": state.params,
+        "opt_state": state.opt_state,
+        "step": state.step,
+        "shard_idx": state.shard_idx,
+        "dataset_step": state.dataset_step,
+    }
+
+
+def dict_to_train_state(
+    train_state_dict: dict, target: TrainState = None
+) -> TrainState:
+    if target is not None:
+        out = target.replace(**train_state_dict)
+    else:
+        out = TrainState(**train_state_dict)
+    return out
+
+
 def train_step(
-    state: TrainState, tokens: jnp.ndarray, rng_key
+    state: TrainState, tokens: jnp.ndarray, rng: jax.random.PRNGKey
 ) -> Tuple[jnp.ndarray, jnp.ndarray, TrainState, jnp.ndarray, jnp.ndarray]:
 
-    rng_key = jax.random.fold_in(rng_key, state.step)  # same key each grad accum step
+    rng = jax.random.fold_in(rng, state.step)  # same key each grad accum step
 
     def loss_fn(params):
         X, Y = tokens[:, :-1], tokens[:, 1:]
 
         logits = state.apply_fn(
-            X, params={"params": params}, dropout_rng=rng_key, train=True
+            X, params={"params": params}, dropout_rng=rng, train=True
         )[0]
 
         # compute loss in float32
@@ -135,8 +159,6 @@ def get_default_config() -> TrainConfig:
 
 
 def main(config: TrainConfig):
-    jax.distributed.initialize()
-
     write_note(f"Number of JAX devices: {jax.device_count()}")
     write_note(f"Number of JAX processes: {jax.process_count()}")
 
@@ -156,14 +178,13 @@ def main(config: TrainConfig):
     block_size = config.model.block_size
     platform = jax.devices()[0].platform
 
-    with jax.transfer_guard("allow"):
-        checkpointer = orbax.checkpoint.PyTreeCheckpointer()
-        checkpoint_manager_options = orbax.checkpoint.CheckpointManagerOptions(
-            save_interval_steps=config.checkpoint_interval, max_to_keep=2, create=True
-        )
-        checkpoint_manager = orbax.checkpoint.CheckpointManager(
-            config.out_dir, checkpointer, checkpoint_manager_options
-        )
+    # ====== checkpointer ======
+    checkpointer = Checkpointer(
+        config.out_dir,
+        enable=jax.process_index() == 0,
+        save_every_n=config.checkpoint_interval,
+        save_milestone_every_n=config.checkpoint_milestone,
+    )
 
     # ====== create device mesh ======
     write_note("creating 1D FSDP mesh")
@@ -267,12 +288,10 @@ def main(config: TrainConfig):
 
         return optimizer
 
-    # ====== train state ======
+    # ====== train state and sharding ======
     write_note("creating and sharding train state")
     repl_sharding = NamedSharding(mesh, P())
     data_sharding = NamedSharding(mesh, P("fsdp"))
-
-    rng = jax.random.PRNGKey(jax.device_put(config.seed, jax.devices("cpu")[0]))
 
     def init_train_state(key):
         """Initialize the train state."""
@@ -319,99 +338,111 @@ def main(config: TrainConfig):
         )
         return train_state
 
+    rng = jax.random.PRNGKey(jax.device_put(config.seed, jax.devices("cpu")[0]))
+
     train_state_shapes = jax.eval_shape(init_train_state, rng)
 
     op = fsdp_sharding("fsdp", min_size_to_shard_mb=config.min_size_to_shard_mb)
-    train_state_sharding = infer_sharding(params=train_state_shapes, mesh=mesh, op=op)
+    train_state_sharding, _ = infer_sharding(
+        params=train_state_shapes, mesh=mesh, op=op
+    )
+
+    # sharding for checkpointing
+    checkpoint_dict_sharding, _ = infer_sharding(
+        params=train_state_to_dict(train_state_shapes), mesh=mesh, op=op
+    )
+    ckpt_shard_fn = jax.jit(
+        lambda x: x, in_shardings=None, out_shardings=checkpoint_dict_sharding
+    )
+    ckpt_gather_fn = jax.jit(
+        lambda x: x,
+        in_shardings=(checkpoint_dict_sharding,),
+        out_shardings=repl_sharding,
+    )
+
+    # make checkpointing helper fn now that we have gather_fns
+    def save_checkpoint(step, train_state: TrainState, final: bool = False):
+        train_state_dict = train_state_to_dict(train_state)
+        checkpointer.save_all(step, train_state_dict, ckpt_gather_fn, final)
 
     if config.only_print_model:
-        print("TRAIN STATE SHAPES:")
+        if jax.process_index() == 0:
+            print("TRAIN STATE SHAPES:")
+            pprint(
+                jax.tree.map(lambda x: (x.shape, x.dtype), train_state_shapes),
+                indent=2,
+                width=120,
+            )
+            print("TRAIN STATE SHARDING:")
+            pprint(train_state_sharding, indent=2, width=120)
+        raise KeyboardInterrupt("Only printing model")
+    else:
+        rng, rng_init = jax.random.split(rng, 2)
+        rng_init = reshard(rng_init, repl_sharding)
+        train_state = jax.jit(init_train_state, out_shardings=train_state_sharding)(rng_init)
+
+        # make optimizer and its shardings
+        optimizer = make_opt()
+
+        opt_state_shapes = jax.eval_shape(optimizer.init, train_state.params)
+        opt_state_sharding, _ = infer_sharding(
+            params=opt_state_shapes, mesh=mesh, op=op
+        )
+        opt_state = jax.jit(optimizer.init, out_shardings=opt_state_sharding)(
+            train_state.params
+        )
+
+        # PSGD reshapes params into matrices. Here we get sharding rules for them
+        # similarly to how we shard params. We can pass this into PSGD for internal
+        # sharding constraints, although it's not absolutely necessary.
+        def get_reshaped_params_sharding(params):
+            # returns tuples of (reshape_fn, unreshape_fn, shape)
+            affine_reshapers = jax.tree.map(_shape_as_matrix, params)
+            p_struct = jax.tree.structure(params)
+            affine_reshapers = p_struct.flatten_up_to(affine_reshapers)
+            matrix_shapes = [
+                jax.ShapeDtypeStruct(r[2], jnp.float32) for r in affine_reshapers
+            ]
+            matrix_shapes = p_struct.unflatten(matrix_shapes)
+            return infer_sharding(params=matrix_shapes, mesh=mesh, op=op)
+
+        reshaped_params_sharding, _ = get_reshaped_params_sharding(train_state.params)
+
+        # remake optimizer with reshaped params sharding passed in
+        # again, not strictly necessary, but could ensure things stay well-sharded
+        optimizer = make_opt(reshaped_params_sharding=reshaped_params_sharding)
+
+        # finish making train state (pass in optimizer and opt_state)
+        train_state = train_state.replace(tx=optimizer, opt_state=opt_state)
+        train_state_sharding = train_state_sharding.replace(
+            tx=optimizer, opt_state=opt_state_sharding
+        )
+    
+    rng = reshard(rng, repl_sharding)
+
+    if config.attempt_to_load_checkpoint:
+        write_note(
+            f"Attempting to load checkpoint from {config.out_dir}/train_state.pickle"
+        )
+        with jax.transfer_guard("log"):
+            train_state_dict = checkpointer.load_trainstate_checkpoint(ckpt_shard_fn)
+            train_state = jax.jit(
+                dict_to_train_state,
+                out_shardings=train_state_sharding,
+            )(train_state_dict, train_state)
+            train_state = jax.block_until_ready(train_state)
+
+    num_params = count_params(train_state.params)
+    if jax.process_index() == 0:
+        print("TRAIN STATE SHAPES AND DTYPES:")
         pprint(
             jax.tree.map(lambda x: (x.shape, x.dtype), train_state_shapes),
             indent=2,
             width=120,
-            compact=True,
         )
         print("TRAIN STATE SHARDING:")
         pprint(train_state_sharding, indent=2, width=120)
-        raise KeyboardInterrupt("Only printing model")
-
-    rng, rng_init = jax.random.split(rng, 2)
-    rng_init = reshard(rng_init, repl_sharding)
-
-    train_state = jax.jit(init_train_state, out_shardings=train_state_sharding)(
-        rng_init
-    )
-
-    # make optimizer and its shardings
-    optimizer = make_opt()
-
-    opt_state_shapes = jax.eval_shape(optimizer.init, train_state.params)
-    opt_state_sharding = infer_sharding(params=opt_state_shapes, mesh=mesh, op=op)
-    opt_state = jax.jit(optimizer.init, out_shardings=opt_state_sharding)(
-        train_state.params
-    )
-
-    # PSGD reshapes params into matrices. Here we get sharding rules for them
-    # similarly to how we shard params. We can pass this into PSGD for internal
-    # sharding constraints, although it's not absolutely necessary.
-    def get_reshaped_params_sharding(params):
-        # returns tuples of (reshape_fn, unreshape_fn, shape)
-        affine_reshapers = jax.tree.map(_shape_as_matrix, params)
-        p_struct = jax.tree.structure(params)
-        affine_reshapers = p_struct.flatten_up_to(affine_reshapers)
-        matrix_shapes = [
-            jax.ShapeDtypeStruct(r[2], jnp.float32) for r in affine_reshapers
-        ]
-        matrix_shapes = p_struct.unflatten(matrix_shapes)
-        return infer_sharding(params=matrix_shapes, mesh=mesh, op=op)
-
-    reshaped_params_sharding = get_reshaped_params_sharding(train_state.params)
-
-    # remake optimizer with reshaped params sharding passed in
-    # again, not strictly necessary, but could ensure things stay well-sharded
-    optimizer = make_opt(reshaped_params_sharding=reshaped_params_sharding)
-
-    # finish making train state (pass in optimizer and opt_state)
-    train_state = train_state.replace(tx=optimizer, opt_state=opt_state)
-    train_state_sharding = train_state_sharding.replace(
-        tx=optimizer, opt_state=opt_state_sharding
-    )
-
-    rng = reshard(rng, repl_sharding)
-
-    num_params = count_params(train_state.params)
-    if jax.process_index() == 0:
-        write_note("TRAIN STATE SHAPES AND DTYPES:")
-        pprint(
-            jax.tree.map(lambda x: (x.shape, x.dtype), train_state), indent=2, width=120
-        )
-        write_note("TRAIN STATE SHARDING:")
-        pprint(train_state_sharding, indent=2, width=120)
-        write_note(f"PARAMETER COUNT: {num_params:,}")
-
-    # ==== restore train state ====
-    if config.attempt_to_load_checkpoint:
-        write_note(
-            f"Attempting to load checkpoint from "
-            f"{config.out_dir}/checkpoints/train_state if it exists."
-        )
-        write_note(
-            "If loading checkpoint is unintended, set "
-            "`attempt_to_load_checkpoint=False`."
-        )
-        with jax.transfer_guard("allow"):
-            if checkpoint_manager.latest_step() is not None:
-                restore_args = orbax_utils.restore_args_from_target(train_state)
-                checkpoint_manager.restore(
-                    checkpoint_manager.latest_step(),
-                    items=train_state,
-                    restore_kwargs={"restore_args": restore_args},
-                )
-
-    # grab start step from loaded train state
-    step = jax.device_get(train_state.step).item()
-    write_note(f"starting training at step {step}")
+        print(f"PARAMETER COUNT: {num_params:,}")
 
     # ====== jit functions ========
     # we specify in_shardings for sake of clarity, but they are inferred
@@ -455,7 +486,7 @@ def main(config: TrainConfig):
     def advance_shard_idx_and_zero_dataset_step(state):
         return state.replace(shard_idx=state.shard_idx + 1, dataset_step=0)
 
-    # ===== datasets =====
+    # ====== datasets ======
     write_note("creating datasets")
     tokenizer_name = (
         config.model.tokenizer_name
@@ -492,6 +523,10 @@ def main(config: TrainConfig):
     )
 
     # ======= train ========
+    # grab start step from train state
+    step = jax.device_get(train_state.step).item()
+    write_note(f"starting training at step {step}")
+
     orig_dtypes = jax.tree.map(lambda x: x.dtype, train_state)
     min_loss = float("inf")
     max_acc = 0.0
@@ -541,11 +576,7 @@ def main(config: TrainConfig):
                 train_state = step_minus_1(train_state)
 
         # checkpoint
-        with jax.transfer_guard("allow"):
-            save_args = orbax_utils.save_args_from_target(train_state)
-            checkpoint_manager.save(
-                step, train_state, save_kwargs={"save_args": save_args}
-            )
+        save_checkpoint(step, train_state)
 
         # log to wandb every 10 steps
         if config.wandb is not None and jax.process_index() == 0 and step % 10 == 0:
@@ -614,6 +645,9 @@ def main(config: TrainConfig):
             write_note(f"step: {step}, hellaswag_acc: {hellaswag_acc:.4f}")
 
             start_time = time.time()
+
+    # save final checkpoint
+    save_checkpoint(step, train_state, final=True)
 
 
 if __name__ == "__main__":
