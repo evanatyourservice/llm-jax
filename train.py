@@ -155,14 +155,12 @@ def main(config: TrainConfig):
     platform = jax.devices()[0].platform
 
     with jax.transfer_guard("allow"):
-        async_checkpointer = orbax.checkpoint.AsyncCheckpointer(
-            orbax.checkpoint.PyTreeCheckpointHandler(), timeout_secs=60
-        )
-        options = orbax.checkpoint.CheckpointManagerOptions(
+        checkpointer = orbax.checkpoint.PyTreeCheckpointer()
+        checkpoint_manager_options = orbax.checkpoint.CheckpointManagerOptions(
             save_interval_steps=config.checkpoint_interval, max_to_keep=2, create=True
         )
         checkpoint_manager = orbax.checkpoint.CheckpointManager(
-            config.out_dir, async_checkpointer, options
+            config.out_dir, checkpointer, checkpoint_manager_options
         )
 
     # ====== create device mesh ======
@@ -615,11 +613,7 @@ def main(config: TrainConfig):
 
             start_time = time.time()
 
-    if config.wandb is not None and jax.process_index() == 0:
-        wandb.finish()
-
 
 if __name__ == "__main__":
-    orbax.checkpoint.multihost.utils.initialize_runtime_to_distributed_ids()
     config = tyro.cli(TrainConfig, default=get_default_config(), use_underscores=True)
     main(config)
