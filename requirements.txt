@@ -12,6 +12,4 @@ einops
 psgd-jax
 chex
 easydel @ git+https://github.com/erfanzar/EasyDeL@main
-orbax-checkpoint
-msgpack
-mlxu
+google-cloud-storage
