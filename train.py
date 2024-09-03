@@ -33,9 +33,6 @@ from sharding import infer_sharding, fsdp_sharding
 from utils import check_dtypes, reshard, write_note
 
 
-jax.distributed.initialize()
-
-
 wandb.require("core")
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".95"
