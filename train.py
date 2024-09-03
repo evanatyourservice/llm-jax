@@ -3,7 +3,7 @@ from functools import partial
 from pprint import pprint
 import shutil
 import time
-from typing import Callable, Tuple
+from typing import Callable, Tuple, Optional
 from dataclasses import asdict
 import os
 import random
@@ -58,6 +58,20 @@ class TrainState(ts):
 
 
 def train_state_to_dict(state: TrainState) -> dict:
+    """Convert a train state to a dictionary.
+
+    Example:
+        train_state_to_dict(train_state)
+
+        Output:
+            {
+                "params": ...,
+                "opt_state": ...,
+                "step": ...,
+                "shard_idx": ...,
+                "dataset_step": ...,
+            }
+    """
     return {
         "params": state.params,
         "opt_state": state.opt_state,
@@ -68,8 +82,16 @@ def train_state_to_dict(state: TrainState) -> dict:
 
 
 def dict_to_train_state(
-    train_state_dict: dict, target: TrainState = None
+    train_state_dict: Optional[dict] = None, target: Optional[TrainState] = None
 ) -> TrainState:
+    """Convert a dictionary to a train state.
+
+    Example:
+        train_state_dict = train_state_to_dict(train_state)
+        new_train_state = dict_to_train_state(train_state_dict, target=train_state)
+    """
+    if train_state_dict is None:
+        return target
     if target is not None:
         out = target.replace(**train_state_dict)
     else:

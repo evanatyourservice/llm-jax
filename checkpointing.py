@@ -57,7 +57,10 @@ class Checkpointer(object):
 
     def load_trainstate_checkpoint(self, load_shard_fn=None):
         path = os.path.join(self.checkpoint_dir, f"{self.checkpoint_name}.pickle")
-        train_state = load_pickle(path)
+        try:
+            train_state = load_pickle(path)
+        except FileNotFoundError:
+            return None
 
         if load_shard_fn is not None:
             train_state = load_shard_fn(train_state)
@@ -101,13 +104,15 @@ def load_pickle(path: str) -> Any:
         except Exception as e:
             raise ValueError(f"Error accessing GCS bucket '{bucket_name}': {str(e)}")
         blob = bucket.blob(blob_name)
+        if not blob.exists():
+            raise FileNotFoundError(f"File not found: {path}")
         with blob.open("rb") as f:
             return pickle.load(f)
     else:
         suffix = ".pickle"
         path = Path(path)
         if not path.is_file():
-            raise ValueError(f"Not a file: {path}")
+            raise FileNotFoundError(f"File not found: {path}")
         if path.suffix != suffix:
             raise ValueError(f"Not a {suffix} file: {path}")
         with open(path, "rb") as file:
