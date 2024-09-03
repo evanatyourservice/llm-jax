@@ -22,7 +22,7 @@ python3 train.py \
     --hellaswag_eval_interval=500 \
     --checkpoint_interval=20 \
     --train_steps=100 \
-    --batch_size=128 \
+    --batch_size=64 \
     --optimizer.gradient_accumulation_steps=1 \
     --compute_dtype=bfloat16 \
     --params_dtype=float32 \
