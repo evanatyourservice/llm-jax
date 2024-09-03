@@ -135,6 +135,8 @@ def get_default_config() -> TrainConfig:
 
 
 def main(config: TrainConfig):
+    jax.distributed.initialize()
+
     write_note(f"Number of JAX devices: {jax.device_count()}")
     write_note(f"Number of JAX processes: {jax.process_count()}")
 
