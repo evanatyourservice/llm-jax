@@ -620,5 +620,6 @@ def main(config: TrainConfig):
 
 
 if __name__ == "__main__":
+    orbax.checkpoint.multihost.utils.initialize_runtime_to_distributed_ids()
     config = tyro.cli(TrainConfig, default=get_default_config(), use_underscores=True)
     main(config)
