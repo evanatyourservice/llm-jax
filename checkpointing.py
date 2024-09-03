@@ -35,7 +35,10 @@ class Checkpointer(object):
         path = os.path.join(self.checkpoint_dir, filename)
 
         if data_gather_fn is not None:
-            data = jax.device_get(data_gather_fn(data))
+            data = data_gather_fn(data)
+            data = jax.experimental.multihost_utils.process_allgather(data)
+            print(data)
+            data = jax.device_get(data)
 
         save_pickle(data, path)
 
