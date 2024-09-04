@@ -407,14 +407,11 @@ def main(config: TrainConfig):
             # Palm style z-loss
             loss += 1e-4 * jax.scipy.special.logsumexp(logits, axis=-1).mean() ** 2
 
-            # Compute accuracy
-            accuracy = jnp.mean(jnp.argmax(logits, axis=-1) == target_tokens)
-
-            return loss, accuracy
+            return loss
 
         before_dtypes = jax.tree.map(lambda x: x.dtype, state)
 
-        (loss, acc), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
+        loss, grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
         new_state = state.apply_gradients(grads=grads)
 
         check_dtypes(before_dtypes, jax.tree.map(lambda x: x.dtype, new_state))
@@ -422,7 +419,7 @@ def main(config: TrainConfig):
         grad_norm = optax.global_norm(grads)
         lr = state.lr_fn(state.step)
 
-        return loss, acc, new_state, grad_norm, lr
+        return loss, new_state, grad_norm, lr
 
     def eval_step_unreduced(state: TrainState, tokens: jnp.ndarray) -> jnp.ndarray:
         input_tokens = tokens
@@ -456,7 +453,7 @@ def main(config: TrainConfig):
 
     def eval_hellaswag(state: TrainState, data, labels, lengths):
         """Evaluate the hellaswag dataset."""
-        # data comes in shape (b, 4, block_size)
+        # data comes in shape (b, 4, block_size + 1)
         # labels comes in shape (b,)
         # lengths comes in shape (b, 4)
         batch = jnp.reshape(data, (-1, data.shape[-1]))
@@ -464,7 +461,7 @@ def main(config: TrainConfig):
         losses = jax.vmap(jnp.cumsum)(losses)
         lengths = jnp.reshape(lengths, (-1,))
         losses = jax.vmap(
-            lambda x, l: jax.lax.dynamic_index_in_dim(x, l - 2, axis=0, keepdims=False)
+            lambda x, l: jax.lax.dynamic_index_in_dim(x, l - 1, axis=0, keepdims=False)
         )(losses, lengths)
         choices = jnp.argmin(
             jnp.reshape(losses, (data.shape[0], data.shape[1])), axis=1
@@ -514,10 +511,8 @@ def main(config: TrainConfig):
 
     orig_dtypes = jax.tree.map(lambda x: x.dtype, train_state)
     min_loss = float("inf")
-    max_acc = 0.0
     max_hellaswag_acc = 0.0
     train_losses = []
-    train_accs = []
     grad_norms = []
     start_time = None
     write_note("starting training")
@@ -550,11 +545,10 @@ def main(config: TrainConfig):
 
                 tokens = next(train_ds)
 
-            loss, acc, train_state, g_norm, lr = train_step_jit(
+            loss, train_state, g_norm, lr = train_step_jit(
                 train_state, tokens, rng
             )
             train_losses.append(jax.device_get(loss).item())
-            train_accs.append(jax.device_get(acc).item())
             grad_norms.append(jax.device_get(g_norm).item())
             if accum_step < config.optimizer.gradient_accumulation_steps - 1:
                 # only update step if we're on the last accumulation step
@@ -567,8 +561,6 @@ def main(config: TrainConfig):
 
             train_loss = np.mean(train_losses)
             min_loss = min(min_loss, train_loss)
-            train_acc = np.mean(train_accs)
-            max_acc = max(max_acc, train_acc)
             grad_norm = np.mean(grad_norms)
 
             tokens_per_batch = (
@@ -579,7 +571,6 @@ def main(config: TrainConfig):
             )
             to_log = {
                 "train_loss": train_loss,
-                "train_acc": train_acc,
                 "grad_norm": grad_norm,
                 "lr": jax.device_get(lr).item(),
                 "tokens": step * tokens_per_batch,
@@ -593,16 +584,14 @@ def main(config: TrainConfig):
 
             wandb.log(to_log, step=step)
             wandb.summary["min_train_loss"] = min_loss
-            wandb.summary["max_train_acc"] = max_acc
 
             train_losses = []
-            train_accs = []
             grad_norms = []
 
             # print every 100 steps
             if step % 100 == 0:
                 write_note(
-                    f"step: {step}, loss: {train_loss:.4f}, accuracy: {train_acc:.4f}"
+                    f"step: {step}, loss: {train_loss:.4f}"
                 )
 
                 # double check dtypes are consistent
