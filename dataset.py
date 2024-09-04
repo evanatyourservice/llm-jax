@@ -31,7 +31,7 @@ OPTIONS.experimental_optimization.inject_prefetch = False
 
 
 def prepare_hellaswag(
-    tokenizer_name: str,
+    tokenizer: AutoTokenizer,
     batch_size: int,
     block_size: int,
     flat_devices,
@@ -42,12 +42,6 @@ def prepare_hellaswag(
     write_note("preparing hellaswag")
 
     seq_len = block_size + 1
-
-    tokenizer = AutoTokenizer.from_pretrained(
-        tokenizer_name, trust_remote_code=True, use_fast=True
-    )
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
 
     all_data = []
     all_labels = []
@@ -106,7 +100,7 @@ def prepare_hellaswag(
 
 
 def fineweb_edu_dataset(
-    tokenizer_name: str,
+    tokenizer: AutoTokenizer,
     batch_size: int,
     block_size: int,
     flat_devices,
@@ -140,12 +134,6 @@ def fineweb_edu_dataset(
             cache_dir=cache_dir,
             streaming=True,
         )
-
-        tokenizer = AutoTokenizer.from_pretrained(
-            tokenizer_name, trust_remote_code=True, use_fast=True
-        )
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
 
         def tokenize(example):
             return tokenizer(

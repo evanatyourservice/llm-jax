@@ -3,7 +3,7 @@ from functools import partial
 from pprint import pprint
 import shutil
 import time
-from typing import Callable, Tuple, Optional
+from typing import Callable, Tuple
 from dataclasses import asdict
 import os
 import random
@@ -21,8 +21,7 @@ from flax import struct
 from flax.training.train_state import TrainState as ts
 import optax
 import optax.tree_utils as otu
-import tensorflow as tf
-import easydel as ed
+from transformers import AutoTokenizer
 
 from dataset import prepare_hellaswag, fineweb_edu_dataset
 from configs import TrainConfig
@@ -31,7 +30,7 @@ from optimizers.tearfree import optimizer as tearfree_opt
 from optimizers.tearfree import shampoo, second_order
 from sharding import infer_sharding, fsdp_sharding
 from utils import check_dtypes, reshard, write_note
-from checkpointing import Checkpointer
+from gemma import transformer as transformer_lib
 
 
 # hack to allow pickling of bfloat16 arrays
@@ -39,9 +38,7 @@ builtins.bfloat16 = xla_client.bfloat16
 
 wandb.require("core")
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
-os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".95"
-tf.config.experimental.set_visible_devices([], "GPU")
-tf.config.experimental.set_visible_devices([], "TPU")
+os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".98"
 # Transfer guard will fail the program whenever that data between a host and
 # a device is transferred implicitly. This often catches subtle bugs that
 # cause slowdowns and memory fragmentation. Explicit transfers are done
@@ -53,73 +50,42 @@ jax.config.update("jax_threefry_partitionable", True)
 
 class TrainState(ts):
     lr_fn: Callable = struct.field(pytree_node=False)
-    shard_idx: int = 0
-    dataset_step: int = 0
-
-
-def train_state_to_dict(state: TrainState) -> dict:
-    """Convert a train state to a dictionary.
-
-    Example:
-        train_state_to_dict(train_state)
-
-        Output:
-            {
-                "params": ...,
-                "opt_state": ...,
-                "step": ...,
-                "shard_idx": ...,
-                "dataset_step": ...,
-            }
-    """
-    return {
-        "params": state.params,
-        "opt_state": state.opt_state,
-        "step": state.step,
-        "shard_idx": state.shard_idx,
-        "dataset_step": state.dataset_step,
-    }
-
-
-def dict_to_train_state(
-    train_state_dict: Optional[dict] = None, target: Optional[TrainState] = None
-) -> TrainState:
-    """Convert a dictionary to a train state.
-
-    Example:
-        train_state_dict = train_state_to_dict(train_state)
-        new_train_state = dict_to_train_state(train_state_dict, target=train_state)
-    """
-    if train_state_dict is None:
-        return target
-    if target is not None:
-        out = target.replace(**train_state_dict)
-    else:
-        out = TrainState(**train_state_dict)
-    return out
 
 
 def train_step(
-    state: TrainState, tokens: jnp.ndarray, rng: jax.random.PRNGKey
+    state: TrainState, tokens: jnp.ndarray, rng: jax.random.PRNGKey, pad_id: int
 ) -> Tuple[jnp.ndarray, jnp.ndarray, TrainState, jnp.ndarray, jnp.ndarray]:
 
     rng = jax.random.fold_in(rng, state.step)  # same key each grad accum step
 
     def loss_fn(params):
-        X, Y = tokens[:, :-1], tokens[:, 1:]
+        input_tokens = tokens
 
-        logits = state.apply_fn(
-            X, params={"params": params}, dropout_rng=rng, train=True
-        )[0]
+        # Get attention mask and positions
+        positions, attention_mask = get_attention_mask_and_positions(
+            input_tokens, pad_id
+        )
 
-        # compute loss in float32
-        logits = logits.astype(jnp.float32)
-        loss = optax.softmax_cross_entropy_with_integer_labels(logits, Y).mean()
+        # Forward pass
+        logits, _ = state.apply_fn(
+            {"params": params}, input_tokens, positions, None, attention_mask
+        )
 
-        # palm style z-loss
+        # Compute loss
+        logits = logits[:, :-1].astype(
+            jnp.float32
+        )  # Exclude last token and cast to float32
+        target_tokens = input_tokens[:, 1:]  # Shift targets
+
+        loss = optax.softmax_cross_entropy_with_integer_labels(
+            logits, target_tokens
+        ).mean()
+
+        # Palm style z-loss
         loss += 1e-4 * jax.scipy.special.logsumexp(logits, axis=-1).mean() ** 2
 
-        accuracy = jnp.mean(jnp.argmax(logits, axis=-1) == Y)
+        # Compute accuracy
+        accuracy = jnp.mean(jnp.argmax(logits, axis=-1) == target_tokens)
 
         return loss, accuracy
 
@@ -137,10 +103,37 @@ def train_step(
     return loss, acc, new_state, grad_norm, lr
 
 
-def eval_step_unreduced(state: TrainState, tokens: jnp.ndarray) -> jnp.ndarray:
-    X, Y = tokens[:, :-1], tokens[:, 1:]
-    logits = state.apply_fn(X, params={"params": state.params}, train=False)[0]
-    loss = optax.softmax_cross_entropy_with_integer_labels(logits, Y)
+def get_attention_mask_and_positions(
+    example: jax.Array, pad_id: int
+) -> tuple[jax.Array, jax.Array]:
+    """Builds the position and attention mask vectors from the given tokens."""
+    pad_mask = example != pad_id
+    current_token_position = transformer_lib.build_positions_from_mask(pad_mask)
+    attention_mask = transformer_lib.make_causal_attn_mask(pad_mask)
+    return current_token_position, attention_mask
+
+
+def eval_step_unreduced(
+    state: TrainState, tokens: jnp.ndarray, pad_id: int
+) -> jnp.ndarray:
+    input_tokens = tokens
+
+    # Get attention mask and positions
+    positions, attention_mask = get_attention_mask_and_positions(input_tokens, pad_id)
+
+    # Forward pass
+    logits, _ = state.apply_fn(
+        {"params": state.params}, input_tokens, positions, None, attention_mask
+    )
+
+    # Compute loss
+    logits = logits[:, :-1].astype(
+        jnp.float32
+    )  # Exclude last token and cast to float32
+    target_tokens = input_tokens[:, 1:]  # Shift targets
+
+    loss = optax.softmax_cross_entropy_with_integer_labels(logits, target_tokens)
+
     return loss
 
 
@@ -150,7 +143,8 @@ def eval_hellaswag(state: TrainState, data, labels, lengths):
     # labels comes in shape (b,)
     # lengths comes in shape (b, 4)
     batch = jnp.reshape(data, (-1, data.shape[-1]))
-    losses = eval_step_unreduced(state, batch)
+    pad_id = 0  # Assuming 0 is the pad token ID, adjust if necessary
+    losses = eval_step_unreduced(state, batch, pad_id)
     losses = jax.vmap(jnp.cumsum)(losses)
     lengths = jnp.reshape(lengths, (-1,))
     losses = jax.vmap(
@@ -187,7 +181,6 @@ def main(config: TrainConfig):
     # set seeds
     # random.seed(config.seed)
     # np.random.seed(config.seed)
-    tf.random.set_seed(config.seed)
 
     # wandb init
     if config.wandb is not None and jax.process_index() == 0:
@@ -199,14 +192,6 @@ def main(config: TrainConfig):
 
     block_size = config.model.block_size
     platform = jax.devices()[0].platform
-
-    # ====== checkpointer ======
-    checkpointer = Checkpointer(
-        config.out_dir,
-        enable=jax.process_index() == 0,
-        save_every_n=config.checkpoint_interval,
-        save_milestone_every_n=config.checkpoint_milestone,
-    )
 
     # ====== create device mesh ======
     write_note("creating 1D FSDP mesh")
@@ -318,41 +303,38 @@ def main(config: TrainConfig):
     def init_train_state(key):
         """Initialize the train state."""
         # get easydel model config
-        model_config = ed.AutoEasyDeLConfig.from_pretrained(
-            config.model.huggingface_model_name
+        if config.model.model_type == "gemma2_test":
+            model_config = transformer_lib.TransformerConfig.gemma2_test(1)
+        elif config.model.model_type == "gemma2_360m":
+            model_config = transformer_lib.TransformerConfig.gemma2_360m(1)
+        elif config.model.model_type == "gemma2_2b":
+            model_config = transformer_lib.TransformerConfig.gemma2_2b(1)
+        elif config.model.model_type == "gemma2_9b":
+            model_config = transformer_lib.TransformerConfig.gemma2_9b(1)
+        elif config.model.model_type == "gemma2_27b":
+            model_config = transformer_lib.TransformerConfig.gemma2_27b(1)
+
+        model = transformer_lib.Transformer(model_config)
+
+        # Create dummy inputs based on the model's expected input shape
+        batch_size = 1
+        seq_length = config.model.block_size
+
+        dummy_input_tokens = jnp.zeros((batch_size, seq_length), dtype=jnp.int32)
+        dummy_positions = jnp.arange(seq_length)[None, :]
+        dummy_attention_mask = jnp.ones(
+            (batch_size, seq_length, seq_length), dtype=jnp.float32
         )
 
-        # override some settings
-        model_config.use_cache = False
-        model_config.use_scan_mlp = config.model.scan_mlp
-        model_config.scan_attention_layers = config.model.scan_attention_layers
-        if hasattr(model_config, "scale_attn_by_inverse_layer_idx"):
-            model_config.scale_attn_by_inverse_layer_idx = True
-        if hasattr(model_config, "reorder_and_upcast_attn"):
-            model_config.reorder_and_upcast_attn = True
-        print(model_config)
-
-        # get easydel flax module
-        model_type: str = model_config.model_type
-        _, module, _ = ed.get_modules_by_type(model_type)
-
-        # create model and params
-        model = module(
-            config=model_config,
-            dtype=config.compute_dtype,
-            param_dtype=config.params_dtype,
-            precision=jax.lax.Precision.DEFAULT,
-            seed=config.seed,
-            _do_init=False,
-        )
-        params = model.init_weights(key, input_shape=(1, block_size))
+        params = model.init(
+            key, dummy_input_tokens, dummy_positions, None, dummy_attention_mask
+        )["params"]
         params = otu.tree_cast(params, config.params_dtype)
 
         # delay optimizer creation to pass in preconditioner sharding
-        apply_fn = partial(model.__call__, return_dict=False)
         train_state = TrainState(
             step=0,
-            apply_fn=apply_fn,
+            apply_fn=model.apply,
             params=params,
             tx=None,
             opt_state=None,
@@ -369,24 +351,6 @@ def main(config: TrainConfig):
         params=train_state_shapes, mesh=mesh, op=op
     )
 
-    # sharding for checkpointing
-    checkpoint_dict_sharding, _ = infer_sharding(
-        params=train_state_to_dict(train_state_shapes), mesh=mesh, op=op
-    )
-    ckpt_shard_fn = jax.jit(
-        lambda x: x, in_shardings=None, out_shardings=checkpoint_dict_sharding
-    )
-    ckpt_gather_fn = jax.jit(
-        lambda x: x,
-        in_shardings=(checkpoint_dict_sharding,),
-        out_shardings=repl_sharding,
-    )
-
-    # make checkpointing helper fn now that we have gather_fns
-    def save_checkpoint(step, train_state: TrainState, final: bool = False):
-        train_state_dict = train_state_to_dict(train_state)
-        checkpointer.save_all(step, train_state_dict, ckpt_gather_fn, final)
-
     if config.only_print_model:
         if jax.process_index() == 0:
             print("TRAIN STATE SHAPES:")
@@ -401,7 +365,9 @@ def main(config: TrainConfig):
     else:
         rng, rng_init = jax.random.split(rng, 2)
         rng_init = reshard(rng_init, repl_sharding)
-        train_state = jax.jit(init_train_state, out_shardings=train_state_sharding)(rng_init)
+        train_state = jax.jit(init_train_state, out_shardings=train_state_sharding)(
+            rng_init
+        )
 
         # make optimizer and its shardings
         optimizer = make_opt()
@@ -439,20 +405,8 @@ def main(config: TrainConfig):
         train_state_sharding = train_state_sharding.replace(
             tx=optimizer, opt_state=opt_state_sharding
         )
-    
-    rng = reshard(rng, repl_sharding)
 
-    if config.attempt_to_load_checkpoint:
-        write_note(
-            f"Attempting to load checkpoint from {config.out_dir}/train_state.pickle"
-        )
-        with jax.transfer_guard("log"):
-            train_state_dict = checkpointer.load_trainstate_checkpoint(ckpt_shard_fn)
-            train_state = jax.jit(
-                dict_to_train_state,
-                out_shardings=train_state_sharding,
-            )(train_state_dict, train_state)
-            train_state = jax.block_until_ready(train_state)
+    rng = reshard(rng, repl_sharding)
 
     num_params = count_params(train_state.params)
     if jax.process_index() == 0:
@@ -466,10 +420,50 @@ def main(config: TrainConfig):
         pprint(train_state_sharding, indent=2, width=120)
         print(f"PARAMETER COUNT: {num_params:,}")
 
+    # ====== datasets ======
+    write_note("creating datasets")
+    if platform == "cpu":
+        device_prefetch = 0
+    elif platform == "gpu":
+        device_prefetch = 2
+    else:  # tpu
+        device_prefetch = 1
+
+    tokenizer = AutoTokenizer.from_pretrained(
+        "google/gemma-2-2b", trust_remote_code=True, use_fast=True
+    )
+    pad_id = tokenizer.pad_token_id
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+        pad_id = tokenizer.eos_token_id
+    write_note(f"pad_id: {pad_id}")
+
+    make_train_ds = partial(
+        fineweb_edu_dataset,
+        tokenizer=tokenizer,
+        batch_size=config.batch_size,
+        block_size=block_size,
+        flat_devices=devices_flat,
+        tf_prefetch=20,
+        device_prefetch=device_prefetch,
+    )
+
+    shard_idx = 0
+    train_ds = make_train_ds(shard_idx=shard_idx)
+
+    # hellaswag has 4 seqs per example
+    hellaswag_ds, hellaswag_len = prepare_hellaswag(
+        tokenizer,
+        max(config.batch_size // 4, jax.device_count()),
+        block_size,
+        devices_flat,
+        tf_prefetch=5,
+    )
+
     # ====== jit functions ========
     # we specify in_shardings for sake of clarity, but they are inferred
     train_step_jit = jax.jit(
-        train_step,
+        partial(train_step, pad_id=pad_id),
         donate_argnums=(0,),
         in_shardings=(train_state_sharding, data_sharding, rng.sharding),
         out_shardings=(
@@ -507,42 +501,6 @@ def main(config: TrainConfig):
     )
     def advance_shard_idx_and_zero_dataset_step(state):
         return state.replace(shard_idx=state.shard_idx + 1, dataset_step=0)
-
-    # ====== datasets ======
-    write_note("creating datasets")
-    tokenizer_name = (
-        config.model.tokenizer_name
-        if config.model.tokenizer_name is not None
-        else config.model.huggingface_model_name
-    )
-    if platform == "cpu":
-        device_prefetch = 0
-    elif platform == "gpu":
-        device_prefetch = 2
-    else:  # tpu
-        device_prefetch = 1
-
-    make_train_ds = partial(
-        fineweb_edu_dataset,
-        tokenizer_name=tokenizer_name,
-        batch_size=config.batch_size,
-        block_size=block_size,
-        flat_devices=devices_flat,
-        tf_prefetch=20,
-        device_prefetch=device_prefetch,
-    )
-
-    shard_idx = 0
-    train_ds = make_train_ds(shard_idx=shard_idx)
-
-    # hellaswag has 4 seqs per example
-    hellaswag_ds, hellaswag_len = prepare_hellaswag(
-        tokenizer_name,
-        max(config.batch_size // 4, jax.device_count()),
-        block_size,
-        devices_flat,
-        tf_prefetch=5,
-    )
 
     # ======= train ========
     # grab start step from train state
@@ -596,9 +554,6 @@ def main(config: TrainConfig):
             if accum_step < config.optimizer.gradient_accumulation_steps - 1:
                 # only update step if we're on the last accumulation step
                 train_state = step_minus_1(train_state)
-
-        # checkpoint
-        save_checkpoint(step, train_state)
 
         # log to wandb every 10 steps
         if config.wandb is not None and jax.process_index() == 0 and step % 10 == 0:
@@ -667,9 +622,6 @@ def main(config: TrainConfig):
             write_note(f"step: {step}, hellaswag_acc: {hellaswag_acc:.4f}")
 
             start_time = time.time()
-
-    # save final checkpoint
-    save_checkpoint(step, train_state, final=True)
 
 
 if __name__ == "__main__":

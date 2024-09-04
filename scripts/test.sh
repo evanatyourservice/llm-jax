@@ -4,7 +4,7 @@ EXPERIMENT=run_$(date +%Y-%m-%d_%H-%M-%S)
 echo $EXPERIMENT
 
 export XLA_FLAGS="--xla_force_host_platform_device_count=2"
-export LLM_CONFIG=config/llama3.yaml  # base config
+export LLM_CONFIG=config/gemma2.yaml  # base config
 
 
 python3 train.py \
@@ -22,7 +22,5 @@ python3 train.py \
     --optimizer.learning_rate=0.001 \
     --optimizer.warmup_steps=20 \
     --optimizer.preconditioner_dtype=float32 \
-    --model.huggingface_model_name="trl-internal-testing/tiny-random-LlamaForCausalLM" \
-    --model.no_scan_mlp \
-    --model.no_scan_attention_layers \
-    --model.block_size=128
+    --model.block_size=64 \
+    --model.model_type=gemma2_test

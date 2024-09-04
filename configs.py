@@ -8,18 +8,13 @@ class ModelConfig:
     """model configuration.
 
     Attributes:
-        huggingface_model_name: llama model name.
-        tokenizer_name: tokenizer name.
-        block_size: block size.
-        scan_mlp: whether to use scan mlp.
-        scan_attention_layers: whether to use scan for attention layers.
+        model_type: str, 'gemma2_test', 'gemma2_360m', 'gemma2_2b',
+            'gemma2_9b', 'gemma2_27b'
+        block_size: int, default 2048, total sequence length
     """
 
-    huggingface_model_name: str = "trl-internal-testing/tiny-random-LlamaForCausalLM"
-    tokenizer_name: Optional[str] = None
-    block_size: int = 1024
-    scan_mlp: bool = False
-    scan_attention_layers: bool = False
+    model_type: str = "gemma2_test"
+    block_size: int = 2048
 
 
 @dataclass(frozen=True)
