@@ -71,7 +71,7 @@ def fsdp_sharding(axis, min_size_to_shard_mb=1):
 
         # Preconditioner sharding
         # We're assuming preconditioners are kept in lists.
-        # This is at least the case for tearfree shampoo and PSGD affine.
+        # This is at least the case for PSGD affine and tearfree shampoo.
         if isinstance(x, list):
             # Replicate diag preconditioners and shard matrices.
             # Params mostly sharded in later dims, so we shard preconditioners
@@ -89,6 +89,9 @@ def fsdp_sharding(axis, min_size_to_shard_mb=1):
             ]
 
         shape = x.shape
+
+        if "input_embedding" in name:
+            return (None, axis)
 
         # Params sharding
         if np.prod(shape) * x.dtype.itemsize <= min_size_to_shard_mb * (2**20):
