@@ -482,14 +482,14 @@ def main(config: TrainConfig):
 
     def eval_hellaswag(state: TrainState, data, labels, lengths):
         """Evaluate the hellaswag dataset."""
-        # data comes in shape (b, 4, block_size + 1)
+        # data comes in shape (b, 4, block_size)
         # labels comes in shape (b,)
         # lengths comes in shape (b, 4)
         data = jnp.reshape(data, (-1, data.shape[-1]))
         lengths = jnp.reshape(lengths, (-1,))
         losses = eval_step_unreduced(state, data, lengths)
         choices = jnp.argmin(
-            jnp.reshape(losses, (data.shape[0], data.shape[1])), axis=-1
+            jnp.reshape(losses, (data.shape[0], 4)), axis=-1
         )
         correct = jnp.sum(choices == labels)
         accuracy = correct / data.shape[0]
