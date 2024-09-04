@@ -38,7 +38,7 @@ builtins.bfloat16 = xla_client.bfloat16
 
 wandb.require("core")
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
-os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".98"
+os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".95"
 # Transfer guard will fail the program whenever that data between a host and
 # a device is transferred implicitly. This often catches subtle bugs that
 # cause slowdowns and memory fragmentation. Explicit transfers are done
@@ -52,59 +52,6 @@ class TrainState(ts):
     lr_fn: Callable = struct.field(pytree_node=False)
 
 
-def get_attention_mask_and_positions(
-    example: jax.Array, pad_id: int
-) -> tuple[jax.Array, jax.Array]:
-    """Builds the position and attention mask vectors from the given tokens."""
-    pad_mask = example != pad_id
-    current_token_position = transformer_lib.build_positions_from_mask(pad_mask)
-    attention_mask = transformer_lib.make_causal_attn_mask(pad_mask)
-    return current_token_position, attention_mask
-
-
-def eval_step_unreduced(
-    state: TrainState, tokens: jnp.ndarray, pad_id: int
-) -> jnp.ndarray:
-    input_tokens = tokens
-
-    # Get attention mask and positions
-    positions, attention_mask = get_attention_mask_and_positions(input_tokens, pad_id)
-
-    # Forward pass
-    logits, _ = state.apply_fn(
-        {"params": state.params}, input_tokens, positions, None, attention_mask
-    )
-
-    # Compute loss
-    logits = logits[:, :-1].astype(
-        jnp.float32
-    )  # Exclude last token and cast to float32
-    target_tokens = input_tokens[:, 1:]  # Shift targets
-
-    loss = optax.softmax_cross_entropy_with_integer_labels(logits, target_tokens)
-
-    return loss
-
-
-def eval_hellaswag(state: TrainState, data, labels, lengths):
-    """Evaluate the hellaswag dataset."""
-    # data comes in shape (b, 4, block_size)
-    # labels comes in shape (b,)
-    # lengths comes in shape (b, 4)
-    batch = jnp.reshape(data, (-1, data.shape[-1]))
-    pad_id = 0  # Assuming 0 is the pad token ID, adjust if necessary
-    losses = eval_step_unreduced(state, batch, pad_id)
-    losses = jax.vmap(jnp.cumsum)(losses)
-    lengths = jnp.reshape(lengths, (-1,))
-    losses = jax.vmap(
-        lambda x, l: jax.lax.dynamic_index_in_dim(x, l - 2, axis=0, keepdims=False)
-    )(losses, lengths)
-    choices = jnp.argmin(jnp.reshape(losses, (data.shape[0], data.shape[1])), axis=1)
-    correct = jnp.sum(choices == labels)
-    accuracy = correct / data.shape[0]
-    return accuracy
-
-
 def count_params(params) -> int:
     p = jax.tree_util.tree_map(
         lambda a: a.size if isinstance(a, jnp.ndarray) else 0, params
@@ -114,7 +61,7 @@ def count_params(params) -> int:
 
 def get_default_config() -> TrainConfig:
     # use this file to set default values
-    path = os.environ.get("LLM_CONFIG", os.path.join("config", "llama3.yaml"))
+    path = os.environ.get("LLM_CONFIG", os.path.join("config", "gemma2.yaml"))
     if not os.path.exists(path):
         write_note("using default config")
         return TrainConfig()
@@ -253,15 +200,15 @@ def main(config: TrainConfig):
         """Initialize the train state."""
         # get easydel model config
         if config.model.model_type == "gemma2_test":
-            model_config = transformer_lib.TransformerConfig.gemma2_test(1)
+            model_config = transformer_lib.TransformerConfig.gemma2_test(30)
         elif config.model.model_type == "gemma2_370m":
-            model_config = transformer_lib.TransformerConfig.gemma2_370m(1)
+            model_config = transformer_lib.TransformerConfig.gemma2_370m(30)
         elif config.model.model_type == "gemma2_2b":
-            model_config = transformer_lib.TransformerConfig.gemma2_2b(1)
+            model_config = transformer_lib.TransformerConfig.gemma2_2b(30)
         elif config.model.model_type == "gemma2_9b":
-            model_config = transformer_lib.TransformerConfig.gemma2_9b(1)
+            model_config = transformer_lib.TransformerConfig.gemma2_9b(30)
         elif config.model.model_type == "gemma2_27b":
-            model_config = transformer_lib.TransformerConfig.gemma2_27b(1)
+            model_config = transformer_lib.TransformerConfig.gemma2_27b(30)
 
         model = transformer_lib.Transformer(model_config)
 
@@ -409,7 +356,16 @@ def main(config: TrainConfig):
         tf_prefetch=5,
     )
 
-    # ====== train step ======
+    # ====== train and eval steps ======
+    def get_attention_mask_and_positions(
+        example: jax.Array,
+    ) -> tuple[jax.Array, jax.Array]:
+        """Builds the position and attention mask vectors from the given tokens."""
+        pad_mask = example != pad_id
+        current_token_position = transformer_lib.build_positions_from_mask(pad_mask)
+        attention_mask = transformer_lib.make_causal_attn_mask(pad_mask)
+        return current_token_position, attention_mask
+
     def train_step(
         state: TrainState, tokens: jnp.ndarray, rng: jax.random.PRNGKey
     ) -> Tuple[jnp.ndarray, jnp.ndarray, TrainState, jnp.ndarray, jnp.ndarray]:
@@ -418,10 +374,7 @@ def main(config: TrainConfig):
 
         def loss_fn(params):
             input_tokens = tokens
-
-            positions, attention_mask = get_attention_mask_and_positions(
-                input_tokens, pad_id
-            )
+            positions, attention_mask = get_attention_mask_and_positions(input_tokens)
 
             logits, _ = state.apply_fn(
                 {"params": otu.tree_cast(params, config.compute_dtype)},
@@ -431,12 +384,25 @@ def main(config: TrainConfig):
                 attention_mask,
             )
 
-            logits = logits[:, :-1].astype(jnp.float32)
-            target_tokens = input_tokens[:, 1:]  # Shift targets
+            # Exclude the last step as it does not appear in the targets
+            logits = logits[:, :-1]
+            # Similarly, the first token cannot be predicted
+            target_tokens = input_tokens[:, 1:]
 
-            loss = optax.softmax_cross_entropy_with_integer_labels(
-                logits, target_tokens
-            ).mean()
+            # Create input mask (assuming all tokens are valid in this case)
+            input_mask = jnp.ones_like(input_tokens[:, 1:])
+
+            # Convert the target labels into one-hot encoded vectors
+            one_hot = jax.nn.one_hot(target_tokens, logits.shape[-1])
+
+            # Don't update on unwanted tokens (all tokens are wanted in this case)
+            one_hot = one_hot * input_mask.astype(one_hot.dtype)[..., None]
+
+            # Normalization factor
+            norm_factor = 1 / (jnp.sum(input_mask) + 1e-8)
+
+            # Calculate the loss
+            loss = -jnp.sum(jax.nn.log_softmax(logits) * one_hot) * norm_factor
 
             # Palm style z-loss
             loss += 1e-4 * jax.scipy.special.logsumexp(logits, axis=-1).mean() ** 2
@@ -450,7 +416,6 @@ def main(config: TrainConfig):
 
         (loss, acc), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
         new_state = state.apply_gradients(grads=grads)
-        # new_state = new_state.replace(dataset_step=state.dataset_step + 1)
 
         check_dtypes(before_dtypes, jax.tree.map(lambda x: x.dtype, new_state))
 
@@ -458,6 +423,55 @@ def main(config: TrainConfig):
         lr = state.lr_fn(state.step)
 
         return loss, acc, new_state, grad_norm, lr
+
+    def eval_step_unreduced(state: TrainState, tokens: jnp.ndarray) -> jnp.ndarray:
+        input_tokens = tokens
+
+        # Get attention mask and positions
+        positions, attention_mask = get_attention_mask_and_positions(input_tokens)
+
+        # Forward pass
+        logits, _ = state.apply_fn(
+            {"params": state.params}, input_tokens, positions, None, attention_mask
+        )
+
+        # Exclude the last step as it does not appear in the targets
+        logits = logits[:, :-1]
+        # Similarly, the first token cannot be predicted
+        target_tokens = input_tokens[:, 1:]
+
+        # Create input mask (assuming all tokens are valid in this case)
+        input_mask = jnp.ones_like(target_tokens)
+
+        # Convert the target labels into one-hot encoded vectors
+        one_hot = jax.nn.one_hot(target_tokens, logits.shape[-1])
+
+        # Don't update on unwanted tokens (all tokens are wanted in this case)
+        one_hot = one_hot * input_mask.astype(one_hot.dtype)[..., None]
+
+        # Calculate the loss (without normalization factor)
+        loss = -jnp.sum(jax.nn.log_softmax(logits) * one_hot, axis=-1)
+
+        return loss
+
+    def eval_hellaswag(state: TrainState, data, labels, lengths):
+        """Evaluate the hellaswag dataset."""
+        # data comes in shape (b, 4, block_size)
+        # labels comes in shape (b,)
+        # lengths comes in shape (b, 4)
+        batch = jnp.reshape(data, (-1, data.shape[-1]))
+        losses = eval_step_unreduced(state, batch)
+        losses = jax.vmap(jnp.cumsum)(losses)
+        lengths = jnp.reshape(lengths, (-1,))
+        losses = jax.vmap(
+            lambda x, l: jax.lax.dynamic_index_in_dim(x, l - 2, axis=0, keepdims=False)
+        )(losses, lengths)
+        choices = jnp.argmin(
+            jnp.reshape(losses, (data.shape[0], data.shape[1])), axis=1
+        )
+        correct = jnp.sum(choices == labels)
+        accuracy = correct / data.shape[0]
+        return accuracy
 
     # ====== jit functions ========
     # we specify in_shardings for sake of clarity, but they are inferred
@@ -492,14 +506,6 @@ def main(config: TrainConfig):
     )
     def step_minus_1(state):
         return state.replace(step=state.step - 1)
-
-    @partial(
-        jax.jit,
-        in_shardings=(train_state_sharding,),
-        out_shardings=train_state_sharding,
-    )
-    def advance_shard_idx_and_zero_dataset_step(state):
-        return state.replace(shard_idx=state.shard_idx + 1, dataset_step=0)
 
     # ======= train ========
     # grab start step from train state
