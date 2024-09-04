@@ -52,57 +52,6 @@ class TrainState(ts):
     lr_fn: Callable = struct.field(pytree_node=False)
 
 
-def train_step(
-    state: TrainState, tokens: jnp.ndarray, rng: jax.random.PRNGKey, pad_id: int
-) -> Tuple[jnp.ndarray, jnp.ndarray, TrainState, jnp.ndarray, jnp.ndarray]:
-
-    rng = jax.random.fold_in(rng, state.step)  # same key each grad accum step
-
-    def loss_fn(params):
-        input_tokens = tokens
-
-        # Get attention mask and positions
-        positions, attention_mask = get_attention_mask_and_positions(
-            input_tokens, pad_id
-        )
-
-        # Forward pass
-        logits, _ = state.apply_fn(
-            {"params": params}, input_tokens, positions, None, attention_mask
-        )
-
-        # Compute loss
-        logits = logits[:, :-1].astype(
-            jnp.float32
-        )  # Exclude last token and cast to float32
-        target_tokens = input_tokens[:, 1:]  # Shift targets
-
-        loss = optax.softmax_cross_entropy_with_integer_labels(
-            logits, target_tokens
-        ).mean()
-
-        # Palm style z-loss
-        loss += 1e-4 * jax.scipy.special.logsumexp(logits, axis=-1).mean() ** 2
-
-        # Compute accuracy
-        accuracy = jnp.mean(jnp.argmax(logits, axis=-1) == target_tokens)
-
-        return loss, accuracy
-
-    before_dtypes = jax.tree.map(lambda x: x.dtype, state)
-
-    (loss, acc), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
-    new_state = state.apply_gradients(grads=grads)
-    # new_state = new_state.replace(dataset_step=state.dataset_step + 1)
-
-    check_dtypes(before_dtypes, jax.tree.map(lambda x: x.dtype, new_state))
-
-    grad_norm = optax.global_norm(grads)
-    lr = state.lr_fn(state.step)
-
-    return loss, acc, new_state, grad_norm, lr
-
-
 def get_attention_mask_and_positions(
     example: jax.Array, pad_id: int
 ) -> tuple[jax.Array, jax.Array]:
@@ -460,10 +409,60 @@ def main(config: TrainConfig):
         tf_prefetch=5,
     )
 
+    # ====== train step ======
+    def train_step(
+        state: TrainState, tokens: jnp.ndarray, rng: jax.random.PRNGKey
+    ) -> Tuple[jnp.ndarray, jnp.ndarray, TrainState, jnp.ndarray, jnp.ndarray]:
+
+        rng = jax.random.fold_in(rng, state.step)  # same key each grad accum step
+
+        def loss_fn(params):
+            input_tokens = tokens
+
+            positions, attention_mask = get_attention_mask_and_positions(
+                input_tokens, pad_id
+            )
+
+            logits, _ = state.apply_fn(
+                {"params": otu.tree_cast(params, config.compute_dtype)},
+                input_tokens,
+                positions,
+                None,
+                attention_mask,
+            )
+
+            logits = logits[:, :-1].astype(jnp.float32)
+            target_tokens = input_tokens[:, 1:]  # Shift targets
+
+            loss = optax.softmax_cross_entropy_with_integer_labels(
+                logits, target_tokens
+            ).mean()
+
+            # Palm style z-loss
+            loss += 1e-4 * jax.scipy.special.logsumexp(logits, axis=-1).mean() ** 2
+
+            # Compute accuracy
+            accuracy = jnp.mean(jnp.argmax(logits, axis=-1) == target_tokens)
+
+            return loss, accuracy
+
+        before_dtypes = jax.tree.map(lambda x: x.dtype, state)
+
+        (loss, acc), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
+        new_state = state.apply_gradients(grads=grads)
+        # new_state = new_state.replace(dataset_step=state.dataset_step + 1)
+
+        check_dtypes(before_dtypes, jax.tree.map(lambda x: x.dtype, new_state))
+
+        grad_norm = optax.global_norm(grads)
+        lr = state.lr_fn(state.step)
+
+        return loss, acc, new_state, grad_norm, lr
+
     # ====== jit functions ========
     # we specify in_shardings for sake of clarity, but they are inferred
     train_step_jit = jax.jit(
-        partial(train_step, pad_id=pad_id),
+        train_step,
         donate_argnums=(0,),
         in_shardings=(train_state_sharding, data_sharding, rng.sharding),
         out_shardings=(
