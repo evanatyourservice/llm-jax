@@ -54,10 +54,7 @@ class TrainState(ts):
 def split_scanned_layers(params):
     return flax.traverse_util.ModelParamTraversal(
         lambda path, _: "scan" in path
-    ).update(
-        lambda p: {f"{i}": x for i, x in enumerate(p)}, 
-        params
-    )
+    ).update(lambda p: {f"{i}": x for i, x in enumerate(p)}, params)
 
 
 def unsplit_scanned_layers(split_params, goal_structure):
@@ -266,6 +263,7 @@ def main(config: TrainConfig):
 
     rng = jax.random.PRNGKey(jax.device_put(config.seed, jax.devices("cpu")[0]))
 
+    # get train state shapes and shardings
     train_state_shapes = jax.eval_shape(init_train_state, rng)
 
     op = fsdp_sharding("fsdp", min_size_to_shard_mb=config.min_size_to_shard_mb)
@@ -273,62 +271,71 @@ def main(config: TrainConfig):
         params=train_state_shapes, mesh=mesh, op=op
     )
 
-    if config.only_print_model:
-        if jax.process_index() == 0:
-            print("TRAIN STATE SHAPES:")
-            pprint(
-                jax.tree.map(lambda x: (x.shape, x.dtype), train_state_shapes),
-                indent=2,
-                width=120,
-            )
-            print("TRAIN STATE SHARDING:")
-            pprint(train_state_sharding, indent=2, width=120)
-        raise KeyboardInterrupt("Only printing model")
-    else:
-        rng, rng_init = jax.random.split(rng, 2)
-        rng_init = reshard(rng_init, repl_sharding)
-        train_state = jax.jit(init_train_state, out_shardings=train_state_sharding)(
-            rng_init
-        )
+    # make train state
+    rng, rng_init = jax.random.split(rng, 2)
+    rng_init = reshard(rng_init, repl_sharding)
+    train_state = jax.jit(init_train_state, out_shardings=train_state_sharding)(
+        rng_init
+    )
 
-        # make optimizer and its shardings
-        optimizer = make_opt()
+    # get shapes and shardings for params after scanned layers being split
+    split_params_shapes = jax.eval_shape(
+        split_scanned_layers, train_state_shapes.params
+    )
+    split_params_sharding, _ = infer_sharding(
+        params=split_params_shapes, mesh=mesh, op=op
+    )
 
-        optimizer_params = split_scanned_layers(train_state.params)
+    # jit split_scanned_layers and unsplit_scanned_layers with shardings
+    split_scanned_layers_fn = jax.jit(
+        split_scanned_layers,
+        in_shardings=train_state_sharding.params,
+        out_shardings=split_params_sharding,
+    )
+    unsplit_scanned_layers_fn = jax.jit(
+        partial(unsplit_scanned_layers, goal_structure=jax.tree.structure(train_state_shapes.params)),
+        in_shardings=split_params_sharding,
+        out_shardings=train_state_sharding.params,
+    )
 
-        opt_state_shapes = jax.eval_shape(optimizer.init, optimizer_params)
-        opt_state_sharding, _ = infer_sharding(
-            params=opt_state_shapes, mesh=mesh, op=op
-        )
-        opt_state = jax.jit(optimizer.init, out_shardings=opt_state_sharding)(
-            optimizer_params
-        )
+    # make optimizer and get its shardings with split params
+    optimizer = make_opt()
 
-        # PSGD reshapes params into matrices. Here we get sharding rules for them
-        # similarly to how we shard params. We can pass this into PSGD for internal
-        # sharding constraints, although it's not absolutely necessary.
-        def get_reshaped_params_sharding(params):
-            # returns tuples of (reshape_fn, unreshape_fn, shape)
-            affine_reshapers = jax.tree.map(_shape_as_matrix, params)
-            p_struct = jax.tree.structure(params)
-            affine_reshapers = p_struct.flatten_up_to(affine_reshapers)
-            matrix_shapes = [
-                jax.ShapeDtypeStruct(r[2], jnp.float32) for r in affine_reshapers
-            ]
-            matrix_shapes = p_struct.unflatten(matrix_shapes)
-            return infer_sharding(params=matrix_shapes, mesh=mesh, op=op)
+    opt_state_shapes = jax.eval_shape(optimizer.init, split_params_shapes)
+    opt_state_sharding, _ = infer_sharding(
+        params=opt_state_shapes, mesh=mesh, op=op
+    )
 
-        reshaped_params_sharding, _ = get_reshaped_params_sharding(optimizer_params)
+    opt_state = jax.jit(optimizer.init, out_shardings=opt_state_sharding)(
+        split_params_shapes
+    )
 
-        # remake optimizer with reshaped params sharding passed in
-        # again, not strictly necessary, but could ensure things stay well-sharded
-        optimizer = make_opt(reshaped_params_sharding=reshaped_params_sharding)
+    # PSGD reshapes params into matrices. Here we get sharding rules for them
+    # similarly to how we shard params. We can pass this into PSGD for internal
+    # sharding constraints, although it's not absolutely necessary.
+    def get_reshaped_params_sharding(params):
+        # returns tuples of (reshape_fn, unreshape_fn, shape)
+        affine_reshapers = jax.tree.map(_shape_as_matrix, params)
+        p_struct = jax.tree.structure(params)
+        affine_reshapers = p_struct.flatten_up_to(affine_reshapers)
+        matrix_shapes = [
+            jax.ShapeDtypeStruct(r[2], jnp.float32) for r in affine_reshapers
+        ]
+        matrix_shapes = p_struct.unflatten(matrix_shapes)
+        return infer_sharding(params=matrix_shapes, mesh=mesh, op=op)
 
-        # finish making train state (pass in optimizer and opt_state)
-        train_state = train_state.replace(tx=optimizer, opt_state=opt_state)
-        train_state_sharding = train_state_sharding.replace(
-            tx=optimizer, opt_state=opt_state_sharding
-        )
+    # optimizer uses split params
+    reshaped_params_sharding, _ = get_reshaped_params_sharding(split_params_shapes)
+
+    # remake optimizer with reshaped params sharding passed in
+    # again, not strictly necessary, but could ensure things stay well-sharded
+    optimizer = make_opt(reshaped_params_sharding=reshaped_params_sharding)
+
+    # finish making train state (pass in optimizer and opt_state)
+    train_state = train_state.replace(tx=optimizer, opt_state=opt_state)
+    train_state_sharding = train_state_sharding.replace(
+        tx=optimizer, opt_state=opt_state_sharding
+    )
 
     rng = reshard(rng, repl_sharding)
 
@@ -336,13 +343,16 @@ def main(config: TrainConfig):
     if jax.process_index() == 0:
         print("TRAIN STATE SHAPES AND DTYPES:")
         pprint(
-            jax.tree.map(lambda x: (x.shape, x.dtype), train_state_shapes),
+            jax.tree.map(lambda x: (x.shape, x.dtype), train_state),
             indent=2,
-            width=120,
+            width=150,
+            compact=True,
         )
         print("TRAIN STATE SHARDING:")
-        pprint(train_state_sharding, indent=2, width=120)
+        pprint(train_state_sharding, indent=2, width=150, compact=True)
         print(f"PARAMETER COUNT: {num_params:,}")
+        if config.only_print_model:
+            raise KeyboardInterrupt("Only printing model")
 
     # ====== datasets ======
     write_note("creating datasets")
@@ -456,12 +466,15 @@ def main(config: TrainConfig):
 
         optimizer_params = split_scanned_layers(state.params)
         optimizer_grads = split_scanned_layers(grads)
+        optimizer_params = jax.lax.with_sharding_constraint(optimizer_params, split_params_sharding)
+        optimizer_grads = jax.lax.with_sharding_constraint(optimizer_grads, split_params_sharding)
         optimizer_updates, new_opt_state = state.tx.update(
             optimizer_grads, opt_state, optimizer_params
         )
         updates = unsplit_scanned_layers(
             optimizer_updates, jax.tree.structure(state.params)
         )
+        updates = jax.lax.with_sharding_constraint(updates, train_state_sharding.params)
         new_params = optax.apply_updates(state.params, updates)
         new_state = state.replace(
             step=state.step + 1, params=new_params, opt_state=new_opt_state
@@ -469,7 +482,7 @@ def main(config: TrainConfig):
 
         check_dtypes(before_dtypes, jax.tree.map(lambda x: x.dtype, new_state))
 
-        grad_norm = optax.global_norm(grads)
+        grad_norm = optax.global_norm(optimizer_grads)
         lr = state.lr_fn(state.step)
 
         return loss, new_state, grad_norm, lr
