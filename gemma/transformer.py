@@ -187,7 +187,7 @@ class TransformerConfig:
                 modules.AttentionType.LOCAL_SLIDING,
                 modules.AttentionType.GLOBAL,
             )
-            * 12,
+            * 10,
             use_post_attn_norm=True,
             use_post_ffw_norm=True,
             max_cache_length=cache_size,

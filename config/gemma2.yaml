@@ -2,7 +2,7 @@
 !dataclass:TrainConfig
 hellaswag_eval_interval: 500
 checkpoint_interval: 1000
-batch_size: 1024
+batch_size: 128
 train_steps: 100000
 compute_dtype: bfloat16
 params_dtype: bfloat16
