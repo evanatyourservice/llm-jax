@@ -19,14 +19,16 @@ os.makedirs(save_dir, exist_ok=True)
 # good number to use is ~order number of cpu cores // 2
 num_proc = cpu_count() // 2
 # number of files for each split
-num_shards = {'train': 32, 'val': 8}
+num_shards = {"train": 32, "val": 8}
 
 # takes 54GB in huggingface .cache dir, about 8M documents (8,013,769)
 dataset = load_dataset("openwebtext", cache_dir="/dev/shm/hf_cache")
 
 # owt by default only contains the 'train' split, so create a test split
-split_dataset = dataset["train"].train_test_split(test_size=0.0005, seed=2357, shuffle=True)
-split_dataset['val'] = split_dataset.pop('test') # rename the test split to val
+split_dataset = dataset["train"].train_test_split(
+    test_size=0.0005, seed=2357, shuffle=True
+)
+split_dataset["val"] = split_dataset.pop("test")  # rename the test split to val
 
 shard_dataset = DatasetDict()
 for split, dset in split_dataset.items():
@@ -54,40 +56,46 @@ for split, dset in split_dataset.items():
 
 # we now want to tokenize the dataset. first define the encoding function (gpt2 bpe)
 enc = tiktoken.get_encoding("gpt2")
+
+
 def process(example):
-    ids = enc.encode_ordinary(example['text']) # encode_ordinary ignores any special tokens
-    ids.append(enc.eot_token) # add the end of text token, e.g. 50256 for gpt2 bpe
+    ids = enc.encode_ordinary(
+        example["text"]
+    )  # encode_ordinary ignores any special tokens
+    ids.append(enc.eot_token)  # add the end of text token, e.g. 50256 for gpt2 bpe
     # note: I think eot should be prepended not appended... hmm. it's called "eot" though...
-    out = {'ids': ids}
+    out = {"ids": ids}
     return out
+
 
 # tokenize the dataset
 tokenized = shard_dataset.map(
     process,
-    remove_columns=['text'],
+    remove_columns=["text"],
     desc="tokenizing the splits",
     num_proc=num_proc,
 )
 
+
 def _bytes_feature(value):
-  """Returns a bytes_list from a string / byte."""
-  if isinstance(value, type(tf.constant(0))):
-    value = value.numpy() # BytesList won't unpack a string from an EagerTensor.
-  return tf.train.Feature(bytes_list=tf.train.BytesList(value=[value]))
+    """Returns a bytes_list from a string / byte."""
+    if isinstance(value, type(tf.constant(0))):
+        value = value.numpy()  # BytesList won't unpack a string from an EagerTensor.
+    return tf.train.Feature(bytes_list=tf.train.BytesList(value=[value]))
+
 
 # concatenate all the ids in each dataset into one large file we can use for training
 for split, dset in tokenized.items():
-    filename = f'{split}.tfrecord'
+    filename = f"{split}.tfrecord"
     full_path = os.path.join(save_dir, filename)
 
     print(f"writing {full_path}...")
     with tf.io.TFRecordWriter(full_path) as writer:
         for example in tqdm(dset):
-            feature = np.asarray(example['ids'], dtype=np.uint16).tobytes()
+            feature = np.asarray(example["ids"], dtype=np.uint16).tobytes()
             example_proto = tf.train.Example(
-                features=tf.train.Features(feature={
-                    'ids': _bytes_feature(feature)
-                    }))
+                features=tf.train.Features(feature={"ids": _bytes_feature(feature)})
+            )
             writer.write(example_proto.SerializeToString())
 
 

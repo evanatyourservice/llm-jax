@@ -86,7 +86,6 @@ def main(config: TrainConfig):
         wandb_config["jax_n_processes"] = jax.process_count()
         wandb.config.update(wandb_config)
 
-    block_size = config.model.block_size
     platform = jax.devices()[0].platform
 
     # ====== create device mesh ======
@@ -200,26 +199,34 @@ def main(config: TrainConfig):
         """Initialize the train state."""
         # get easydel model config
         if config.model.model_type == "gemma2_test":
-            model_config = transformer_lib.TransformerConfig.gemma2_test(30)
-        elif config.model.model_type == "gemma2_370m":
-            model_config = transformer_lib.TransformerConfig.gemma2_370m(30)
+            model_config = transformer_lib.TransformerConfig.gemma2_test(30, config.model.sliding_window_size)
+        elif config.model.model_type == "gemma_2b":
+            model_config = transformer_lib.TransformerConfig.gemma_2b(30, config.model.sliding_window_size)
+        elif config.model.model_type == "gemma_7b":
+            model_config = transformer_lib.TransformerConfig.gemma_7b(30, config.model.sliding_window_size)
+        elif config.model.model_type == "smollm_135m":
+            model_config = transformer_lib.TransformerConfig.smollm_135m(30, config.model.sliding_window_size)
+        elif config.model.model_type == "smollm_360m":
+            model_config = transformer_lib.TransformerConfig.smollm_360m(30, config.model.sliding_window_size)
+        elif config.model.model_type == "smollm_1_7b":
+            model_config = transformer_lib.TransformerConfig.smollm_1_7b(30, config.model.sliding_window_size)
         elif config.model.model_type == "gemma2_2b":
-            model_config = transformer_lib.TransformerConfig.gemma2_2b(30)
+            model_config = transformer_lib.TransformerConfig.gemma2_2b(30, config.model.sliding_window_size)
         elif config.model.model_type == "gemma2_9b":
-            model_config = transformer_lib.TransformerConfig.gemma2_9b(30)
+            model_config = transformer_lib.TransformerConfig.gemma2_9b(30, config.model.sliding_window_size)
         elif config.model.model_type == "gemma2_27b":
-            model_config = transformer_lib.TransformerConfig.gemma2_27b(30)
+            model_config = transformer_lib.TransformerConfig.gemma2_27b(30, config.model.sliding_window_size)
+        else:
+            raise ValueError(f"Unknown model type: {config.model.model_type}")
 
         model = transformer_lib.Transformer(model_config)
 
         # Create dummy inputs based on the model's expected input shape
-        batch_size = 1
-        seq_length = config.model.block_size
 
-        dummy_input_tokens = jnp.zeros((batch_size, seq_length), dtype=jnp.int32)
-        dummy_positions = jnp.arange(seq_length)[None, :]
+        dummy_input_tokens = jnp.zeros((1, config.model.block_size), dtype=jnp.int32)
+        dummy_positions = jnp.arange(config.model.block_size)[None, :]
         dummy_attention_mask = jnp.ones(
-            (batch_size, seq_length, seq_length), dtype=jnp.float32
+            (1, config.model.block_size, config.model.block_size), dtype=jnp.float32
         )
 
         params = model.init(
@@ -326,7 +333,7 @@ def main(config: TrainConfig):
         device_prefetch = 1
 
     tokenizer = AutoTokenizer.from_pretrained(
-        "google/gemma-2-2b", trust_remote_code=True, use_fast=True
+        "meta-llama/Meta-Llama-3.1-8B", trust_remote_code=True, use_fast=True
     )
     pad_id = tokenizer.pad_token_id
     if tokenizer.pad_token is None:
@@ -338,9 +345,9 @@ def main(config: TrainConfig):
         fineweb_edu_dataset,
         tokenizer=tokenizer,
         batch_size=config.batch_size,
-        block_size=block_size,
+        block_size=config.model.block_size,
         flat_devices=devices_flat,
-        tf_prefetch=20,
+        tf_prefetch=10,
         device_prefetch=device_prefetch,
     )
 
@@ -351,9 +358,9 @@ def main(config: TrainConfig):
     hellaswag_ds, hellaswag_len = prepare_hellaswag(
         tokenizer,
         max(config.batch_size // 4, jax.device_count()),
-        block_size,
+        config.model.block_size,
         devices_flat,
-        tf_prefetch=5,
+        tf_prefetch=4,
     )
 
     # ====== train and eval steps ======
@@ -367,7 +374,10 @@ def main(config: TrainConfig):
         return current_token_position, attention_mask
 
     def train_step(
-        state: TrainState, input_tokens: jnp.ndarray, rng: jax.random.PRNGKey
+        state: TrainState,
+        input_tokens: jnp.ndarray,
+        lens: jnp.ndarray,
+        rng: jax.random.PRNGKey,
     ) -> Tuple[jnp.ndarray, jnp.ndarray, TrainState, jnp.ndarray, jnp.ndarray]:
 
         rng = jax.random.fold_in(rng, state.step)  # same key each grad accum step
@@ -385,13 +395,10 @@ def main(config: TrainConfig):
             assert logits.dtype == config.compute_dtype
 
             @jax.vmap
-            def seq_mask(input_tokens):
-                input_mask = jnp.max(
-                    jnp.where(input_tokens != pad_id, jnp.arange(input_tokens.shape[0]), -1)
-                )
-                return jnp.where(jnp.arange(input_tokens.shape[0]) <= input_mask, 1, 0)
-            
-            input_mask = seq_mask(input_tokens)
+            def seq_mask(seq_len):
+                return jnp.where(jnp.arange(input_tokens.shape[1]) < seq_len, 1, 0)
+
+            input_mask = seq_mask(lens)
 
             # Exclude the last step as it does not appear in the targets.
             logits = logits[:, :-1]
@@ -400,22 +407,25 @@ def main(config: TrainConfig):
             target_tokens = input_tokens[:, 1:]
             target_mask = input_mask[:, 1:]
 
-            loss = optax.softmax_cross_entropy_with_integer_labels(logits, target_tokens)
+            loss = optax.softmax_cross_entropy_with_integer_labels(
+                logits, target_tokens
+            )
 
             # Don't update on unwanted tokens (all tokens are wanted in this case)
             loss = loss * target_mask.astype(loss.dtype)
 
             # Normalization factor
-            norm_factor = jnp.reciprocal(jnp.sum(target_mask) + 1e-8)
+            norm_factor = jnp.sum(target_mask)
+            norm_factor = jnp.reciprocal(jnp.where(norm_factor == 0, 1, norm_factor))
 
             # Calculate the loss
             loss = jnp.sum(loss) * norm_factor
 
             # Palm style z-loss
-            logsumexp = jax.scipy.special.logsumexp(logits, axis=-1)
-            logsumexp = logsumexp * target_mask.astype(logsumexp.dtype)
-            logsumexp = jnp.sum(logsumexp) / jnp.sum(target_mask)
-            loss += 1e-4 * logsumexp ** 2
+            zloss = jax.scipy.special.logsumexp(logits, axis=-1)
+            zloss = zloss * target_mask.astype(zloss.dtype)
+            zloss = jnp.sum(zloss) * norm_factor
+            loss += 1e-4 * zloss**2
 
             return loss
 
@@ -431,8 +441,9 @@ def main(config: TrainConfig):
 
         return loss, new_state, grad_norm, lr
 
-    def eval_step_unreduced(state: TrainState, tokens: jnp.ndarray) -> jnp.ndarray:
-        input_tokens = tokens
+    def eval_step_unreduced(
+        state: TrainState, input_tokens: jnp.ndarray, lengths: jnp.ndarray
+    ) -> jnp.ndarray:
 
         # Get attention mask and positions
         positions, attention_mask = get_attention_mask_and_positions(input_tokens)
@@ -441,30 +452,44 @@ def main(config: TrainConfig):
         logits, _ = state.apply_fn(
             {"params": state.params}, input_tokens, positions, None, attention_mask
         )
+        assert logits.dtype == config.compute_dtype
+
+        @jax.vmap
+        def seq_mask(seq_len):
+            return jnp.where(jnp.arange(input_tokens.shape[1]) < seq_len, 1, 0)
+
+        input_mask = seq_mask(lengths)
 
         # Exclude the last step as it does not appear in the targets
         logits = logits[:, :-1]
+
         # Similarly, the first token cannot be predicted
         target_tokens = input_tokens[:, 1:]
+        target_mask = input_mask[:, 1:]
 
         loss = optax.softmax_cross_entropy_with_integer_labels(logits, target_tokens)
 
-        return loss
+        # Don't use loss past the sequence length
+        loss = loss * target_mask.astype(loss.dtype)
+
+        @jax.vmap
+        def unreduced_losses(loss, mask):
+            norm_factor = jnp.sum(mask)
+            norm_factor = jnp.reciprocal(jnp.where(norm_factor == 0, 1, norm_factor))
+            return jnp.sum(loss) * norm_factor
+
+        return unreduced_losses(loss, target_mask)  # [b * 4]
 
     def eval_hellaswag(state: TrainState, data, labels, lengths):
         """Evaluate the hellaswag dataset."""
         # data comes in shape (b, 4, block_size + 1)
         # labels comes in shape (b,)
         # lengths comes in shape (b, 4)
-        batch = jnp.reshape(data, (-1, data.shape[-1]))
-        losses = eval_step_unreduced(state, batch)
-        losses = jax.vmap(jnp.cumsum)(losses)
+        data = jnp.reshape(data, (-1, data.shape[-1]))
         lengths = jnp.reshape(lengths, (-1,))
-        losses = jax.vmap(
-            lambda x, l: jax.lax.dynamic_index_in_dim(x, l - 1, axis=0, keepdims=False)
-        )(losses, lengths)
+        losses = eval_step_unreduced(state, data, lengths)
         choices = jnp.argmin(
-            jnp.reshape(losses, (data.shape[0], data.shape[1])), axis=1
+            jnp.reshape(losses, (data.shape[0], data.shape[1])), axis=-1
         )
         correct = jnp.sum(choices == labels)
         accuracy = correct / data.shape[0]
@@ -475,7 +500,7 @@ def main(config: TrainConfig):
     train_step_jit = jax.jit(
         train_step,
         donate_argnums=(0,),
-        in_shardings=(train_state_sharding, data_sharding, rng.sharding),
+        in_shardings=(train_state_sharding, data_sharding, data_sharding, rng.sharding),
         out_shardings=(
             repl_sharding,
             train_state_sharding,
@@ -518,7 +543,7 @@ def main(config: TrainConfig):
     for step in range(step, config.train_steps):
         for accum_step in range(config.optimizer.gradient_accumulation_steps):
             try:
-                tokens = next(train_ds)
+                tokens, lens = next(train_ds)
             except StopIteration:
                 print(
                     f"current dataset subshard exhausted on process "
@@ -542,10 +567,10 @@ def main(config: TrainConfig):
                 shard_idx += 1
                 train_ds = make_train_ds(shard_idx=shard_idx)
 
-                tokens = next(train_ds)
+                tokens, lens = next(train_ds)
 
             loss, train_state, g_norm, lr = train_step_jit(
-                train_state, tokens, rng
+                train_state, tokens, lens, rng
             )
             train_losses.append(jax.device_get(loss).item())
             grad_norms.append(jax.device_get(g_norm).item())
@@ -566,7 +591,7 @@ def main(config: TrainConfig):
                 config.optimizer.gradient_accumulation_steps
                 * config.batch_size
                 * jax.device_count()
-                * block_size
+                * config.model.block_size
             )
             to_log = {
                 "train_loss": train_loss,
@@ -589,9 +614,7 @@ def main(config: TrainConfig):
 
             # print every 100 steps
             if step % 100 == 0:
-                write_note(
-                    f"step: {step}, loss: {train_loss:.4f}"
-                )
+                write_note(f"step: {step}, loss: {train_loss:.4f}")
 
                 # double check dtypes are consistent
                 check_dtypes(orig_dtypes, jax.tree.map(lambda x: x.dtype, train_state))

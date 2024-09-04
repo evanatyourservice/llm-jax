@@ -8,13 +8,19 @@ class ModelConfig:
     """model configuration.
 
     Attributes:
-        model_type: str, 'gemma2_test', 'gemma2_370m', 'gemma2_2b',
-            'gemma2_9b', 'gemma2_27b'
-        block_size: int, default 2048, total sequence length
+        model_type: str, 'gemma2_test', 'gemma_2b', 'gemma_7b', 'smollm_135m',
+            'smollm_360m', 'smollm_1_7b', 'gemma2_2b', 'gemma2_9b', 'gemma2_27b'
+        sliding_window_size: int, default 512, sliding window size
+        block_size: int, default 1024, total sequence length
     """
 
-    model_type: str = "gemma2_2b"
-    block_size: int = 4096
+    model_type: str = "smollm_135m"
+    sliding_window_size: int = 512
+    block_size: int = 1024
+
+    assert (
+        sliding_window_size <= block_size
+    ), "sliding_window_size must be less than or equal to block_size"
 
 
 @dataclass(frozen=True)
@@ -106,7 +112,7 @@ class TrainConfig:
     out_dir: str = f"gs://uscentral2stuff/llm-jax/run_{date_and_time}"
     attempt_to_load_checkpoint: bool = False
     only_print_model: bool = False
-    min_size_to_shard_mb: int = 0.1
+    min_size_to_shard_mb: int = 0.2
     hellaswag_eval_interval: int = 500
     checkpoint_interval: int = 1000
     keep_checkpoints: int = 2

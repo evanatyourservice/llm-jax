@@ -93,7 +93,9 @@ def apply(options: Options) -> praxis_shim.ShardedGradientTransformation:
         if options.ema:
             momentum_transforms.append(optax.scale(1 - options.momentum_decay))
         momentum_transforms.append(
-            _sharded_trace(options.momentum_decay, options.nesterov, options.momentum_dtype)
+            _sharded_trace(
+                options.momentum_decay, options.nesterov, options.momentum_dtype
+            )
         )
 
     wd_transforms = [optax.add_decayed_weights(options.weight_decay)] * (

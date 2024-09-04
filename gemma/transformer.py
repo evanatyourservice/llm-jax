@@ -16,9 +16,11 @@
 
 import dataclasses
 import enum
+from functools import partial
 from typing import Iterable
 
 from flax import linen as nn
+import flax
 from gemma import layers
 from gemma import modules
 from gemma import params as params_lib
@@ -119,7 +121,7 @@ class TransformerConfig:
     def gemma_2b(cls, cache_size: int):
         return cls(
             num_layers=_NUM_LAYERS_GEMMA_2B,
-            num_embed=256128,
+            num_embed=128256,
             embed_dim=2048,
             hidden_dim=16384,
             num_heads=8,
@@ -136,7 +138,7 @@ class TransformerConfig:
     def gemma_7b(cls, cache_size: int):
         return cls(
             num_layers=_NUM_LAYERS_GEMMA_7B,
-            num_embed=256128,
+            num_embed=128256,
             embed_dim=3072,
             hidden_dim=24576,
             num_heads=16,
@@ -150,10 +152,10 @@ class TransformerConfig:
         )
 
     @classmethod
-    def gemma2_test(cls, cache_size: int):
+    def gemma2_test(cls, cache_size: int, sliding_window_size: int):
         return cls(
             num_layers=2,
-            num_embed=256128,
+            num_embed=128256,
             embed_dim=8,
             hidden_dim=8,
             num_heads=2,
@@ -169,38 +171,83 @@ class TransformerConfig:
             max_cache_length=cache_size,
             query_pre_attn_norm=QueryPreAttentionNormalisation.BY_ONE_OVER_SQRT_HEAD_DIM,
             attn_logits_soft_cap=50.0,
-            sliding_window_size=32,
+            sliding_window_size=sliding_window_size,
         )
 
     @classmethod
-    def gemma2_370m(cls, cache_size: int):
+    def smollm_135m(cls, cache_size: int, sliding_window_size: int):
         return cls(
-            num_layers=20,
-            num_embed=256128,
-            embed_dim=768,
-            hidden_dim=3072,
-            num_heads=12,
+            num_layers=30,
+            num_embed=128256,
+            embed_dim=576,
+            hidden_dim=1536,
+            num_heads=9,
             head_dim=64,
-            num_kv_heads=6,
+            num_kv_heads=3,
             final_logit_softcap=30.0,
             attention_types=(
                 modules.AttentionType.LOCAL_SLIDING,
                 modules.AttentionType.GLOBAL,
-            )
-            * 10,
+            ) * 15,
             use_post_attn_norm=True,
             use_post_ffw_norm=True,
             max_cache_length=cache_size,
             query_pre_attn_norm=QueryPreAttentionNormalisation.BY_ONE_OVER_SQRT_HEAD_DIM,
             attn_logits_soft_cap=50.0,
-            sliding_window_size=512,
+            sliding_window_size=sliding_window_size,
         )
 
     @classmethod
-    def gemma2_2b(cls, cache_size: int):
+    def smollm_360m(cls, cache_size: int, sliding_window_size: int):
+        return cls(
+            num_layers=32,
+            num_embed=128256,
+            embed_dim=960,
+            hidden_dim=2560,
+            num_heads=15,
+            head_dim=64,
+            num_kv_heads=5,
+            final_logit_softcap=30.0,
+            attention_types=(
+                modules.AttentionType.LOCAL_SLIDING,
+                modules.AttentionType.GLOBAL,
+            ) * 16,
+            use_post_attn_norm=True,
+            use_post_ffw_norm=True,
+            max_cache_length=cache_size,
+            query_pre_attn_norm=QueryPreAttentionNormalisation.BY_ONE_OVER_SQRT_HEAD_DIM,
+            attn_logits_soft_cap=50.0,
+            sliding_window_size=sliding_window_size,
+        )
+
+    @classmethod
+    def smollm_1_7b(cls, cache_size: int, sliding_window_size: int):
+        return cls(
+            num_layers=24,
+            num_embed=128256,
+            embed_dim=2048,
+            hidden_dim=8192,
+            num_heads=32,
+            head_dim=64,
+            num_kv_heads=32,
+            final_logit_softcap=30.0,
+            attention_types=(
+                modules.AttentionType.LOCAL_SLIDING,
+                modules.AttentionType.GLOBAL,
+            ) * 12,
+            use_post_attn_norm=True,
+            use_post_ffw_norm=True,
+            max_cache_length=cache_size,
+            query_pre_attn_norm=QueryPreAttentionNormalisation.BY_ONE_OVER_SQRT_HEAD_DIM,
+            attn_logits_soft_cap=50.0,
+            sliding_window_size=sliding_window_size,
+        )
+
+    @classmethod
+    def gemma2_2b(cls, cache_size: int, sliding_window_size: int):
         return cls(
             num_layers=_NUM_LAYERS_GEMMA2_2B,
-            num_embed=256128,
+            num_embed=128256,
             embed_dim=2304,
             hidden_dim=9216,
             num_heads=8,
@@ -217,14 +264,14 @@ class TransformerConfig:
             max_cache_length=cache_size,
             query_pre_attn_norm=QueryPreAttentionNormalisation.BY_ONE_OVER_SQRT_HEAD_DIM,
             attn_logits_soft_cap=50.0,
-            sliding_window_size=4096,
+            sliding_window_size=sliding_window_size,
         )
 
     @classmethod
-    def gemma2_9b(cls, cache_size: int):
+    def gemma2_9b(cls, cache_size: int, sliding_window_size: int):
         return cls(
             num_layers=_NUM_LAYERS_GEMMA2_9B,
-            num_embed=256128,
+            num_embed=128256,
             embed_dim=3584,
             hidden_dim=14336,
             num_heads=16,
@@ -241,15 +288,15 @@ class TransformerConfig:
             max_cache_length=cache_size,
             query_pre_attn_norm=QueryPreAttentionNormalisation.BY_ONE_OVER_SQRT_HEAD_DIM,
             attn_logits_soft_cap=50.0,
-            sliding_window_size=4096,
+            sliding_window_size=sliding_window_size,
             transpose_gating_einsum=True,
         )
 
     @classmethod
-    def gemma2_27b(cls, cache_size: int):
+    def gemma2_27b(cls, cache_size: int, sliding_window_size: int):
         return cls(
             num_layers=_NUM_LAYERS_GEMMA2_27B,
-            num_embed=256128,
+            num_embed=128256,
             embed_dim=4608,
             hidden_dim=36864,
             num_heads=32,
@@ -266,7 +313,7 @@ class TransformerConfig:
             max_cache_length=cache_size,
             query_pre_attn_norm=QueryPreAttentionNormalisation.BY_ONE_OVER_SQRT_EMBED_DIM_DIV_NUM_HEADS,
             attn_logits_soft_cap=50.0,
-            sliding_window_size=4096,
+            sliding_window_size=sliding_window_size,
             transpose_gating_einsum=True,
         )
 
@@ -323,6 +370,7 @@ class Transformer(nn.Module):
         positions: jax.Array,  # [B, L]
         cache: Cache | None,  # (sequence length L')
         attention_mask: jax.Array,  # [B, L, L']
+        scan_unroll: int = 0,
     ) -> tuple[jax.Array, Cache | None]:
         """Transformer forward pass.
 
@@ -334,7 +382,8 @@ class Transformer(nn.Module):
           positions: input absolute positions.
           cache: Attention KV cache or None.
           attention_mask: transformer input mask.
-
+          scan_unroll: If 0, scan is not used. Otherwise, layers are scanned over
+            with unroll = `scan_unroll`.
         Returns:
           predicted_logits, new_cache
 
@@ -342,14 +391,20 @@ class Transformer(nn.Module):
           new_cache: updated cache if the input cache is not None, None elsewhere.
         """
         x = self.embedder.encode(last_tokens)
-        for i, block in enumerate(self.blocks):
-            layer_name = f"layer_{i}"
-            layer_cache = cache[layer_name] if cache else None
-            layer_cache, x = block(x, positions, layer_cache, attention_mask)
-            if cache is not None:
-                cache[layer_name] = (
-                    layer_cache  # pytype: disable=container-type-mismatch
-                )
+
+        if scan_unroll > 0 and cache is None:
+            # TODO (evanatyourservice)
+            pass
+        else:
+            # use python for loop
+            for i, block in enumerate(self.blocks):
+                layer_name = f"layer_{i}"
+                layer_cache = cache[layer_name] if cache else None
+                layer_cache, x = block(x, positions, layer_cache, attention_mask)
+                if cache is not None:
+                    cache[layer_name] = (
+                        layer_cache  # pytype: disable=container-type-mismatch
+                    )
 
         x = self.final_norm(x)
         logits = self.embedder.decode(x)
@@ -393,3 +448,50 @@ def build_positions_from_mask(input_mask: jax.Array) -> jax.Array:
     # Subtract one for all positions from the first valid one as they are
     # 0-indexed
     return positions - (positions >= 1)
+
+
+def _flax_scan(
+    body_fn,
+    length: int,
+    variable_broadcast = False,
+    variable_carry = False,
+    variable_axes = {True: 0},
+    split_rngs = {True: True},
+    unroll: int = 1,
+):
+    scan_fn = partial(
+        flax.core.lift.scan,
+        variable_broadcast=variable_broadcast,
+        variable_carry=variable_carry,
+        variable_axes=variable_axes,
+        split_rngs=split_rngs,
+        unroll=unroll,
+    )
+
+    def wrapper(scope, carry):
+        return body_fn(scope, carry), None
+
+    fn = lambda scope, c: scan_fn(wrapper, length=length)(scope, c)[0]
+
+    return fn
+
+
+def flax_scan(
+    target,
+    length: int,
+    variable_broadcast = False,
+    variable_carry = False,
+    variable_axes = {True: 0},
+    split_rngs = {True: True},
+    unroll: int = 1,
+):
+    return flax.core.lift.lift_transform(
+        _flax_scan,
+        target,
+        length=length,
+        variable_broadcast=variable_broadcast,
+        variable_carry=variable_carry,
+        variable_axes=variable_axes,
+        split_rngs=split_rngs,
+        unroll=unroll,
+    )

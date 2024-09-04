@@ -41,8 +41,6 @@ def prepare_hellaswag(
     """Read file and tokenize the hellaswag dataset."""
     write_note("preparing hellaswag")
 
-    seq_len = block_size + 1
-
     all_data = []
     all_labels = []
     all_lengths = []
@@ -57,15 +55,15 @@ def prepare_hellaswag(
             lens = []
             for ending in endings:
                 input_text = context + " " + ending
-                input_ids = tokenizer(
+                output = tokenizer(
                     input_text,
-                    add_special_tokens=False,
-                    max_length=seq_len,
+                    max_length=block_size,
                     padding="max_length",
                     truncation=True,
-                )["input_ids"]
-                lens.append(len(input_ids))
-                to_concat.append(input_ids)
+                )
+                attn_mask_len = np.count_nonzero(output["attention_mask"])
+                lens.append(attn_mask_len)
+                to_concat.append(output["input_ids"])
             all_data.append(np.array(to_concat))  # (4, seq_len)
             all_labels.append(int(correct_end))  # Convert to integer
             all_lengths.append(np.array(lens))  # (4,)
@@ -106,13 +104,9 @@ def fineweb_edu_dataset(
     flat_devices,
     tf_prefetch: int = 5,
     device_prefetch: int = 0,
-    streaming: bool = True,
     shard_idx: int = 0,
-    start_index: int = 0,
 ):
     """Load the fineweb-edu dataset."""
-    seq_len = block_size + 1
-
     platform = jax.devices()[0].platform
     # use /dev/shm if on a TPU vm for more space
     if platform == "tpu":
@@ -138,7 +132,7 @@ def fineweb_edu_dataset(
         def tokenize(example):
             return tokenizer(
                 example["text"],
-                max_length=seq_len,
+                max_length=block_size,
                 padding="max_length",
                 truncation=True,
             )
@@ -148,10 +142,13 @@ def fineweb_edu_dataset(
         hf_ds = hf_ds.with_format("numpy")
 
         for example in hf_ds:
-            yield example["input_ids"]
+            yield (example["input_ids"], np.count_nonzero(example["attention_mask"]))
 
     ds = tf.data.Dataset.from_generator(
-        gen, output_signature=tf.TensorSpec(shape=(seq_len,), dtype=tf.uint16)
+        gen, output_signature=(
+            tf.TensorSpec(shape=(block_size,), dtype=tf.uint16),
+            tf.TensorSpec(shape=(1,), dtype=tf.int32)
+        )
     )
     ds = ds.shuffle(10240)
     ds = ds.batch(
