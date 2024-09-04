@@ -487,14 +487,15 @@ def main(config: TrainConfig):
         # data comes in shape (b, 4, block_size)
         # labels comes in shape (b,)
         # lengths comes in shape (b, 4)
+        bs_in = data.shape[0]
         data = jnp.reshape(data, (-1, data.shape[-1]))
         lengths = jnp.reshape(lengths, (-1,))
         losses = eval_step_unreduced(state, data, lengths)
         choices = jnp.argmin(
-            jnp.reshape(losses, (data.shape[0], 4)), axis=-1
+            jnp.reshape(losses, (bs_in, 4)), axis=-1
         )
         correct = jnp.sum(choices == labels)
-        accuracy = correct / data.shape[0]
+        accuracy = correct / bs_in
         return accuracy
 
     # ====== jit functions ========
@@ -624,7 +625,7 @@ def main(config: TrainConfig):
             start_time = time.time()
 
         # eval hellaswag
-        if step % config.hellaswag_eval_interval == 0 and step > 0:
+        if step % config.hellaswag_eval_interval == 0:
             hs_accs = []
             for _ in range(10 if platform == "cpu" else hellaswag_len):
                 hs_batch = next(hellaswag_ds)
