@@ -468,17 +468,19 @@ def main(config: TrainConfig):
         optimizer_grads = split_scanned_layers(grads)
         optimizer_params = jax.lax.with_sharding_constraint(optimizer_params, split_params_sharding)
         optimizer_grads = jax.lax.with_sharding_constraint(optimizer_grads, split_params_sharding)
+
         optimizer_updates, new_opt_state = state.tx.update(
             optimizer_grads, opt_state, optimizer_params
         )
         updates = unsplit_scanned_layers(
             optimizer_updates, jax.tree.structure(state.params)
         )
-        updates = jax.lax.with_sharding_constraint(updates, train_state_sharding.params)
         new_params = optax.apply_updates(state.params, updates)
+        
         new_state = state.replace(
             step=state.step + 1, params=new_params, opt_state=new_opt_state
         )
+        new_state = jax.lax.with_sharding_constraint(new_state, train_state_sharding)
 
         check_dtypes(before_dtypes, jax.tree.map(lambda x: x.dtype, new_state))
 
