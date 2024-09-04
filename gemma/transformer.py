@@ -177,11 +177,11 @@ class TransformerConfig:
         return cls(
             num_layers=24,
             num_embed=256128,
-            embed_dim=512,
-            hidden_dim=2048,
-            num_heads=8,
+            embed_dim=768,
+            hidden_dim=3072,
+            num_heads=12,
             head_dim=64,
-            num_kv_heads=4,
+            num_kv_heads=6,
             final_logit_softcap=30.0,
             attention_types=(
                 modules.AttentionType.LOCAL_SLIDING,
@@ -192,7 +192,7 @@ class TransformerConfig:
             max_cache_length=cache_size,
             query_pre_attn_norm=QueryPreAttentionNormalisation.BY_ONE_OVER_SQRT_HEAD_DIM,
             attn_logits_soft_cap=50.0,
-            sliding_window_size=1024,
+            sliding_window_size=512,
         )
 
     @classmethod
