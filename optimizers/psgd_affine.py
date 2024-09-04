@@ -32,6 +32,7 @@ def scale_by_affine(
     precision: str = "bfloat16",
     reshaped_params_sharding: Any = None,
     best_effort_scan: bool = True,
+    scanned_layers: base.Params = None,
 ) -> base.GradientTransformationExtraArgs:
     """
     Implements Affine PSGD from https://github.com/lixilinx/psgd_torch.
@@ -54,6 +55,9 @@ def scale_by_affine(
         reshaped_params_sharding: optional Any, sharding spec for reshaped parameters.
         best_effort_scan: bool, try to automatically stack same-shaped matrices
             and use lax.map to update them to save on compile time and memory.
+        scanned_layers: optional base.Params, a pytree same structure as params 
+            indicating how many times each layer was scanned (will be vmapped 
+            that many times). If not provided, will assume no layers are scanned.
 
     Returns:
         optax.GradientTransformationExtraArgs

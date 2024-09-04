@@ -268,9 +268,7 @@ def main(config: TrainConfig):
     optimizer = make_opt()
 
     opt_state_shapes = jax.eval_shape(optimizer.init, train_state.params)
-    opt_state_sharding, _ = infer_sharding(
-        params=opt_state_shapes, mesh=mesh, op=op
-    )
+    opt_state_sharding, _ = infer_sharding(params=opt_state_shapes, mesh=mesh, op=op)
 
     opt_state = jax.jit(optimizer.init, out_shardings=opt_state_sharding)(
         train_state.params
@@ -292,7 +290,9 @@ def main(config: TrainConfig):
 
     # optimizer uses split params
     reshaped_params_shapes = get_reshaped_params_shapes(train_state.params)
-    reshaped_params_sharding, _ = infer_sharding(params=reshaped_params_shapes, mesh=mesh, op=op)
+    reshaped_params_sharding, _ = infer_sharding(
+        params=reshaped_params_shapes, mesh=mesh, op=op
+    )
 
     # remake optimizer with reshaped params sharding passed in
     # again, not strictly necessary, but could ensure things stay well-sharded
@@ -430,15 +430,7 @@ def main(config: TrainConfig):
         before_dtypes = jax.tree.map(lambda x: x.dtype, state)
 
         loss, grads = jax.value_and_grad(loss_fn, has_aux=False)(state.params)
-
-        updates, new_opt_state = state.tx.update(
-            grads, opt_state, state.params
-        )
-        new_params = optax.apply_updates(state.params, updates)
-
-        new_state = state.replace(
-            step=state.step + 1, params=new_params, opt_state=new_opt_state
-        )
+        new_state = state.apply_gradients(grads=grads)
 
         check_dtypes(before_dtypes, jax.tree.map(lambda x: x.dtype, new_state))
 
