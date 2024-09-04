@@ -305,3 +305,66 @@ class Block(nn.Module):
             outputs = self.post_ffw_norm(outputs)
         outputs += attn_output
         return cache, outputs
+
+
+class GemmaBlock(nn.Module):
+    """One local sliding attn block, one global attn block."""
+
+    num_heads: int
+    num_kv_heads: int
+    embed_dim: int
+    head_dim: int
+    hidden_dim: int
+    sliding_window_size: int
+    use_post_attn_norm: bool
+    use_post_ffw_norm: bool
+    attn_logits_soft_cap: float
+    query_pre_attn_scalar: float
+    transpose_gating_einsum: bool
+
+    def setup(self):
+        # Sliding attention block
+        self.sliding_block = Block(
+            num_heads=self.num_heads,
+            num_kv_heads=self.num_kv_heads,
+            embed_dim=self.embed_dim,
+            head_dim=self.head_dim,
+            hidden_dim=self.hidden_dim,
+            sliding_window_size=self.sliding_window_size,
+            use_post_attn_norm=self.use_post_attn_norm,
+            use_post_ffw_norm=self.use_post_ffw_norm,
+            attn_logits_soft_cap=self.attn_logits_soft_cap,
+            attn_type=AttentionType.LOCAL_SLIDING,
+            query_pre_attn_scalar=self.query_pre_attn_scalar,
+            transpose_gating_einsum=self.transpose_gating_einsum,
+        )
+
+        # Global attention block
+        self.global_block = Block(
+            num_heads=self.num_heads,
+            num_kv_heads=self.num_kv_heads,
+            embed_dim=self.embed_dim,
+            head_dim=self.head_dim,
+            hidden_dim=self.hidden_dim,
+            sliding_window_size=self.sliding_window_size,
+            use_post_attn_norm=self.use_post_attn_norm,
+            use_post_ffw_norm=self.use_post_ffw_norm,
+            attn_logits_soft_cap=self.attn_logits_soft_cap,
+            attn_type=AttentionType.GLOBAL,
+            query_pre_attn_scalar=self.query_pre_attn_scalar,
+            transpose_gating_einsum=self.transpose_gating_einsum,
+        )
+
+    def __call__(
+        self,
+        x: jax.Array,
+        segment_pos: jax.Array,
+        attn_mask: jax.Array,
+    ) -> jax.Array:
+        # Process through sliding attention block
+        _, x = self.sliding_block(x, segment_pos, None, attn_mask)
+        
+        # Process through global attention block
+        _, x = self.global_block(x, segment_pos, None, attn_mask)
+        
+        return x
