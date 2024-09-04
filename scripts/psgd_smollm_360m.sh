@@ -35,7 +35,7 @@ python3 train.py \
     --optimizer.max_size_triangular=16384 \
     --optimizer.max_skew_triangular=16 \
     --optimizer.precond_lr=0.1 \
-    --optimizer.precond_init_scale=0.01 \
+    --optimizer.precond_init_scale=0.1 \
     --optimizer.preconditioner_dtype=bfloat16 \
     --model.model_type=smollm_360m \
     --model.sliding_window_size=512 \
