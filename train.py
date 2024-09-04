@@ -411,7 +411,7 @@ def main(config: TrainConfig):
 
         before_dtypes = jax.tree.map(lambda x: x.dtype, state)
 
-        loss, grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
+        loss, grads = jax.value_and_grad(loss_fn, has_aux=False)(state.params)
         new_state = state.apply_gradients(grads=grads)
 
         check_dtypes(before_dtypes, jax.tree.map(lambda x: x.dtype, new_state))
