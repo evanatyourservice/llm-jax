@@ -13,8 +13,8 @@ class ModelConfig:
         block_size: int, default 2048, total sequence length
     """
 
-    model_type: str = "gemma2_test"
-    block_size: int = 2048
+    model_type: str = "gemma2_2b"
+    block_size: int = 4096
 
 
 @dataclass(frozen=True)
@@ -106,8 +106,8 @@ class TrainConfig:
     out_dir: str = f"gs://uscentral2stuff/llm-jax/run_{date_and_time}"
     attempt_to_load_checkpoint: bool = False
     only_print_model: bool = False
-    min_size_to_shard_mb: int = 1
-    hellaswag_eval_interval: int = 1000
+    min_size_to_shard_mb: int = 0.1
+    hellaswag_eval_interval: int = 500
     checkpoint_interval: int = 1000
     keep_checkpoints: int = 2
     checkpoint_milestone: int = 10000

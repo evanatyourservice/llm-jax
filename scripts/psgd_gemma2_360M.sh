@@ -13,7 +13,7 @@ python3 train.py \
     --batch_size=256 \
     --optimizer.gradient_accumulation_steps=1 \
     --compute_dtype=bfloat16 \
-    --params_dtype=float32 \
+    --params_dtype=bfloat16 \
     --optimizer.type=affine \
     --optimizer.learning_rate=0.003 \
     --optimizer.warmup_steps=512 \
@@ -26,4 +26,4 @@ python3 train.py \
     --optimizer.precond_init_scale=0.1 \
     --optimizer.preconditioner_dtype=bfloat16 \
     --model.model_type=gemma2_360m \
-    --model.block_size=2048
+    --model.block_size=1536
