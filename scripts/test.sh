@@ -22,5 +22,6 @@ python3 train.py \
     --optimizer.learning_rate=0.001 \
     --optimizer.warmup_steps=20 \
     --optimizer.preconditioner_dtype=float32 \
-    --model.block_size=64 \
-    --model.model_type=gemma2_test
+    --model.model_type=gemma2_test \
+    --model.sliding_window_size=32 \
+    --model.block_size=64

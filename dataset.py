@@ -61,8 +61,7 @@ def prepare_hellaswag(
                     padding="max_length",
                     truncation=True,
                 )
-                attn_mask_len = np.count_nonzero(output["attention_mask"])
-                lens.append(attn_mask_len)
+                lens.append(np.count_nonzero(output["attention_mask"]))
                 to_concat.append(output["input_ids"])
             all_data.append(np.array(to_concat))  # (4, seq_len)
             all_labels.append(int(correct_end))  # Convert to integer
@@ -147,7 +146,7 @@ def fineweb_edu_dataset(
     ds = tf.data.Dataset.from_generator(
         gen, output_signature=(
             tf.TensorSpec(shape=(block_size,), dtype=tf.uint16),
-            tf.TensorSpec(shape=(1,), dtype=tf.int32)
+            tf.TensorSpec(shape=[], dtype=tf.int32)
         )
     )
     ds = ds.shuffle(10240)
