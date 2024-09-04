@@ -38,7 +38,7 @@ builtins.bfloat16 = xla_client.bfloat16
 wandb.require("core")
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".95"
-os.environ["JAX_TRACEBACK_FILTERING"] = "off"
+# os.environ["JAX_TRACEBACK_FILTERING"] = "off"
 # Transfer guard will fail the program whenever that data between a host and
 # a device is transferred implicitly. This often catches subtle bugs that
 # cause slowdowns and memory fragmentation. Explicit transfers are done
@@ -50,21 +50,6 @@ jax.config.update("jax_threefry_partitionable", True)
 
 class TrainState(ts):
     lr_fn: Callable = struct.field(pytree_node=False)
-
-
-def split_scanned_layers(params):
-    return flax.traverse_util.ModelParamTraversal(
-        lambda path, _: "scan" in path
-    ).update(lambda p: {f"{i}": x for i, x in enumerate(p)}, params)
-
-
-def unsplit_scanned_layers(split_params, goal_structure):
-    split_params_flat = goal_structure.flatten_up_to(split_params)
-    split_params_flat = [
-        jnp.stack(list(x.values())) if isinstance(x, dict) else x
-        for x in split_params_flat
-    ]
-    return goal_structure.unflatten(split_params_flat)
 
 
 def main(config: TrainConfig):
@@ -279,44 +264,24 @@ def main(config: TrainConfig):
         rng_init
     )
 
-    # get shapes and shardings for params after scanned layers being split
-    split_params_shapes = jax.eval_shape(
-        split_scanned_layers, train_state_shapes.params
-    )
-    split_params_sharding, _ = infer_sharding(
-        params=split_params_shapes, mesh=mesh, op=op
-    )
-
-    # jit split_scanned_layers and unsplit_scanned_layers with shardings
-    split_scanned_layers_fn = jax.jit(
-        split_scanned_layers,
-        in_shardings=(train_state_sharding.params,),
-        out_shardings=split_params_sharding,
-    )
-    unsplit_scanned_layers_fn = jax.jit(
-        partial(unsplit_scanned_layers, goal_structure=jax.tree.structure(train_state_shapes.params)),
-        in_shardings=(split_params_sharding,),
-        out_shardings=train_state_sharding.params,
-    )
-
-    # make optimizer and get its shardings with split params
+    # make optimizer and get its shardings
     optimizer = make_opt()
 
-    opt_state_shapes = jax.eval_shape(optimizer.init, split_params_shapes)
+    opt_state_shapes = jax.eval_shape(optimizer.init, train_state.params)
     opt_state_sharding, _ = infer_sharding(
         params=opt_state_shapes, mesh=mesh, op=op
     )
 
-    split_params = split_scanned_layers_fn(train_state.params)
     opt_state = jax.jit(optimizer.init, out_shardings=opt_state_sharding)(
-        split_params
+        train_state.params
     )
 
     # PSGD reshapes params into matrices. Here we get sharding rules for them
-    # similarly to how we shard params. We can pass this into PSGD for internal
-    # sharding constraints, although it's not absolutely necessary.
+    # which are similar to the rules for params. We can pass this into PSGD for
+    # internal sharding constraints, although it's not absolutely necessary.
     def get_reshaped_params_shapes(params):
         # returns tuples of (reshape_fn, unreshape_fn, shape)
+        # TODO account for scanned layers
         affine_reshapers = jax.tree.map(_shape_as_matrix, params)
         p_struct = jax.tree.structure(params)
         affine_reshapers = p_struct.flatten_up_to(affine_reshapers)
@@ -326,7 +291,7 @@ def main(config: TrainConfig):
         return p_struct.unflatten(matrix_shapes)
 
     # optimizer uses split params
-    reshaped_params_shapes = get_reshaped_params_shapes(split_params_shapes)
+    reshaped_params_shapes = get_reshaped_params_shapes(train_state.params)
     reshaped_params_sharding, _ = infer_sharding(params=reshaped_params_shapes, mesh=mesh, op=op)
 
     # remake optimizer with reshaped params sharding passed in
@@ -466,27 +431,18 @@ def main(config: TrainConfig):
 
         loss, grads = jax.value_and_grad(loss_fn, has_aux=False)(state.params)
 
-        optimizer_params = split_scanned_layers(state.params)
-        optimizer_grads = split_scanned_layers(grads)
-        optimizer_params = jax.lax.with_sharding_constraint(optimizer_params, split_params_sharding)
-        optimizer_grads = jax.lax.with_sharding_constraint(optimizer_grads, split_params_sharding)
-
-        optimizer_updates, new_opt_state = state.tx.update(
-            optimizer_grads, opt_state, optimizer_params
-        )
-        updates = unsplit_scanned_layers(
-            optimizer_updates, jax.tree.structure(state.params)
+        updates, new_opt_state = state.tx.update(
+            grads, opt_state, state.params
         )
         new_params = optax.apply_updates(state.params, updates)
 
         new_state = state.replace(
             step=state.step + 1, params=new_params, opt_state=new_opt_state
         )
-        new_state = jax.lax.with_sharding_constraint(new_state, train_state_sharding)
 
         check_dtypes(before_dtypes, jax.tree.map(lambda x: x.dtype, new_state))
 
-        grad_norm = optax.global_norm(optimizer_grads)
+        grad_norm = optax.global_norm(grads)
         lr = state.lr_fn(state.step)
 
         return loss, new_state, grad_norm, lr
