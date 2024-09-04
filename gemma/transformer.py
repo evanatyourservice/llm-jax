@@ -177,7 +177,7 @@ class TransformerConfig:
     @classmethod
     def smollm_135m(cls, cache_size: int, sliding_window_size: int):
         return cls(
-            num_layers=30,
+            num_layers=28,
             num_embed=128256,
             embed_dim=576,
             hidden_dim=1536,
@@ -188,7 +188,7 @@ class TransformerConfig:
             attention_types=(
                 modules.AttentionType.LOCAL_SLIDING,
                 modules.AttentionType.GLOBAL,
-            ) * 15,
+            ) * 14,
             use_post_attn_norm=True,
             use_post_ffw_norm=True,
             max_cache_length=cache_size,
@@ -200,18 +200,18 @@ class TransformerConfig:
     @classmethod
     def smollm_360m(cls, cache_size: int, sliding_window_size: int):
         return cls(
-            num_layers=32,
+            num_layers=30,
             num_embed=128256,
-            embed_dim=960,
-            hidden_dim=2560,
-            num_heads=15,
+            embed_dim=768,
+            hidden_dim=2048,
+            num_heads=12,
             head_dim=64,
-            num_kv_heads=5,
+            num_kv_heads=4,
             final_logit_softcap=30.0,
             attention_types=(
                 modules.AttentionType.LOCAL_SLIDING,
                 modules.AttentionType.GLOBAL,
-            ) * 16,
+            ) * 15,
             use_post_attn_norm=True,
             use_post_ffw_norm=True,
             max_cache_length=cache_size,
