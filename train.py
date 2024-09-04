@@ -131,6 +131,8 @@ def main(config: TrainConfig):
 
         # decays to 0.01 by around 2000 steps
         update_prob_schedule = lambda n: jnp.maximum(0.5 * jnp.exp(-0.002 * n), 0.01)
+        # opposite of update_prob_schedule from 0.01 to 0.1
+        precond_lr_schedule = lambda n: (-0.9 * jnp.exp(-0.002 * n) + 1.0) / 10
 
         if config.optimizer.type in ["adam", "adamw"]:
             optimizer.append(
@@ -146,14 +148,14 @@ def main(config: TrainConfig):
             optimizer.append(
                 affine(
                     lr_schedule,
-                    update_prob_schedule,
+                    preconditioner_update_probability=0.01,
                     b1=config.optimizer.betas[0],
                     nesterov=config.optimizer.nesterov,
                     weight_decay=config.optimizer.weight_decay,
                     mask=param_decay_mask,
                     max_size_triangular=config.optimizer.max_size_triangular,
                     max_skew_triangular=config.optimizer.max_skew_triangular,
-                    precond_lr=config.optimizer.precond_lr,
+                    precond_lr=0.1,
                     precond_init_scale=config.optimizer.precond_init_scale,
                     mu_dtype=jnp.bfloat16,
                     precond_dtype=config.optimizer.preconditioner_dtype,
