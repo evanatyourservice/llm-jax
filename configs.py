@@ -8,13 +8,13 @@ class ModelConfig:
     """model configuration.
 
     Attributes:
-        model_type: str, 'gemma2_test', 'gemma_2b', 'gemma_7b', 'smollm_135m',
-            'smollm_360m', 'smollm_1_7b', 'gemma2_2b', 'gemma2_9b', 'gemma2_27b'
+        model_type: str, 'gemma2_test', 'gemma_2b', 'gemma_7b', 'gpt3_small',
+            'gpt3_medium', 'gpt3_xl', 'gemma2_2b', 'gemma2_9b', 'gemma2_27b'
         sliding_window_size: int, default 512, sliding window size
         block_size: int, default 1024, total sequence length
     """
 
-    model_type: str = "smollm_135m"
+    model_type: str = "gpt3_small"
     sliding_window_size: int = 512
     block_size: int = 1024
 

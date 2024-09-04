@@ -6,7 +6,6 @@ import time
 from typing import Callable, Tuple
 from dataclasses import asdict
 import os
-import random
 import numpy as np
 import wandb
 import tyro
@@ -29,7 +28,7 @@ from optimizers.psgd_affine import affine, _shape_as_matrix
 from optimizers.tearfree import optimizer as tearfree_opt
 from optimizers.tearfree import shampoo, second_order
 from sharding import infer_sharding, fsdp_sharding
-from utils import check_dtypes, reshard, write_note
+from utils import check_dtypes, reshard, write_note, count_params, get_default_config
 from gemma import transformer as transformer_lib
 
 
@@ -52,22 +51,22 @@ class TrainState(ts):
     lr_fn: Callable = struct.field(pytree_node=False)
 
 
-def count_params(params) -> int:
-    p = jax.tree_util.tree_map(
-        lambda a: a.size if isinstance(a, jnp.ndarray) else 0, params
+def split_scanned_layers(params):
+    return flax.traverse_util.ModelParamTraversal(
+        lambda path, _: "scan" in path
+    ).update(
+        lambda p: {f"{i}": x for i, x in enumerate(p)}, 
+        params
     )
-    return jax.tree_util.tree_reduce(lambda a, b: a + b, p)
 
 
-def get_default_config() -> TrainConfig:
-    # use this file to set default values
-    path = os.environ.get("LLM_CONFIG", os.path.join("config", "gemma2.yaml"))
-    if not os.path.exists(path):
-        write_note("using default config")
-        return TrainConfig()
-    write_note(f"using config file at {path}")
-    with open(path, "r") as f:
-        return tyro.from_yaml(TrainConfig, f)
+def unsplit_scanned_layers(split_params, goal_structure):
+    split_params_flat = goal_structure.flatten_up_to(split_params)
+    split_params_flat = [
+        jnp.stack(list(x.values())) if isinstance(x, dict) else x
+        for x in split_params_flat
+    ]
+    return goal_structure.unflatten(split_params_flat)
 
 
 def main(config: TrainConfig):
@@ -155,7 +154,7 @@ def main(config: TrainConfig):
                     mask=param_decay_mask,
                     max_size_triangular=config.optimizer.max_size_triangular,
                     max_skew_triangular=config.optimizer.max_skew_triangular,
-                    precond_lr=precond_lr_schedule,
+                    precond_lr=config.optimizer.precond_lr,
                     precond_init_scale=config.optimizer.precond_init_scale,
                     mu_dtype=jnp.bfloat16,
                     precond_dtype=config.optimizer.preconditioner_dtype,
@@ -201,27 +200,45 @@ def main(config: TrainConfig):
         """Initialize the train state."""
         # get easydel model config
         if config.model.model_type == "gemma2_test":
-            model_config = transformer_lib.TransformerConfig.gemma2_test(30, config.model.sliding_window_size)
+            model_config = transformer_lib.TransformerConfig.gemma2_test(
+                30, config.model.sliding_window_size
+            )
         elif config.model.model_type == "gemma_2b":
-            model_config = transformer_lib.TransformerConfig.gemma_2b(30, config.model.sliding_window_size)
+            model_config = transformer_lib.TransformerConfig.gemma_2b(
+                30, config.model.sliding_window_size
+            )
         elif config.model.model_type == "gemma_7b":
-            model_config = transformer_lib.TransformerConfig.gemma_7b(30, config.model.sliding_window_size)
-        elif config.model.model_type == "smollm_135m":
-            model_config = transformer_lib.TransformerConfig.smollm_135m(30, config.model.sliding_window_size)
-        elif config.model.model_type == "smollm_360m":
-            model_config = transformer_lib.TransformerConfig.smollm_360m(30, config.model.sliding_window_size)
-        elif config.model.model_type == "smollm_1_7b":
-            model_config = transformer_lib.TransformerConfig.smollm_1_7b(30, config.model.sliding_window_size)
+            model_config = transformer_lib.TransformerConfig.gemma_7b(
+                30, config.model.sliding_window_size
+            )
+        elif config.model.model_type == "gpt3_small":
+            model_config = transformer_lib.TransformerConfig.gpt3_small(
+                30, config.model.sliding_window_size
+            )
+        elif config.model.model_type == "gpt3_medium":
+            model_config = transformer_lib.TransformerConfig.gpt3_medium(
+                30, config.model.sliding_window_size
+            )
+        elif config.model.model_type == "gpt3_xl":
+            model_config = transformer_lib.TransformerConfig.gpt3_xl(
+                30, config.model.sliding_window_size
+            )
         elif config.model.model_type == "gemma2_2b":
-            model_config = transformer_lib.TransformerConfig.gemma2_2b(30, config.model.sliding_window_size)
+            model_config = transformer_lib.TransformerConfig.gemma2_2b(
+                30, config.model.sliding_window_size
+            )
         elif config.model.model_type == "gemma2_9b":
-            model_config = transformer_lib.TransformerConfig.gemma2_9b(30, config.model.sliding_window_size)
+            model_config = transformer_lib.TransformerConfig.gemma2_9b(
+                30, config.model.sliding_window_size
+            )
         elif config.model.model_type == "gemma2_27b":
-            model_config = transformer_lib.TransformerConfig.gemma2_27b(30, config.model.sliding_window_size)
+            model_config = transformer_lib.TransformerConfig.gemma2_27b(
+                30, config.model.sliding_window_size
+            )
         else:
             raise ValueError(f"Unknown model type: {config.model.model_type}")
 
-        model = transformer_lib.Transformer(model_config)
+        model = transformer_lib.Transformer(model_config, scan_unroll=1)
 
         # Create dummy inputs based on the model's expected input shape
 
@@ -277,12 +294,14 @@ def main(config: TrainConfig):
         # make optimizer and its shardings
         optimizer = make_opt()
 
-        opt_state_shapes = jax.eval_shape(optimizer.init, train_state.params)
+        optimizer_params = split_scanned_layers(train_state.params)
+
+        opt_state_shapes = jax.eval_shape(optimizer.init, optimizer_params)
         opt_state_sharding, _ = infer_sharding(
             params=opt_state_shapes, mesh=mesh, op=op
         )
         opt_state = jax.jit(optimizer.init, out_shardings=opt_state_sharding)(
-            train_state.params
+            optimizer_params
         )
 
         # PSGD reshapes params into matrices. Here we get sharding rules for them
@@ -299,7 +318,7 @@ def main(config: TrainConfig):
             matrix_shapes = p_struct.unflatten(matrix_shapes)
             return infer_sharding(params=matrix_shapes, mesh=mesh, op=op)
 
-        reshaped_params_sharding, _ = get_reshaped_params_sharding(train_state.params)
+        reshaped_params_sharding, _ = get_reshaped_params_sharding(optimizer_params)
 
         # remake optimizer with reshaped params sharding passed in
         # again, not strictly necessary, but could ensure things stay well-sharded
@@ -434,7 +453,19 @@ def main(config: TrainConfig):
         before_dtypes = jax.tree.map(lambda x: x.dtype, state)
 
         loss, grads = jax.value_and_grad(loss_fn, has_aux=False)(state.params)
-        new_state = state.apply_gradients(grads=grads)
+
+        optimizer_params = split_scanned_layers(state.params)
+        optimizer_grads = split_scanned_layers(grads)
+        optimizer_updates, new_opt_state = state.tx.update(
+            optimizer_grads, opt_state, optimizer_params
+        )
+        updates = unsplit_scanned_layers(
+            optimizer_updates, jax.tree.structure(state.params)
+        )
+        new_params = optax.apply_updates(state.params, updates)
+        new_state = state.replace(
+            step=state.step + 1, params=new_params, opt_state=new_opt_state
+        )
 
         check_dtypes(before_dtypes, jax.tree.map(lambda x: x.dtype, new_state))
 
@@ -491,9 +522,7 @@ def main(config: TrainConfig):
         data = jnp.reshape(data, (-1, data.shape[-1]))
         lengths = jnp.reshape(lengths, (-1,))
         losses = eval_step_unreduced(state, data, lengths)
-        choices = jnp.argmin(
-            jnp.reshape(losses, (bs_in, 4)), axis=-1
-        )
+        choices = jnp.argmin(jnp.reshape(losses, (bs_in, 4)), axis=-1)
         correct = jnp.sum(choices == labels)
         accuracy = correct / bs_in
         return accuracy

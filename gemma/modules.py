@@ -357,14 +357,11 @@ class GemmaBlock(nn.Module):
 
     def __call__(
         self,
-        x: jax.Array,
-        segment_pos: jax.Array,
-        attn_mask: jax.Array,
+        inputs: tuple[jax.Array, jax.Array, jax.Array],
     ) -> jax.Array:
+        x, segment_pos, attn_mask = inputs
         # Process through sliding attention block
         _, x = self.sliding_block(x, segment_pos, None, attn_mask)
-        
         # Process through global attention block
         _, x = self.global_block(x, segment_pos, None, attn_mask)
-        
-        return x
+        return (x, segment_pos, attn_mask)

@@ -144,10 +144,11 @@ def fineweb_edu_dataset(
             yield (example["input_ids"], np.count_nonzero(example["attention_mask"]))
 
     ds = tf.data.Dataset.from_generator(
-        gen, output_signature=(
+        gen,
+        output_signature=(
             tf.TensorSpec(shape=(block_size,), dtype=tf.uint16),
-            tf.TensorSpec(shape=[], dtype=tf.int32)
-        )
+            tf.TensorSpec(shape=[], dtype=tf.int32),
+        ),
     )
     ds = ds.shuffle(10240)
     ds = ds.batch(

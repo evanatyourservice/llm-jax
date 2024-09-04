@@ -1,5 +1,6 @@
 import collections
 import itertools
+import os
 from multiprocessing.pool import ThreadPool
 from typing import Mapping
 import dataclasses
@@ -7,8 +8,11 @@ import numpy as np
 
 import jax
 import jax.numpy as jnp
-from jax import jit
+import tyro
+from jax import jit, numpy as jnp
 import flax
+
+from configs import TrainConfig
 
 
 def _traverse_with_names(tree, with_inner_nodes=False):
@@ -209,3 +213,18 @@ def check_dtypes(orig_dtype_tree, current_dtype_tree):
         f"Before: {orig_dtype_tree}\n"
         f"After:  {current_dtype_tree}\n"
     )
+
+
+def count_params(params) -> int:
+    return sum(np.prod(x.shape) for x in jax.tree_util.tree_leaves(params))
+
+
+def get_default_config() -> TrainConfig:
+    # use this file to set default values
+    path = os.environ.get("LLM_CONFIG", os.path.join("config", "gemma2.yaml"))
+    if not os.path.exists(path):
+        write_note("using default config")
+        return TrainConfig()
+    write_note(f"using config file at {path}")
+    with open(path, "r") as f:
+        return tyro.from_yaml(TrainConfig, f)

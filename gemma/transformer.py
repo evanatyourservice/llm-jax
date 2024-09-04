@@ -174,44 +174,35 @@ class TransformerConfig:
             sliding_window_size=sliding_window_size,
         )
 
-    @classmethod
-    def smollm_135m(cls, cache_size: int, sliding_window_size: int):
-        return cls(
-            num_layers=28,
-            num_embed=128256,
-            embed_dim=576,
-            hidden_dim=1536,
-            num_heads=9,
-            head_dim=64,
-            num_kv_heads=3,
-            final_logit_softcap=30.0,
-            attention_types=(
-                modules.AttentionType.LOCAL_SLIDING,
-                modules.AttentionType.GLOBAL,
-            ) * 14,
-            use_post_attn_norm=True,
-            use_post_ffw_norm=True,
-            max_cache_length=cache_size,
-            query_pre_attn_norm=QueryPreAttentionNormalisation.BY_ONE_OVER_SQRT_HEAD_DIM,
-            attn_logits_soft_cap=50.0,
-            sliding_window_size=sliding_window_size,
-        )
+    """
+    | **Model Name**              | **n_params** | **n_layers** | **d_model** | **n_heads** | **d_head** |
+    |-----------------------------|--------------|--------------|-------------|-------------|------------|
+    | GPT-3 Small                 | 125M         | 12           | 768         | 12          | 64         |
+    | GPT-3 Medium                | 350M         | 24           | 1024        | 16          | 64         |
+    | GPT-3 Large                 | 760M         | 24           | 1536        | 16          | 96         |
+    | GPT-3 XL                    | 1.3B         | 24           | 2048        | 24          | 128        |
+    | GPT-3 2.7B                  | 2.7B         | 32           | 2560        | 32          | 80         |
+    | GPT-3 6.7B                  | 6.7B         | 32           | 4096        | 32          | 128        |
+    | GPT-3 13B                   | 13.0B        | 40           | 5140        | 40          | 128        |
+    | GPT-3 175B or "GPT-3"       | 175.0B       | 96           | 12288       | 96          | 128        |
+    """
 
     @classmethod
-    def smollm_360m(cls, cache_size: int, sliding_window_size: int):
+    def gpt3_small(cls, cache_size: int, sliding_window_size: int):
         return cls(
-            num_layers=30,
+            num_layers=12,
             num_embed=128256,
             embed_dim=768,
-            hidden_dim=2048,
+            hidden_dim=3072,
             num_heads=12,
             head_dim=64,
-            num_kv_heads=4,
+            num_kv_heads=6,
             final_logit_softcap=30.0,
             attention_types=(
                 modules.AttentionType.LOCAL_SLIDING,
                 modules.AttentionType.GLOBAL,
-            ) * 15,
+            )
+            * 6,
             use_post_attn_norm=True,
             use_post_ffw_norm=True,
             max_cache_length=cache_size,
@@ -221,20 +212,45 @@ class TransformerConfig:
         )
 
     @classmethod
-    def smollm_1_7b(cls, cache_size: int, sliding_window_size: int):
+    def gpt3_medium(cls, cache_size: int, sliding_window_size: int):
+        return cls(
+            num_layers=24,
+            num_embed=128256,
+            embed_dim=1024,
+            hidden_dim=4096,
+            num_heads=16,
+            head_dim=64,
+            num_kv_heads=8,
+            final_logit_softcap=30.0,
+            attention_types=(
+                modules.AttentionType.LOCAL_SLIDING,
+                modules.AttentionType.GLOBAL,
+            )
+            * 12,
+            use_post_attn_norm=True,
+            use_post_ffw_norm=True,
+            max_cache_length=cache_size,
+            query_pre_attn_norm=QueryPreAttentionNormalisation.BY_ONE_OVER_SQRT_HEAD_DIM,
+            attn_logits_soft_cap=50.0,
+            sliding_window_size=sliding_window_size,
+        )
+
+    @classmethod
+    def gpt3_xl(cls, cache_size: int, sliding_window_size: int):
         return cls(
             num_layers=24,
             num_embed=128256,
             embed_dim=2048,
             hidden_dim=8192,
-            num_heads=32,
-            head_dim=64,
-            num_kv_heads=32,
+            num_heads=24,
+            head_dim=128,
+            num_kv_heads=12,
             final_logit_softcap=30.0,
             attention_types=(
                 modules.AttentionType.LOCAL_SLIDING,
                 modules.AttentionType.GLOBAL,
-            ) * 12,
+            )
+            * 12,
             use_post_attn_norm=True,
             use_post_ffw_norm=True,
             max_cache_length=cache_size,
@@ -332,19 +348,70 @@ class TransformerConfig:
         return cache
 
 
+def _flax_scan(
+    body_fn,
+    length: int,
+    variable_broadcast=False,
+    variable_carry=False,
+    variable_axes={True: 0},
+    split_rngs={True: True},
+    unroll: int = 1,
+):
+    scan_fn = partial(
+        flax.core.lift.scan,
+        variable_broadcast=variable_broadcast,
+        variable_carry=variable_carry,
+        variable_axes=variable_axes,
+        split_rngs=split_rngs,
+        unroll=unroll,
+    )
+
+    def wrapper(scope, carry):
+        return body_fn(scope, carry), None
+
+    fn = lambda scope, c: scan_fn(wrapper, length=length)(scope, c)[0]
+
+    return fn
+
+
+def flax_scan(
+    target,
+    length: int,
+    variable_broadcast=False,
+    variable_carry=False,
+    variable_axes={True: 0},
+    split_rngs={True: True},
+    unroll: int = 1,
+):
+    return nn.transforms.lift_transform(
+        _flax_scan,
+        target,
+        length=length,
+        variable_broadcast=variable_broadcast,
+        variable_carry=variable_carry,
+        variable_axes=variable_axes,
+        split_rngs=split_rngs,
+        unroll=unroll,
+    )
+
+
 class Transformer(nn.Module):
     """Gemma transformer."""
 
     config: TransformerConfig
+    scan_unroll: int = 1
 
     def setup(self):
         self.embedder = modules.Embedder(
             vocab_size=self.config.num_embed, embed_dim=self.config.embed_dim
         )
 
-        self.blocks = [
-            modules.Block(
-                name=f"layer_{i}",
+        if self.scan_unroll > 0:
+            self.scanned_blocks = flax_scan(
+                modules.GemmaBlock,
+                length=self.config.num_layers // 2,
+                unroll=self.scan_unroll,
+            )(
                 num_heads=self.config.num_heads,
                 num_kv_heads=self.config.num_kv_heads,
                 embed_dim=self.config.embed_dim,
@@ -354,14 +421,31 @@ class Transformer(nn.Module):
                 use_post_attn_norm=self.config.use_post_attn_norm,
                 use_post_ffw_norm=self.config.use_post_ffw_norm,
                 attn_logits_soft_cap=self.config.attn_logits_soft_cap,
-                attn_type=attn_type,
                 query_pre_attn_scalar=self.config.query_pre_attn_scalar(),
                 transpose_gating_einsum=self.config.transpose_gating_einsum,
             )
-            for i, attn_type in zip(
-                range(self.config.num_layers), self.config.attention_types
-            )
-        ]
+        else:
+            self.blocks = [
+                modules.Block(
+                    name=f"layer_{i}",
+                    num_heads=self.config.num_heads,
+                    num_kv_heads=self.config.num_kv_heads,
+                    embed_dim=self.config.embed_dim,
+                    head_dim=self.config.head_dim,
+                    hidden_dim=self.config.hidden_dim,
+                    sliding_window_size=self.config.sliding_window_size,
+                    use_post_attn_norm=self.config.use_post_attn_norm,
+                    use_post_ffw_norm=self.config.use_post_ffw_norm,
+                    attn_logits_soft_cap=self.config.attn_logits_soft_cap,
+                    attn_type=attn_type,
+                    query_pre_attn_scalar=self.config.query_pre_attn_scalar(),
+                    transpose_gating_einsum=self.config.transpose_gating_einsum,
+                )
+                for i, attn_type in zip(
+                    range(self.config.num_layers), self.config.attention_types
+                )
+            ]
+
         self.final_norm = layers.RMSNorm()
 
     def __call__(
@@ -370,7 +454,6 @@ class Transformer(nn.Module):
         positions: jax.Array,  # [B, L]
         cache: Cache | None,  # (sequence length L')
         attention_mask: jax.Array,  # [B, L, L']
-        scan_unroll: int = 0,
     ) -> tuple[jax.Array, Cache | None]:
         """Transformer forward pass.
 
@@ -382,8 +465,6 @@ class Transformer(nn.Module):
           positions: input absolute positions.
           cache: Attention KV cache or None.
           attention_mask: transformer input mask.
-          scan_unroll: If 0, scan is not used. Otherwise, layers are scanned over
-            with unroll = `scan_unroll`.
         Returns:
           predicted_logits, new_cache
 
@@ -392,11 +473,15 @@ class Transformer(nn.Module):
         """
         x = self.embedder.encode(last_tokens)
 
-        if scan_unroll > 0 and cache is None:
-            # TODO (evanatyourservice)
-            pass
+        if self.scan_unroll > 0 and cache is not None:
+            raise ValueError(
+                "Cannot use scan and cache at the same time, either set "
+                "scan_unroll to 0 or cache to None"
+            )
+
+        if self.scan_unroll > 0:
+            x, _, _ = self.scanned_blocks((x, positions, attention_mask))
         else:
-            # use python for loop
             for i, block in enumerate(self.blocks):
                 layer_name = f"layer_{i}"
                 layer_cache = cache[layer_name] if cache else None
@@ -448,50 +533,3 @@ def build_positions_from_mask(input_mask: jax.Array) -> jax.Array:
     # Subtract one for all positions from the first valid one as they are
     # 0-indexed
     return positions - (positions >= 1)
-
-
-def _flax_scan(
-    body_fn,
-    length: int,
-    variable_broadcast = False,
-    variable_carry = False,
-    variable_axes = {True: 0},
-    split_rngs = {True: True},
-    unroll: int = 1,
-):
-    scan_fn = partial(
-        flax.core.lift.scan,
-        variable_broadcast=variable_broadcast,
-        variable_carry=variable_carry,
-        variable_axes=variable_axes,
-        split_rngs=split_rngs,
-        unroll=unroll,
-    )
-
-    def wrapper(scope, carry):
-        return body_fn(scope, carry), None
-
-    fn = lambda scope, c: scan_fn(wrapper, length=length)(scope, c)[0]
-
-    return fn
-
-
-def flax_scan(
-    target,
-    length: int,
-    variable_broadcast = False,
-    variable_carry = False,
-    variable_axes = {True: 0},
-    split_rngs = {True: True},
-    unroll: int = 1,
-):
-    return flax.core.lift.lift_transform(
-        _flax_scan,
-        target,
-        length=length,
-        variable_broadcast=variable_broadcast,
-        variable_carry=variable_carry,
-        variable_axes=variable_axes,
-        split_rngs=split_rngs,
-        unroll=unroll,
-    )
