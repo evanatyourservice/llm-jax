@@ -22,7 +22,7 @@ python3 train.py \
     --hellaswag_eval_interval=500 \
     --checkpoint_interval=1000 \
     --train_steps=1000000 \
-    --batch_size=1024 \
+    --batch_size=256 \
     --optimizer.gradient_accumulation_steps=1 \
     --compute_dtype=bfloat16 \
     --params_dtype=bfloat16 \
@@ -38,6 +38,6 @@ python3 train.py \
     --optimizer.precond_init_scale=0.1 \
     --optimizer.preconditioner_dtype=bfloat16 \
     --model.model_type=smollm_360m \
-    --model.sliding_window_size=1024 \
-    --model.block_size=2048
+    --model.sliding_window_size=512 \
+    --model.block_size=1024
 "
