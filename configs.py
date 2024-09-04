@@ -8,7 +8,7 @@ class ModelConfig:
     """model configuration.
 
     Attributes:
-        model_type: str, 'gemma2_test', 'gemma2_360m', 'gemma2_2b',
+        model_type: str, 'gemma2_test', 'gemma2_370m', 'gemma2_2b',
             'gemma2_9b', 'gemma2_27b'
         block_size: int, default 2048, total sequence length
     """

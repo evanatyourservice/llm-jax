@@ -305,8 +305,8 @@ def main(config: TrainConfig):
         # get easydel model config
         if config.model.model_type == "gemma2_test":
             model_config = transformer_lib.TransformerConfig.gemma2_test(1)
-        elif config.model.model_type == "gemma2_360m":
-            model_config = transformer_lib.TransformerConfig.gemma2_360m(1)
+        elif config.model.model_type == "gemma2_370m":
+            model_config = transformer_lib.TransformerConfig.gemma2_370m(1)
         elif config.model.model_type == "gemma2_2b":
             model_config = transformer_lib.TransformerConfig.gemma2_2b(1)
         elif config.model.model_type == "gemma2_9b":

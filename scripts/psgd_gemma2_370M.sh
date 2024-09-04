@@ -25,5 +25,5 @@ python3 train.py \
     --optimizer.precond_lr=0.1 \
     --optimizer.precond_init_scale=0.1 \
     --optimizer.preconditioner_dtype=bfloat16 \
-    --model.model_type=gemma2_360m \
+    --model.model_type=gemma2_370m \
     --model.block_size=1024
