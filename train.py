@@ -290,12 +290,12 @@ def main(config: TrainConfig):
     # jit split_scanned_layers and unsplit_scanned_layers with shardings
     split_scanned_layers_fn = jax.jit(
         split_scanned_layers,
-        in_shardings=train_state_sharding.params,
+        in_shardings=(train_state_sharding.params,),
         out_shardings=split_params_sharding,
     )
     unsplit_scanned_layers_fn = jax.jit(
         partial(unsplit_scanned_layers, goal_structure=jax.tree.structure(train_state_shapes.params)),
-        in_shardings=split_params_sharding,
+        in_shardings=(split_params_sharding,),
         out_shardings=train_state_sharding.params,
     )
 
