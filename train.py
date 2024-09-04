@@ -38,6 +38,7 @@ builtins.bfloat16 = xla_client.bfloat16
 wandb.require("core")
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".95"
+os.environ["JAX_TRACEBACK_FILTERING"] = "off"
 # Transfer guard will fail the program whenever that data between a host and
 # a device is transferred implicitly. This often catches subtle bugs that
 # cause slowdowns and memory fragmentation. Explicit transfers are done
@@ -476,7 +477,7 @@ def main(config: TrainConfig):
             optimizer_updates, jax.tree.structure(state.params)
         )
         new_params = optax.apply_updates(state.params, updates)
-        
+
         new_state = state.replace(
             step=state.step + 1, params=new_params, opt_state=new_opt_state
         )
