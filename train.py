@@ -478,7 +478,6 @@ def main(config: TrainConfig):
         in_shardings=(train_state_sharding, data_sharding, rng.sharding),
         out_shardings=(
             repl_sharding,
-            repl_sharding,
             train_state_sharding,
             repl_sharding,
             repl_sharding,
