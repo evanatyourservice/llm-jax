@@ -175,7 +175,7 @@ class TransformerConfig:
     @classmethod
     def gemma2_360m(cls, cache_size: int):
         return cls(
-            num_layers=24,
+            num_layers=20,
             num_embed=256128,
             embed_dim=768,
             hidden_dim=3072,
