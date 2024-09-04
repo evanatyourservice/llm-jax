@@ -307,14 +307,15 @@ def main(config: TrainConfig):
         params=opt_state_shapes, mesh=mesh, op=op
     )
 
+    split_params = split_scanned_layers_fn(train_state.params)
     opt_state = jax.jit(optimizer.init, out_shardings=opt_state_sharding)(
-        split_params_shapes
+        split_params
     )
 
     # PSGD reshapes params into matrices. Here we get sharding rules for them
     # similarly to how we shard params. We can pass this into PSGD for internal
     # sharding constraints, although it's not absolutely necessary.
-    def get_reshaped_params_sharding(params):
+    def get_reshaped_params_shapes(params):
         # returns tuples of (reshape_fn, unreshape_fn, shape)
         affine_reshapers = jax.tree.map(_shape_as_matrix, params)
         p_struct = jax.tree.structure(params)
@@ -322,11 +323,11 @@ def main(config: TrainConfig):
         matrix_shapes = [
             jax.ShapeDtypeStruct(r[2], jnp.float32) for r in affine_reshapers
         ]
-        matrix_shapes = p_struct.unflatten(matrix_shapes)
-        return infer_sharding(params=matrix_shapes, mesh=mesh, op=op)
+        return p_struct.unflatten(matrix_shapes)
 
     # optimizer uses split params
-    reshaped_params_sharding, _ = get_reshaped_params_sharding(split_params_shapes)
+    reshaped_params_shapes = get_reshaped_params_shapes(split_params_shapes)
+    reshaped_params_sharding, _ = infer_sharding(params=reshaped_params_shapes, mesh=mesh, op=op)
 
     # remake optimizer with reshaped params sharding passed in
     # again, not strictly necessary, but could ensure things stay well-sharded
