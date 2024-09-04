@@ -15,15 +15,15 @@ python3 train.py \
     --compute_dtype=bfloat16 \
     --params_dtype=bfloat16 \
     --optimizer.type=affine \
-    --optimizer.learning_rate=0.003 \
+    --optimizer.learning_rate=0.001 \
     --optimizer.warmup_steps=1000 \
     --optimizer.nesterov \
     --optimizer.weight_decay=0.01 \
     --optimizer.grad_clip=1.0 \
     --optimizer.max_size_triangular=8192 \
-    --optimizer.max_skew_triangular=0 \
+    --optimizer.max_skew_triangular=16 \
     --optimizer.precond_lr=0.1 \
-    --optimizer.precond_init_scale=0.1 \
+    --optimizer.precond_init_scale=1.0 \
     --optimizer.preconditioner_dtype=bfloat16 \
     --model.model_type=gemma2_370m \
     --model.block_size=1024

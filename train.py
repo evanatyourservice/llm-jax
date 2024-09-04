@@ -367,13 +367,12 @@ def main(config: TrainConfig):
         return current_token_position, attention_mask
 
     def train_step(
-        state: TrainState, tokens: jnp.ndarray, rng: jax.random.PRNGKey
+        state: TrainState, input_tokens: jnp.ndarray, rng: jax.random.PRNGKey
     ) -> Tuple[jnp.ndarray, jnp.ndarray, TrainState, jnp.ndarray, jnp.ndarray]:
 
         rng = jax.random.fold_in(rng, state.step)  # same key each grad accum step
 
         def loss_fn(params):
-            input_tokens = tokens
             positions, attention_mask = get_attention_mask_and_positions(input_tokens)
 
             logits, _ = state.apply_fn(
@@ -383,29 +382,40 @@ def main(config: TrainConfig):
                 None,
                 attention_mask,
             )
+            assert logits.dtype == config.compute_dtype
 
-            # Exclude the last step as it does not appear in the targets
+            @jax.vmap
+            def seq_mask(input_tokens):
+                input_mask = jnp.max(
+                    jnp.where(input_tokens != pad_id, jnp.arange(input_tokens.shape[0]), -1)
+                )
+                return jnp.where(jnp.arange(input_tokens.shape[0]) <= input_mask, 1, 0)
+            
+            input_mask = seq_mask(input_tokens)
+
+            # Exclude the last step as it does not appear in the targets.
             logits = logits[:, :-1]
-            # Similarly, the first token cannot be predicted
+
+            # Similarly, the first token cannot be predicteds.
             target_tokens = input_tokens[:, 1:]
+            target_mask = input_mask[:, 1:]
 
-            # Create input mask (assuming all tokens are valid in this case)
-            input_mask = jnp.ones_like(input_tokens[:, 1:])
-
-            # Convert the target labels into one-hot encoded vectors
-            one_hot = jax.nn.one_hot(target_tokens, logits.shape[-1])
+            loss = optax.softmax_cross_entropy_with_integer_labels(logits, target_tokens)
 
             # Don't update on unwanted tokens (all tokens are wanted in this case)
-            one_hot = one_hot * input_mask.astype(one_hot.dtype)[..., None]
+            loss = loss * target_mask.astype(loss.dtype)
 
             # Normalization factor
-            norm_factor = 1 / (jnp.sum(input_mask) + 1e-8)
+            norm_factor = jnp.reciprocal(jnp.sum(target_mask) + 1e-8)
 
             # Calculate the loss
-            loss = -jnp.sum(jax.nn.log_softmax(logits) * one_hot) * norm_factor
+            loss = jnp.sum(loss) * norm_factor
 
             # Palm style z-loss
-            loss += 1e-4 * jax.scipy.special.logsumexp(logits, axis=-1).mean() ** 2
+            logsumexp = jax.scipy.special.logsumexp(logits, axis=-1)
+            logsumexp = logsumexp * target_mask.astype(logsumexp.dtype)
+            logsumexp = jnp.sum(logsumexp) / jnp.sum(target_mask)
+            loss += 1e-4 * logsumexp ** 2
 
             return loss
 
@@ -437,17 +447,7 @@ def main(config: TrainConfig):
         # Similarly, the first token cannot be predicted
         target_tokens = input_tokens[:, 1:]
 
-        # Create input mask (assuming all tokens are valid in this case)
-        input_mask = jnp.ones_like(target_tokens)
-
-        # Convert the target labels into one-hot encoded vectors
-        one_hot = jax.nn.one_hot(target_tokens, logits.shape[-1])
-
-        # Don't update on unwanted tokens (all tokens are wanted in this case)
-        one_hot = one_hot * input_mask.astype(one_hot.dtype)[..., None]
-
-        # Calculate the loss (without normalization factor)
-        loss = -jnp.sum(jax.nn.log_softmax(logits) * one_hot, axis=-1)
+        loss = optax.softmax_cross_entropy_with_integer_labels(logits, target_tokens)
 
         return loss
 

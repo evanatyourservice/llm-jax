@@ -13,7 +13,7 @@ python3 train.py \
     --compute_dtype=float32 \
     --params_dtype=float32 \
     --min_size_to_shard_mb=0 \
-    --train_steps=200 \
+    --train_steps=500 \
     --hellaswag_eval_interval=100 \
     --checkpoint_interval=100 \
     --keep_checkpoints=2 \
