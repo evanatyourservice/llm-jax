@@ -221,7 +221,7 @@ def main(config: TrainConfig):
         else:
             raise ValueError(f"Unknown model type: {config.model.model_type}")
 
-        model = transformer_lib.Transformer(model_config, scan_unroll=1)
+        model = transformer_lib.Transformer(model_config)
 
         # Create dummy inputs based on the model's expected input shape
 

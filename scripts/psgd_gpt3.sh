@@ -37,7 +37,7 @@ python3 train.py \
     --optimizer.precond_lr=0.1 \
     --optimizer.precond_init_scale=0.1 \
     --optimizer.preconditioner_dtype=bfloat16 \
-    --model.model_type=gpt3_medium \
+    --model.model_type=gpt3_small \
     --model.sliding_window_size=512 \
     --model.block_size=1024
 "
