@@ -13,7 +13,7 @@ python3 train.py \
     --batch_size=256 \
     --optimizer.gradient_accumulation_steps=1 \
     --compute_dtype=bfloat16 \
-    --params_dtype=float32 \
+    --params_dtype=bfloat16 \
     --optimizer.type=affine \
     --optimizer.learning_rate=0.003 \
     --optimizer.warmup_steps=0 \

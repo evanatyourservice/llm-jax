@@ -17,7 +17,7 @@ class RMSNorm(nn.Module):
     @nn.compact
     def __call__(self, x):
         scale = self.param("scale", nn.initializers.zeros_init(), (x.shape[-1]))
-        var = jnp.mean(jnp.square(x.astype(jnp.float32)), axis=-1, keepdims=True)
+        var = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
 
         # Jax.lax.rsqrt is used because it returns different floats than
         # jnp.reciprocal(jnp.sqrt(var + 1e-06))
@@ -28,7 +28,7 @@ class RMSNorm(nn.Module):
         # a (1, ..., 1, D) tensor, so the rank of scale matches normed_inputs.
         scale = jnp.expand_dims(scale, axis=range(len(x.shape) - 1))
         normed_inputs = normed_inputs * (1 + scale)
-        return normed_inputs.astype(x.dtype)
+        return normed_inputs
 
 
 def apply_rope(
