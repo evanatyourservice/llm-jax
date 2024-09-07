@@ -16,7 +16,7 @@ class RMSNorm(nn.Module):
 
     @nn.compact
     def __call__(self, x):
-        scale = self.param("scale", nn.initializers.zeros_init(), (x.shape[-1]))
+        # scale = self.param("scale", nn.initializers.zeros_init(), (x.shape[-1]))
         var = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
 
         # Jax.lax.rsqrt is used because it returns different floats than
@@ -26,8 +26,8 @@ class RMSNorm(nn.Module):
         # normed_inputs is a rank-K tensor, K > 1 (K is typically 2 or 3). scale is
         # a rank-1 tensor. To avoid implicit rank-promotion, reshape scale to
         # a (1, ..., 1, D) tensor, so the rank of scale matches normed_inputs.
-        scale = jnp.expand_dims(scale, axis=range(len(x.shape) - 1))
-        normed_inputs = normed_inputs * (1 + scale)
+        # scale = jnp.expand_dims(scale, axis=range(len(x.shape) - 1))
+        # normed_inputs = normed_inputs * (1 + scale)
         return normed_inputs
 
 
@@ -104,7 +104,7 @@ class MLP(nn.Module):
     def __call__(self, x):
         C = x.shape[-1]
         x = nn.Dense(4 * C, use_bias=False, kernel_init=initializer)(x)
-        x = nn.gelu(x, approximate=True)
+        x = nn.silu(x)
         x = nn.Dense(C, use_bias=False, kernel_init=initializer)(x)
         return x
 
