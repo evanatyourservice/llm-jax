@@ -68,7 +68,7 @@ class Attention(nn.Module):
         B, T, C = x.shape
         head_dim = C // self.num_heads
 
-        qkv = nn.Dense(3 * C, use_bias=False, kernel_init=initializer, name="c_attn")(x)
+        qkv = nn.Dense(3 * C, use_bias=False, kernel_init=initializer)(x)
         q, k, v = jnp.split(qkv, 3, axis=-1)
         q = jnp.reshape(q, (B, T, self.num_heads, head_dim))
         k = jnp.reshape(k, (B, T, self.num_heads, head_dim))
@@ -93,9 +93,7 @@ class Attention(nn.Module):
         encoded = jnp.einsum("...hqk,...khd->...qhd", probs, v)
         encoded = jnp.reshape(encoded, (B, T, C))
 
-        attn_output = nn.Dense(
-            C, use_bias=False, kernel_init=initializer, name="c_proj"
-        )(encoded)
+        attn_output = nn.Dense(C, use_bias=False, kernel_init=initializer)(encoded)
 
         return attn_output
 
@@ -104,10 +102,10 @@ class MLP(nn.Module):
 
     @nn.compact
     def __call__(self, x):
-        B, T, C = x.shape
-        x = nn.Dense(4 * C, use_bias=False, kernel_init=initializer, name="c_fc")(x)
+        C = x.shape[-1]
+        x = nn.Dense(4 * C, use_bias=False, kernel_init=initializer)(x)
         x = nn.gelu(x, approximate=True)
-        x = nn.Dense(C, use_bias=False, kernel_init=initializer, name="c_proj")(x)
+        x = nn.Dense(C, use_bias=False, kernel_init=initializer)(x)
         return x
 
 
@@ -127,20 +125,13 @@ class GPT(nn.Module):
 
     @nn.compact
     def __call__(self, tokens, positions, attention_mask):
-        B, T = tokens.shape
-        assert (
-            T <= self.config.block_size
-        ), f"Cannot forward sequence of length {T}, block size is only {self.config.block_size}"
-
         wte = nn.Embed(
             self.config.vocab_size,
             self.config.num_embeds,
-            name="wte",
         )
         wpe = nn.Embed(
             self.config.block_size,
             self.config.num_embeds,
-            name="wpe",
         )
 
         token_embed = wte(tokens)  # [B, T, num_embeds]
@@ -148,7 +139,7 @@ class GPT(nn.Module):
 
         x = token_embed + pos_embed
         for i in range(self.config.num_layers):
-            x = Block(self.config.num_heads, name=str(i))(x, positions, attention_mask)
+            x = Block(self.config.num_heads)(x, positions, attention_mask)
 
         x = RMSNorm()(x)
         logits = wte.attend(x)
