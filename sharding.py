@@ -72,18 +72,18 @@ def fsdp_sharding(axis, min_size_to_shard_mb=1):
         # Preconditioner sharding
         # We're assuming preconditioners are kept in lists.
         # This is at least the case for PSGD affine and tearfree shampoo.
-        # if isinstance(x, list):
-        #     return [
-        #         (
-        #             (axis,)
-        #             if len(p.shape) > 1
-        #             and np.prod(p.shape) * p.dtype.itemsize
-        #             >= min_size_to_shard_mb * (2**20)
-        #             and p.shape[0] % axis_size == 0
-        #             else (None,)
-        #         )
-        #         for p in x
-        #     ]
+        if isinstance(x, list):
+            return [
+                (
+                    (axis,)
+                    if len(p.shape) > 1
+                    and np.prod(p.shape) * p.dtype.itemsize
+                    >= min_size_to_shard_mb * (2**20)
+                    and p.shape[0] % axis_size == 0
+                    else (None,)
+                )
+                for p in x
+            ]
 
         shape = x.shape
 
