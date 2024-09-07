@@ -213,7 +213,6 @@ def affine(
     precond_dtype: Optional[Union[str, jnp.dtype]] = None,
     precision: str = "bfloat16",
     reshaped_params_sharding: Any = None,
-    best_effort_scan: bool = True,
 ) -> base.GradientTransformationExtraArgs:
     """
     Implements Affine PSGD from https://github.com/lixilinx/psgd_torch.
@@ -237,8 +236,6 @@ def affine(
         precond_dtype: optional str or jnp.dtype, dtype of the preconditioner.
         precision: str, precision for matmul, 'bfloat16', 'tensorfloat32', 'float32'.
         reshaped_params_sharding: optional Any, sharding spec for parameters.
-        best_effort_scan: bool, try to automatically stack same-shaped matrices
-            and use lax.map to update them to save on compile time and memory.
 
     Returns:
         optax.GradientTransformationExtraArgs
@@ -256,7 +253,6 @@ def affine(
             precond_dtype=precond_dtype,
             precision=precision,
             reshaped_params_sharding=reshaped_params_sharding,
-            best_effort_scan=best_effort_scan,
         )
     ]
     if weight_decay > 0:

@@ -149,7 +149,6 @@ def main(config: TrainConfig):
                     precond_dtype=config.optimizer.preconditioner_dtype,
                     precision="bfloat16",
                     reshaped_params_sharding=reshaped_params_sharding,
-                    best_effort_scan=False,
                 )
             )
         elif config.optimizer.type == "shampoo":
