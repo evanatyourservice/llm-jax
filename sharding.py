@@ -87,10 +87,6 @@ def fsdp_sharding(axis, min_size_to_shard_mb=1):
 
         shape = x.shape
 
-        if "wte" in name:
-            # shard embedding along second axis
-            return (None, axis)
-
         # Params sharding
         if np.prod(shape) * x.dtype.itemsize < min_size_to_shard_mb * (2**20):
             return cur_spec

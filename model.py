@@ -84,7 +84,7 @@ class Attention(nn.Module):
             q, segment_pos, head_dim=head_dim
         )
         query_scaled = query_proj * jax.lax.rsqrt(
-            jnp.array(head_dim, dtype=jnp.float32)
+            jnp.array(head_dim, dtype=query_proj.dtype)
         ).astype(query_proj.dtype)
         key_proj = apply_rope(
             k, segment_pos, head_dim=head_dim
