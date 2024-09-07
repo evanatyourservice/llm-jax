@@ -37,8 +37,4 @@ python3 train.py \
     --optimizer.precond_lr=0.1 \
     --optimizer.precond_init_scale=0.1 \
     --optimizer.preconditioner_dtype=float32
-    --model.huggingface_model_name="trl-internal-testing/tiny-random-LlamaForCausalLM" \
-    --model.no_scan_mlp \
-    --model.no_scan_attention_layers \
-    --model.block_size=128
 "

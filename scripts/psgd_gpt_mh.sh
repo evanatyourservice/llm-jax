@@ -12,7 +12,7 @@ echo $EXPERIMENT
 export WANDB_API_KEY=$WANDB_API_KEY
 export HF_TOKEN=$HF_TOKEN
 
-export LLM_CONFIG=config/gemma2.yaml
+export LLM_CONFIG=config/gpt2.yaml
 
 cd llm-jax
 

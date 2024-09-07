@@ -5,11 +5,9 @@ from multiprocessing.pool import ThreadPool
 from typing import Mapping
 import dataclasses
 import numpy as np
+import tyro
 
 import jax
-import jax.numpy as jnp
-import tyro
-from jax import jit, numpy as jnp
 import flax
 
 from configs import TrainConfig
@@ -221,7 +219,7 @@ def count_params(params) -> int:
 
 def get_default_config() -> TrainConfig:
     # use this file to set default values
-    path = os.environ.get("LLM_CONFIG", os.path.join("config", "gemma2.yaml"))
+    path = os.environ.get("LLM_CONFIG", os.path.join("config", "gpt2.yaml"))
     if not os.path.exists(path):
         write_note("using default config")
         return TrainConfig()

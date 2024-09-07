@@ -4,12 +4,12 @@ hellaswag_eval_interval: 500
 checkpoint_interval: 1000
 batch_size: 128
 train_steps: 100000
-compute_dtype: bfloat16
-params_dtype: bfloat16
+compute_dtype: float32
+params_dtype: float32
 optimizer: !dataclass:OptimizerConfig
     type: "psgd_affine"
     learning_rate: 0.001
-    warmup_steps: 0
+    warmup_steps: 1000
     weight_decay: 0.1
     grad_clip: 1.0
     gradient_accumulation_steps: 1
@@ -17,16 +17,12 @@ optimizer: !dataclass:OptimizerConfig
       - 0.9
       - 0.95
     nesterov: False
-    preconditioner_update_probability: 1.0
-    max_size_triangular: 16384
+    preconditioner_update_probability: 0.5
+    max_size_triangular: 8192
     max_skew_triangular: 16
     precond_lr: 0.1
-    precond_init_scale: 0.01
-    preconditioner_dtype: bfloat16
+    precond_init_scale: 1.0
+    preconditioner_dtype: float32
 wandb: !dataclass:WandbConfig
     entity: evanatyourservice
     mode: online
-model: !dataclass:ModelConfig
-    model_type: gemma2_2b
-    sliding_window_size: 1024
-    block_size: 2048

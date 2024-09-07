@@ -8,7 +8,7 @@ import jax
 import tensorflow as tf
 import datasets
 from datasets import load_dataset, IterableDataset
-from transformers import AutoTokenizer
+import datasets.config
 
 from utils import (
     make_fsarray_from_local_slice,
@@ -24,14 +24,14 @@ datasets.config.STREAMING_READ_RETRY_INTERVAL = 5
 
 OPTIONS = tf.data.Options()
 OPTIONS.deterministic = False
-OPTIONS.threading.private_threadpool_size = 48
-OPTIONS.threading.max_intra_op_parallelism = 1
+# OPTIONS.threading.private_threadpool_size = 48
+# OPTIONS.threading.max_intra_op_parallelism = 1
 # Stop a whole bunch of magic stuff that eats up all RAM:
-OPTIONS.experimental_optimization.inject_prefetch = False
+# OPTIONS.experimental_optimization.inject_prefetch = False
 
 
 def prepare_hellaswag(
-    tokenizer: AutoTokenizer,
+    tokenizer,
     batch_size: int,
     block_size: int,
     flat_devices,
@@ -42,8 +42,8 @@ def prepare_hellaswag(
     write_note("preparing hellaswag")
 
     all_data = []
+    all_masks = []
     all_labels = []
-    all_lengths = []
     with open("data/hellaswag_val.jsonl", "r") as f:
         # iterate over lines and tokenize
         for line in tqdm(f, total=10042):
@@ -51,8 +51,8 @@ def prepare_hellaswag(
             context = item["ctx"]
             endings = item["endings"]
             correct_end = item["label"]
-            to_concat = []
-            lens = []
+            data_to_concat = []
+            masks_to_concat = []
             for ending in endings:
                 input_text = context + " " + ending
                 output = tokenizer(
@@ -61,17 +61,17 @@ def prepare_hellaswag(
                     padding="max_length",
                     truncation=True,
                 )
-                lens.append(np.count_nonzero(output["attention_mask"]))
-                to_concat.append(output["input_ids"])
-            all_data.append(np.array(to_concat))  # (4, seq_len)
+                data_to_concat.append(output["input_ids"])
+                masks_to_concat.append(output["attention_mask"])
+            all_data.append(np.array(data_to_concat))  # (4, seq_len)
+            all_masks.append(np.array(masks_to_concat))  # (4, seq_len)
             all_labels.append(int(correct_end))  # Convert to integer
-            all_lengths.append(np.array(lens))  # (4,)
 
-    all_data = np.array(all_data)
-    all_labels = np.array(all_labels)
-    all_lengths = np.array(all_lengths)
+    all_data = np.array(all_data, dtype=np.uint16)
+    all_masks = np.array(all_masks, dtype=np.bool_)
+    all_labels = np.array(all_labels, dtype=np.uint16)
 
-    ds = tf.data.Dataset.from_tensor_slices((all_data, all_labels, all_lengths))
+    ds = tf.data.Dataset.from_tensor_slices((all_data, all_masks, all_labels))
     ds = ds.shard(jax.process_count(), jax.process_index())
     ds = ds.batch(
         batch_size // jax.process_count(),
@@ -97,7 +97,7 @@ def prepare_hellaswag(
 
 
 def fineweb_edu_dataset(
-    tokenizer: AutoTokenizer,
+    tokenizer,
     batch_size: int,
     block_size: int,
     flat_devices,
@@ -113,11 +113,16 @@ def fineweb_edu_dataset(
     else:
         cache_dir = None
 
-    # grab current shard and shuffle
-    proc_shard = _fw_shard_names[jax.process_index() :: jax.process_count()]
-    random.shuffle(proc_shard)
+    if jax.process_count() == 1:
+        # just stream fineweb-edu regularly
+        proc_subshard = None
+    else:
+        # use different shards pre process
+        # grab current shard and shuffle
+        proc_shard = _fw_shard_names[jax.process_index() :: jax.process_count()]
+        random.shuffle(proc_shard)
 
-    proc_subshard = proc_shard[shard_idx % len(proc_shard)]
+        proc_subshard = proc_shard[shard_idx % len(proc_shard)]
 
     def gen():
         hf_ds: IterableDataset = load_dataset(
@@ -141,13 +146,13 @@ def fineweb_edu_dataset(
         hf_ds = hf_ds.with_format("numpy")
 
         for example in hf_ds:
-            yield (example["input_ids"], np.count_nonzero(example["attention_mask"]))
+            yield (example["input_ids"], example["attention_mask"])
 
     ds = tf.data.Dataset.from_generator(
         gen,
         output_signature=(
             tf.TensorSpec(shape=(block_size,), dtype=tf.uint16),
-            tf.TensorSpec(shape=[], dtype=tf.int32),
+            tf.TensorSpec(shape=(block_size,), dtype=tf.bool),
         ),
     )
     ds = ds.shuffle(10240)

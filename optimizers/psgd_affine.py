@@ -55,8 +55,8 @@ def scale_by_affine(
         reshaped_params_sharding: optional Any, sharding spec for reshaped parameters.
         best_effort_scan: bool, try to automatically stack same-shaped matrices
             and use lax.map to update them to save on compile time and memory.
-        scanned_layers: optional base.Params, a pytree same structure as params 
-            indicating how many times each layer was scanned (will be vmapped 
+        scanned_layers: optional base.Params, a pytree same structure as params
+            indicating how many times each layer was scanned (will be vmapped
             that many times). If not provided, will assume no layers are scanned.
 
     Returns:
@@ -125,43 +125,6 @@ def scale_by_affine(
 
         map_batch_size = 1  # interpolates between scan and vmap, 1 being scan unroll=1
 
-        # update preconditioner
-        key, subkey = jax.random.split(key)
-        do_update = jax.random.uniform(subkey, dtype=jnp.float32) < update_prob_in
-
-        def update_preconditioner():
-            ukey = key
-            if best_effort_scan:
-                key_list = []
-                for g in gs:
-                    n_keys = jax.random.split(ukey, g.shape[0] + 1)
-                    ukey, keys = n_keys[0], n_keys[1:]
-                    key_list.append(keys)
-
-                new_Qs = [
-                    jax.lax.map(
-                        lambda xs: _update_precond_affine_dropv_math(
-                            *xs, precond_lr_in, precision
-                        ),
-                        (k, Ql, Qr, g),
-                        batch_size=map_batch_size,
-                    )
-                    for (k, (Ql, Qr), g) in zip(key_list, Qs, gs)
-                ]
-            else:
-                keys = jax.random.split(ukey, len(Qs))
-                new_Qs = [
-                    _update_precond_affine_dropv_math(
-                        k, Ql, Qr, g, precond_lr_in, precision
-                    )
-                    for (k, (Ql, Qr), g) in zip(keys, Qs, gs)
-                ]
-
-            new_Qs = otu.tree_cast(new_Qs, precond_dtype)
-            return new_Qs
-
-        Qs = _efficient_cond(do_update, update_preconditioner, Qs)
-
         # precondition grads
         if best_effort_scan:
             precond_grad_fn = lambda l, r, g: jax.lax.map(
@@ -172,7 +135,45 @@ def scale_by_affine(
         else:
             precond_grad_fn = _precond_grad_affine_math
 
-        gs = [precond_grad_fn(Ql, Qr, g) for ((Ql, Qr), g) in zip(Qs, gs)]
+        output = [precond_grad_fn(Ql, Qr, g) for ((Ql, Qr), g) in zip(Qs, gs)]
+        gs, As = zip(*output)
+
+        # update preconditioner
+        key, subkey = jax.random.split(key)
+        do_update = jax.random.uniform(subkey, dtype=jnp.float32) < update_prob_in
+
+        def update_preconditioner():
+            ukey = key
+            if best_effort_scan:
+                key_list = []
+                for a in As:
+                    n_keys = jax.random.split(ukey, a.shape[0] + 1)
+                    ukey, keys = n_keys[0], n_keys[1:]
+                    key_list.append(keys)
+
+                new_Qs = [
+                    jax.lax.map(
+                        lambda xs: _update_precond_affine_dropv_math(
+                            *xs, precond_lr_in, precision
+                        ),
+                        (k, Ql, Qr, a),
+                        batch_size=map_batch_size,
+                    )
+                    for (k, (Ql, Qr), a) in zip(key_list, Qs, As)
+                ]
+            else:
+                keys = jax.random.split(ukey, len(Qs))
+                new_Qs = [
+                    _update_precond_affine_dropv_math(
+                        k, Ql, Qr, a, precond_lr_in, precision
+                    )
+                    for (k, (Ql, Qr), a) in zip(keys, Qs, As)
+                ]
+
+            new_Qs = otu.tree_cast(new_Qs, precond_dtype)
+            return new_Qs
+
+        Qs = _efficient_cond(do_update, update_preconditioner, Qs)
 
         # unstack matrices
         if best_effort_scan:
@@ -202,12 +203,12 @@ def scale_by_affine(
 
 def affine(
     learning_rate: Union[float, Callable[[int], float]] = 0.001,
-    preconditioner_update_probability: Union[float, Callable[[int], float]] = 0.5,
+    preconditioner_update_probability: Union[float, Callable[[int], float]] = 0.1,
     b1: float = 0.9,
     nesterov: bool = False,
     weight_decay: float = 0.0,
     mask: Optional[Union[Any, Callable[[base.Params], Any]]] = None,
-    max_size_triangular: int = 4096,
+    max_size_triangular: int = 8192,
     max_skew_triangular: int = 16,
     precond_lr: Union[float, Callable[[int], float]] = 0.1,
     precond_init_scale: float = 1.0,
@@ -438,13 +439,12 @@ def _solve_triangular(a, b, upper, left=True):
     return jax.lax.linalg.triangular_solve(a, b, left_side=left, lower=not upper)
 
 
-def _update_precond_affine_math_(key, Ql, Qr, dX, dG, precond_lr, precision):
+def _update_precond_affine_math_(key, Ql, Qr, dX, A, precond_lr, precision):
     step_normalizer = "2nd"
 
     with jax.default_matmul_precision(precision):
         if Ql.ndim == 2:
             if Qr.ndim == 2:  # Ql.dim()=2 and Qr.dim()=2:
-                A = jnp.linalg.multi_dot([Ql, dG, Qr.conj().T])
                 Bh = _solve_triangular(
                     Ql.conj().T,
                     _solve_triangular(Qr, dX, upper=True, left=False),
@@ -466,7 +466,6 @@ def _update_precond_affine_math_(key, Ql, Qr, dX, dG, precond_lr, precision):
                 Ql -= step1 * grad1 @ Ql
                 Qr -= step2 * grad2 @ Qr
             else:  # Ql.dim()=2 and Qr.dim()=1:
-                A = Ql @ (dG * Qr.conj())
                 Bh = _solve_triangular(Ql.conj().T, dX / Qr, upper=False)
 
                 AAh, BhB = A @ A.conj().T, Bh @ Bh.conj().T
@@ -487,7 +486,6 @@ def _update_precond_affine_math_(key, Ql, Qr, dX, dG, precond_lr, precision):
                 Qr -= step2 * grad2 * Qr
         else:
             if Qr.ndim == 2:  # Ql.dim()=1 and Qr.dim()=2:
-                A = (Ql[:, None] * dG) @ Qr.conj().T
                 Bh = _solve_triangular(Qr, dX, upper=True, left=False) / (
                     Ql.conj()[:, None]
                 )
@@ -509,7 +507,6 @@ def _update_precond_affine_math_(key, Ql, Qr, dX, dG, precond_lr, precision):
                 Ql -= step1 * grad1 * Ql
                 Qr -= step2 * grad2 @ Qr
             else:  # Ql.dim()=1 and Qr.dim()=1:
-                A = Ql[:, None] * dG * Qr.conj()
                 Bh = dX / Qr / Ql.conj()[:, None]
 
                 AAc1, BBc1 = jnp.sum(A * A.conj(), axis=1), jnp.sum(
@@ -546,13 +543,12 @@ def _update_precond_affine_math_(key, Ql, Qr, dX, dG, precond_lr, precision):
         return [Ql, Qr]
 
 
-def _update_precond_affine_dropv_math(key, Ql, Qr, dG, precond_lr, precision):
+def _update_precond_affine_dropv_math(key, Ql, Qr, A, precond_lr, precision):
     step_normalizer = "2nd"
 
     with jax.default_matmul_precision(precision):
         if Ql.ndim == 1 and Qr.ndim == 1:
             # drop v when both dims use diagonal preconditioners
-            A = Ql[:, None] * dG * Qr.conj()
             invQQl, invQQr = 1 / (Ql * Ql.conj()), 1 / (Qr * Qr.conj())
 
             AAc1, BBc1 = jnp.sum(A * A.conj(), axis=1), jnp.sum(invQQr) * invQQl
@@ -571,7 +567,6 @@ def _update_precond_affine_dropv_math(key, Ql, Qr, dG, precond_lr, precision):
             Qr = Qr - step2 * grad2 * Qr
         elif Ql.ndim == 1 and Qr.ndim == 2 and Ql.shape[0] >= Qr.shape[0]:
             # drop v when left is diagonal, right is dense, and gradient is a tall matrix
-            A = (Ql[:, None] * dG) @ Qr.conj().T
             invQQl = 1 / (Ql * Ql.conj())
             invQr = _solve_triangular(
                 Qr, jnp.eye(Qr.shape[0], dtype=Qr.dtype), upper=True
@@ -594,7 +589,6 @@ def _update_precond_affine_dropv_math(key, Ql, Qr, dG, precond_lr, precision):
             Qr -= step2 * grad2 @ Qr
         elif Qr.ndim == 1 and Ql.ndim == 2 and Qr.shape[0] >= Ql.shape[0]:
             # drop v when right is diagonal, left is dense, and gradient is a short matrix
-            A = Ql @ (dG * Qr.conj())
             invQl = _solve_triangular(
                 Ql, jnp.eye(Ql.shape[0], dtype=Ql.dtype), upper=True
             )
@@ -622,10 +616,10 @@ def _update_precond_affine_dropv_math(key, Ql, Qr, dG, precond_lr, precision):
             #   3) both sides use dense preconditioner, but gradient is skewed (no saving for square shape gradient)
             key, subkey = jax.random.split(key)
             # JAX does an ok job at sharding this so let's leave alone for now
-            v = jax.random.normal(subkey, dG.shape, dtype=dG.dtype)
+            v = jax.random.normal(subkey, (Ql.shape[0], Qr.shape[1]), dtype=Ql.dtype)
             key, subkey = jax.random.split(key)
             return _update_precond_affine_math_(
-                subkey, Ql, Qr, v, dG, precond_lr, precision
+                subkey, Ql, Qr, v, A, precond_lr, precision
             )
 
         def _balance():
@@ -643,19 +637,21 @@ def _update_precond_affine_dropv_math(key, Ql, Qr, dG, precond_lr, precision):
         return [Ql, Qr]
 
 
-def _precond_grad_affine_math(Ql, Qr, grad):
+def _precond_grad_affine_math(Ql, Qr, grad) -> Tuple[jnp.ndarray, jnp.ndarray]:
     if Ql.ndim == 2:
         if Qr.ndim == 2:  # Ql.ndim=2 and Qr.ndim=2:
-            return jnp.linalg.multi_dot([Ql.conj().T, Ql, grad, Qr.conj().T, Qr])
+            A = jnp.linalg.multi_dot([Ql, grad, Qr.conj().T])
+            return jnp.linalg.multi_dot([Ql.conj().T, A, Qr]), A
         else:  # Ql.ndim=2 and Qr.ndim=1:
-            return jnp.linalg.multi_dot([Ql.conj().T, Ql, grad * (Qr * Qr.conj())])
+            A = Ql @ (grad * Qr.conj())
+            return Ql.conj().T @ (A * Qr), A
     else:
         if Qr.ndim == 2:  # Ql.ndim=1 and Qr.ndim=2:
-            return jnp.linalg.multi_dot(
-                [(Ql * Ql.conj())[:, None] * grad, Qr.conj().T, Qr]
-            )
+            A = (Ql[:, None] * grad) @ Qr.conj().T
+            return (Ql.conj()[:, None] * A) @ Qr, A
         else:  # Ql.ndim=1 and Qr.ndim=1:
-            return (Ql * Ql.conj())[:, None] * grad * (Qr * Qr.conj())
+            A = Ql[:, None] * grad * Qr.conj()
+            return Ql.conj()[:, None] * A * Qr, A
 
 
 def _sort_and_group_matrices(matrix_shapes: List[Tuple[int, ...]]):
@@ -731,7 +727,7 @@ def _unstack_matrices(
 
 def _efficient_cond(
     predicate: bool, compute_fn: Callable, init_state: Any, *args, **kwargs
-) -> Tuple:
+):
     """Avoids wasteful buffer allocation with XLA.
 
     Useful when the False branch of the cond is only a pass-through. `init_state`
