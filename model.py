@@ -68,9 +68,7 @@ class Attention(nn.Module):
         B, T, C = x.shape
         head_dim = C // self.num_heads
 
-        qkv = nn.Dense(
-            3 * C, use_bias=False, kernel_init=initializer, name="c_attn"
-        )(x)
+        qkv = nn.Dense(3 * C, use_bias=False, kernel_init=initializer, name="c_attn")(x)
         q, k, v = jnp.split(qkv, 3, axis=-1)
         q = jnp.reshape(q, (B, T, self.num_heads, head_dim))
         k = jnp.reshape(k, (B, T, self.num_heads, head_dim))
@@ -80,15 +78,11 @@ class Attention(nn.Module):
         q = RMSNorm()(q)
         k = RMSNorm()(k)
 
-        query_proj = apply_rope(
-            q, segment_pos, head_dim=head_dim
-        )
+        query_proj = apply_rope(q, segment_pos, head_dim=head_dim)
         query_scaled = query_proj * jax.lax.rsqrt(
             jnp.array(head_dim, dtype=query_proj.dtype)
-        ).astype(query_proj.dtype)
-        key_proj = apply_rope(
-            k, segment_pos, head_dim=head_dim
         )
+        key_proj = apply_rope(k, segment_pos, head_dim=head_dim)
 
         logits = jnp.einsum("...qhd,...khd->...hqk", query_scaled, key_proj)
 
@@ -111,13 +105,9 @@ class MLP(nn.Module):
     @nn.compact
     def __call__(self, x):
         B, T, C = x.shape
-        x = nn.Dense(
-            4 * C, use_bias=False, kernel_init=initializer, name="c_fc"
-        )(x)
+        x = nn.Dense(4 * C, use_bias=False, kernel_init=initializer, name="c_fc")(x)
         x = nn.gelu(x, approximate=True)
-        x = nn.Dense(
-            C, use_bias=False, kernel_init=initializer, name="c_proj"
-        )(x)
+        x = nn.Dense(C, use_bias=False, kernel_init=initializer, name="c_proj")(x)
         return x
 
 

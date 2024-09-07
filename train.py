@@ -149,7 +149,7 @@ def main(config: TrainConfig):
                     precond_dtype=config.optimizer.preconditioner_dtype,
                     precision="bfloat16",
                     reshaped_params_sharding=reshaped_params_sharding,
-                    best_effort_scan=True,
+                    best_effort_scan=False,
                 )
             )
         elif config.optimizer.type == "shampoo":
@@ -508,9 +508,7 @@ def main(config: TrainConfig):
 
                 tokens, masks = next(train_ds)
 
-            loss, train_state, g_norm, lr = train_step_jit(
-                train_state, tokens, masks
-            )
+            loss, train_state, g_norm, lr = train_step_jit(train_state, tokens, masks)
             train_losses.append(jax.device_get(loss).item())
             grad_norms.append(jax.device_get(g_norm).item())
             if accum_step < config.optimizer.gradient_accumulation_steps - 1:
