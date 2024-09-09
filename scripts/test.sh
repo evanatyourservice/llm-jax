@@ -10,8 +10,8 @@ export LLM_CONFIG=config/gpt2.yaml  # base config
 python3 train.py \
     --out_dir=/Users/evanwalters/llm_testing/run_checkpointing_test \
     --attempt_to_load_checkpoint \
-    --compute_dtype=bfloat16 \
-    --params_dtype=bfloat16 \
+    --compute_dtype=float32 \
+    --params_dtype=float32 \
     --min_size_to_shard_mb=0 \
     --train_steps=500 \
     --hellaswag_eval_interval=100 \
@@ -21,7 +21,7 @@ python3 train.py \
     --optimizer.type=affine \
     --optimizer.learning_rate=0.001 \
     --optimizer.warmup_steps=20 \
-    --optimizer.preconditioner_dtype=bfloat16 \
+    --optimizer.preconditioner_dtype=float32 \
     --model.block_size=64 \
     --model.num_layers=4 \
     --model.num_heads=2 \

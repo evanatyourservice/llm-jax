@@ -45,7 +45,7 @@ class OptimizerConfig:
     betas: Tuple[float, float] = (0.9, 0.95)
     nesterov: bool = False
     preconditioner_update_probability: float = 0.5
-    max_size_triangular: int = 8192
+    max_size_triangular: int = 4096
     max_skew_triangular: int = 16
     precond_lr: float = 0.1
     precond_init_scale: Optional[float] = 1.0

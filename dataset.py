@@ -42,7 +42,7 @@ def prepare_hellaswag(
     write_note("preparing hellaswag")
 
     all_data = []
-    all_masks = []
+    all_seq_lens = []
     all_labels = []
     with open("data/hellaswag_val.jsonl", "r") as f:
         # iterate over lines and tokenize
@@ -52,7 +52,7 @@ def prepare_hellaswag(
             endings = item["endings"]
             correct_end = item["label"]
             data_to_concat = []
-            masks_to_concat = []
+            seq_lens_to_concat = []
             for ending in endings:
                 input_text = context + " " + ending
                 output = tokenizer(
@@ -62,16 +62,16 @@ def prepare_hellaswag(
                     truncation=True,
                 )
                 data_to_concat.append(output["input_ids"])
-                masks_to_concat.append(output["attention_mask"])
+                seq_lens_to_concat.append(np.count_nonzero(output["attention_mask"]))
             all_data.append(np.array(data_to_concat))  # (4, seq_len)
-            all_masks.append(np.array(masks_to_concat))  # (4, seq_len)
+            all_seq_lens.append(np.array(seq_lens_to_concat))  # (4,)
             all_labels.append(int(correct_end))  # Convert to integer
 
     all_data = np.array(all_data, dtype=np.uint16)
-    all_masks = np.array(all_masks, dtype=np.bool_)
-    all_labels = np.array(all_labels, dtype=np.uint16)
+    all_seq_lens = np.array(all_seq_lens, dtype=np.int32)
+    all_labels = np.array(all_labels, dtype=np.int32)
 
-    ds = tf.data.Dataset.from_tensor_slices((all_data, all_masks, all_labels))
+    ds = tf.data.Dataset.from_tensor_slices((all_data, all_seq_lens, all_labels))
     ds = ds.shard(jax.process_count(), jax.process_index())
     ds = ds.batch(
         batch_size // jax.process_count(),
@@ -146,13 +146,13 @@ def fineweb_edu_dataset(
         hf_ds = hf_ds.with_format("numpy")
 
         for example in hf_ds:
-            yield (example["input_ids"], example["attention_mask"])
+            yield (example["input_ids"], np.count_nonzero(example["attention_mask"]))
 
     ds = tf.data.Dataset.from_generator(
         gen,
         output_signature=(
             tf.TensorSpec(shape=(block_size,), dtype=tf.uint16),
-            tf.TensorSpec(shape=(block_size,), dtype=tf.bool),
+            tf.TensorSpec(shape=[], dtype=tf.int32),
         ),
     )
     ds = ds.shuffle(10240)

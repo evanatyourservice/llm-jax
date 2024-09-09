@@ -293,12 +293,6 @@ def main(config: TrainConfig):
 
     # ====== datasets ======
     write_note("creating datasets")
-    if platform == "cpu":
-        device_prefetch = 0
-    elif platform == "gpu":
-        device_prefetch = 2
-    else:  # tpu
-        device_prefetch = 1
 
     tokenizer = AutoTokenizer.from_pretrained(
         "gpt2", trust_remote_code=True, use_fast=True
@@ -316,7 +310,7 @@ def main(config: TrainConfig):
         block_size=config.model.block_size,
         flat_devices=devices_flat,
         tf_prefetch=10,
-        device_prefetch=device_prefetch,
+        device_prefetch=2 if platform == "gpu" else 0,
     )
 
     shard_idx = 0
@@ -335,10 +329,12 @@ def main(config: TrainConfig):
     def train_step(
         state: TrainState,
         tokens: jnp.ndarray,
-        seq_mask: jnp.ndarray,
+        seq_lens: jnp.ndarray,
     ) -> Tuple[jnp.ndarray, jnp.ndarray, TrainState, jnp.ndarray, jnp.ndarray]:
 
         def loss_fn(params):
+            seq_mask = jnp.arange(tokens.shape[1])[None, :] < seq_lens[:, None]
+
             positions, attention_mask = get_attention_mask_and_positions(seq_mask)
 
             logits = state.apply_fn(
@@ -391,8 +387,9 @@ def main(config: TrainConfig):
         return loss, new_state, grad_norm, lr
 
     def eval_step_unreduced(
-        state: TrainState, tokens: jnp.ndarray, seq_mask: jnp.ndarray
+        state: TrainState, tokens: jnp.ndarray, seq_lens: jnp.ndarray
     ) -> jnp.ndarray:
+        seq_mask = jnp.arange(tokens.shape[1])[None, :] < seq_lens[:, None]
 
         # Get attention mask and positions
         positions, attention_mask = get_attention_mask_and_positions(seq_mask)
@@ -426,15 +423,15 @@ def main(config: TrainConfig):
 
         return unreduced_losses(loss, target_mask)  # [b * 4]
 
-    def eval_hellaswag(state: TrainState, data, masks, labels):
+    def eval_hellaswag(state: TrainState, data, seq_lens, labels):
         """Evaluate the hellaswag dataset."""
         # data comes in shape (b, 4, block_size)
         # masks comes in shape (b, 4, block_size)
         # labels comes in shape (b,)
         bs_in = data.shape[0]
         data = jnp.reshape(data, (-1, data.shape[-1]))
-        masks = jnp.reshape(masks, (-1, masks.shape[-1]))
-        losses = eval_step_unreduced(state, data, masks)
+        seq_lens = jnp.reshape(seq_lens, (-1,))
+        losses = eval_step_unreduced(state, data, seq_lens)
         choices = jnp.argmin(jnp.reshape(losses, (bs_in, 4)), axis=-1)
         correct = jnp.sum(choices == labels)
         accuracy = correct / bs_in
@@ -488,7 +485,7 @@ def main(config: TrainConfig):
     for step in range(step, config.train_steps):
         for accum_step in range(config.optimizer.gradient_accumulation_steps):
             try:
-                tokens, masks = next(train_ds)
+                tokens, seq_lens = next(train_ds)
             except StopIteration:
                 print(
                     f"current dataset subshard exhausted on process "
@@ -512,9 +509,9 @@ def main(config: TrainConfig):
                 shard_idx += 1
                 train_ds = make_train_ds(shard_idx=shard_idx)
 
-                tokens, masks = next(train_ds)
+                tokens, seq_lens = next(train_ds)
 
-            loss, train_state, g_norm, lr = train_step_jit(train_state, tokens, masks)
+            loss, train_state, g_norm, lr = train_step_jit(train_state, tokens, seq_lens)
             train_losses.append(jax.device_get(loss).item())
             grad_norms.append(jax.device_get(g_norm).item())
             if accum_step < config.optimizer.gradient_accumulation_steps - 1:
