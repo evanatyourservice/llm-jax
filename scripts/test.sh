@@ -22,7 +22,7 @@ python3 train.py \
     --optimizer.learning_rate=0.001 \
     --optimizer.warmup_steps=20 \
     --optimizer.preconditioner_dtype=bfloat16 \
-    --model.block_size=128 \
-    --model.num_layers=2 \
+    --model.block_size=64 \
+    --model.num_layers=4 \
     --model.num_heads=2 \
     --model.num_embeds=8

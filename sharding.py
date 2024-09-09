@@ -39,9 +39,7 @@ def infer_sharding(params, mesh, op):
         params,
         names,
         specs,
-        # CHANGED: we assume preconditioners are kept in lists
-        # this is at least the case with tearfree shampoo and PSGD affine
-        is_leaf=lambda v: isinstance(v, nn.Partitioned) or isinstance(v, list),
+        is_leaf=lambda v: isinstance(v, nn.Partitioned),
     )
 
     # Two-level tree_map to prevent it from doing traversal inside the spec.
@@ -68,23 +66,6 @@ def fsdp_sharding(axis, min_size_to_shard_mb=1):
 
     def _update_spec(cur_spec, mesh, name, x):
         axis_size = np.prod([mesh.shape[a] for a in axis_tuple])
-
-        # Preconditioner sharding
-        # We're assuming preconditioners are kept in lists.
-        # This is at least the case for PSGD affine and tearfree shampoo.
-        if isinstance(x, list):
-            return [
-                (
-                    (axis,)
-                    if len(p.shape) > 1
-                    and np.prod(p.shape) * p.dtype.itemsize
-                    >= min_size_to_shard_mb * (2**20)
-                    and p.shape[0] % axis_size == 0
-                    else (None,)
-                )
-                for p in x
-            ]
-
         shape = x.shape
 
         # Params sharding

@@ -1,4 +1,7 @@
+from functools import partial
 from typing import Any, Optional, Tuple
+import flax
+import flax.linen
 import jax
 import jax.numpy as jnp
 import flax.linen as nn
@@ -16,8 +19,8 @@ class RMSNorm(nn.Module):
 
     @nn.compact
     def __call__(self, x):
-        # scale = self.param("scale", nn.initializers.zeros_init(), (x.shape[-1]))
-        var = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
+        scale = self.param("scale", nn.initializers.zeros_init(), (x.shape[-1]))
+        var = jnp.mean(jnp.square(x.astype(jnp.float32)), axis=-1, keepdims=True)
 
         # Jax.lax.rsqrt is used because it returns different floats than
         # jnp.reciprocal(jnp.sqrt(var + 1e-06))
@@ -26,9 +29,9 @@ class RMSNorm(nn.Module):
         # normed_inputs is a rank-K tensor, K > 1 (K is typically 2 or 3). scale is
         # a rank-1 tensor. To avoid implicit rank-promotion, reshape scale to
         # a (1, ..., 1, D) tensor, so the rank of scale matches normed_inputs.
-        # scale = jnp.expand_dims(scale, axis=range(len(x.shape) - 1))
-        # normed_inputs = normed_inputs * (1 + scale)
-        return normed_inputs
+        scale = jnp.expand_dims(scale, axis=range(len(x.shape) - 1))
+        normed_inputs = normed_inputs * (1 + scale)
+        return normed_inputs.astype(x.dtype)
 
 
 def apply_rope(
@@ -93,7 +96,7 @@ class Attention(nn.Module):
         encoded = jnp.einsum("...hqk,...khd->...qhd", probs, v)
         encoded = jnp.reshape(encoded, (B, T, C))
 
-        attn_output = nn.Dense(C, use_bias=False, kernel_init=initializer)(encoded)
+        attn_output = nn.Dense(C, use_bias=True, kernel_init=initializer)(encoded)
 
         return attn_output
 
@@ -103,9 +106,9 @@ class MLP(nn.Module):
     @nn.compact
     def __call__(self, x):
         C = x.shape[-1]
-        x = nn.Dense(4 * C, use_bias=False, kernel_init=initializer)(x)
+        x = nn.Dense(4 * C, use_bias=True, kernel_init=initializer)(x)
         x = nn.silu(x)
-        x = nn.Dense(C, use_bias=False, kernel_init=initializer)(x)
+        x = nn.Dense(C, use_bias=True, kernel_init=initializer)(x)
         return x
 
 
@@ -113,11 +116,12 @@ class Block(nn.Module):
     num_heads: int
 
     @nn.compact
-    def __call__(self, x, pos, mask):
+    def __call__(self, x):
+        x, pos, mask = x
         attn_layer = Attention(self.num_heads)
         x = x + attn_layer(RMSNorm()(x), pos, mask)
         x = x + MLP()(RMSNorm()(x))
-        return x
+        return (x, pos, mask)
 
 
 class GPT(nn.Module):
@@ -129,17 +133,12 @@ class GPT(nn.Module):
             self.config.vocab_size,
             self.config.num_embeds,
         )
-        wpe = nn.Embed(
-            self.config.block_size,
-            self.config.num_embeds,
-        )
 
-        token_embed = wte(tokens)  # [B, T, num_embeds]
-        pos_embed = wpe(positions)  # [B, T, num_embeds]
+        x = wte(tokens)  # [B, T, num_embeds]
 
-        x = token_embed + pos_embed
-        for i in range(self.config.num_layers):
-            x = Block(self.config.num_heads)(x, positions, attention_mask)
+        x = flax_scan(Block, length=self.config.num_layers, unroll=2)(
+            self.config.num_heads
+        )((x, positions, attention_mask))[0]
 
         x = RMSNorm()(x)
         logits = wte.attend(x)
@@ -195,3 +194,50 @@ def get_pretrained_params(model_type: str) -> Tuple[ModelConfig, FrozenDict]:
     hf_params = model_hf.params["transformer"]
     params = convert_hf_params(hf_params, config.num_heads, config.num_embeds)
     return config, params
+
+
+def _flax_scan(
+    body_fn,
+    length: int,
+    variable_broadcast=False,
+    variable_carry=False,
+    variable_axes={True: 0},
+    split_rngs={True: True},
+    unroll: int = 1,
+):
+    scan_fn = partial(
+        flax.core.lift.scan,
+        variable_broadcast=variable_broadcast,
+        variable_carry=variable_carry,
+        variable_axes=variable_axes,
+        split_rngs=split_rngs,
+        unroll=unroll,
+    )
+
+    def wrapper(scope, carry):
+        return body_fn(scope, carry), None
+
+    fn = lambda scope, c: scan_fn(wrapper, length=length)(scope, c)[0]
+
+    return fn
+
+
+def flax_scan(
+    target,
+    length: int,
+    variable_broadcast=False,
+    variable_carry=False,
+    variable_axes={True: 0},
+    split_rngs={True: True},
+    unroll: int = 1,
+):
+    return nn.transforms.lift_transform(
+        _flax_scan,
+        target,
+        length=length,
+        variable_broadcast=variable_broadcast,
+        variable_carry=variable_carry,
+        variable_axes=variable_axes,
+        split_rngs=split_rngs,
+        unroll=unroll,
+    )

@@ -6,6 +6,7 @@ import time
 from typing import Callable, Tuple
 from dataclasses import asdict
 import os
+import flax.traverse_util
 import numpy as np
 import wandb
 import tyro
@@ -110,7 +111,7 @@ def main(config: TrainConfig):
         boundaries=[config.optimizer.warmup_steps],
     )
 
-    def make_opt(reshaped_params_sharding=None):
+    def make_opt(reshaped_params_sharding=None, scanned_arrays=None):
         write_note(f"using {config.optimizer.type} optimizer")
 
         optimizer = []
@@ -149,6 +150,7 @@ def main(config: TrainConfig):
                     precond_dtype=config.optimizer.preconditioner_dtype,
                     precision="bfloat16",
                     reshaped_params_sharding=reshaped_params_sharding,
+                    scanned_arrays=scanned_arrays,
                 )
             )
         elif config.optimizer.type == "shampoo":
@@ -230,8 +232,14 @@ def main(config: TrainConfig):
         rng_init
     )
 
-    # make optimizer and get its shardings
-    optimizer = make_opt()
+    # get pytree of how many times we scan each array in params
+    scanned_arrays = jax.tree.map(lambda _: 0, train_state.params)
+    scanned_arrays = flax.traverse_util.ModelParamTraversal(
+        lambda path, _: "scan" in path
+    ).update(lambda _: 1, scanned_arrays)
+
+    # make optimizer and get its shardings, init psgd with scanned arrays
+    optimizer = make_opt(scanned_arrays=scanned_arrays)
 
     opt_state_shapes = jax.eval_shape(optimizer.init, train_state.params)
     opt_state_sharding, _ = infer_sharding(params=opt_state_shapes, mesh=mesh, op=op)
@@ -241,12 +249,15 @@ def main(config: TrainConfig):
     )
 
     # PSGD reshapes params into matrices. Here we get sharding rules for them
-    # which are similar to the rules for params. We can pass this into PSGD for
-    # internal sharding constraints, although it's not absolutely necessary.
-    def get_reshaped_params_shapes(params):
-        # returns tuples of (reshape_fn, unreshape_fn, shape)
-        # TODO account for scanned layers
-        affine_reshapers = jax.tree.map(_shape_as_matrix, params)
+    # similarly to params. We can pass this into PSGD for internal sharding
+    # constraints, although it's not absolutely necessary. If all params are
+    # already matrices, then this is unnecessary.
+    def get_reshaped_params_shapes(params, scanned_layers):
+        """Get the shapes of params after PSGD reshapes."""
+        # TODO move to psgd file and print which params are being reshaped in a nice way
+        affine_reshapers = jax.tree.map(
+            _shape_as_matrix, params, scanned_layers
+        )  # returns tuples of (reshape_fn, unreshape_fn, shape)
         p_struct = jax.tree.structure(params)
         affine_reshapers = p_struct.flatten_up_to(affine_reshapers)
         matrix_shapes = [
@@ -254,14 +265,17 @@ def main(config: TrainConfig):
         ]
         return p_struct.unflatten(matrix_shapes)
 
-    reshaped_params_shapes = get_reshaped_params_shapes(train_state.params)
+    reshaped_params_shapes = get_reshaped_params_shapes(
+        train_state.params, scanned_arrays
+    )
     reshaped_params_sharding, _ = infer_sharding(
         params=reshaped_params_shapes, mesh=mesh, op=op
     )
 
-    # remake optimizer with reshaped params sharding passed in
-    # again, not strictly necessary, but could ensure things stay properly sharded
-    optimizer = make_opt(reshaped_params_sharding=reshaped_params_sharding)
+    # remake optimizer with reshaped params sharding and scanned layers passed in
+    optimizer = make_opt(
+        reshaped_params_sharding=reshaped_params_sharding, scanned_arrays=scanned_arrays
+    )
 
     # finish making train state (pass in optimizer and opt_state)
     train_state = train_state.replace(tx=optimizer, opt_state=opt_state)
