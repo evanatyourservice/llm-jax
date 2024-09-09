@@ -188,14 +188,7 @@ def main(config: TrainConfig):
 
     def init_train_state(key):
         """Initialize the train state."""
-        if config.remat:
-            model = flax.linen.remat(
-                GPT,
-                static_argnums=(2,),
-                policy=jax.checkpoint_policies.dots_with_no_batch_dims_saveable,
-            )(config.model)
-        else:
-            model = GPT(config.model)
+        model = GPT(config.model)
 
         dummy_tokens = jnp.zeros((1, config.model.block_size), dtype=jnp.uint16)
         dummy_seq_mask = jnp.ones((1, config.model.block_size), dtype=jnp.bool)

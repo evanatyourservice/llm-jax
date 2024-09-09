@@ -20,7 +20,7 @@ class RMSNorm(nn.Module):
     @nn.compact
     def __call__(self, x):
         scale = self.param("scale", nn.initializers.zeros_init(), (x.shape[-1]))
-        var = jnp.mean(jnp.square(x.astype(jnp.float32)), axis=-1, keepdims=True)
+        var = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
 
         # Jax.lax.rsqrt is used because it returns different floats than
         # jnp.reciprocal(jnp.sqrt(var + 1e-06))
@@ -31,7 +31,7 @@ class RMSNorm(nn.Module):
         # a (1, ..., 1, D) tensor, so the rank of scale matches normed_inputs.
         scale = jnp.expand_dims(scale, axis=range(len(x.shape) - 1))
         normed_inputs = normed_inputs * (1 + scale)
-        return normed_inputs.astype(x.dtype)
+        return normed_inputs
 
 
 def apply_rope(
@@ -78,8 +78,8 @@ class Attention(nn.Module):
         v = jnp.reshape(v, (B, T, self.num_heads, head_dim))
 
         # normalize qk
-        q = RMSNorm()(q)
-        k = RMSNorm()(k)
+        # q = RMSNorm()(q)
+        # k = RMSNorm()(k)
 
         query_proj = apply_rope(q, segment_pos, head_dim=head_dim)
         query_scaled = query_proj * jax.lax.rsqrt(
@@ -96,7 +96,7 @@ class Attention(nn.Module):
         encoded = jnp.einsum("...hqk,...khd->...qhd", probs, v)
         encoded = jnp.reshape(encoded, (B, T, C))
 
-        attn_output = nn.Dense(C, use_bias=True, kernel_init=initializer)(encoded)
+        attn_output = nn.Dense(C, use_bias=False, kernel_init=initializer)(encoded)
 
         return attn_output
 
@@ -106,9 +106,9 @@ class MLP(nn.Module):
     @nn.compact
     def __call__(self, x):
         C = x.shape[-1]
-        x = nn.Dense(4 * C, use_bias=True, kernel_init=initializer)(x)
-        x = nn.silu(x)
-        x = nn.Dense(C, use_bias=True, kernel_init=initializer)(x)
+        x = nn.Dense(4 * C, use_bias=False, kernel_init=initializer)(x)
+        x = nn.gelu(x)
+        x = nn.Dense(C, use_bias=False, kernel_init=initializer)(x)
         return x
 
 
@@ -127,6 +127,7 @@ class Block(nn.Module):
 class GPT(nn.Module):
     config: ModelConfig
 
+    @nn.checkpoint
     @nn.compact
     def __call__(self, tokens, positions, attention_mask):
         wte = nn.Embed(
@@ -136,7 +137,7 @@ class GPT(nn.Module):
 
         x = wte(tokens)  # [B, T, num_embeds]
 
-        x = flax_scan(Block, length=self.config.num_layers, unroll=2)(
+        x = flax_scan(Block, length=self.config.num_layers, unroll=1)(
             self.config.num_heads
         )((x, positions, attention_mask))[0]
 
