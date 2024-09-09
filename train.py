@@ -230,6 +230,9 @@ def main(config: TrainConfig):
     scanned_arrays = flax.traverse_util.ModelParamTraversal(
         lambda path, _: "scan" in path
     ).update(lambda _: 1, scanned_arrays)
+    scanned_arrays = flax.traverse_util.ModelParamTraversal(
+        lambda path, _: "qkv_einsum" in path
+    ).update(lambda _: 2, scanned_arrays)
 
     # make optimizer and get its shardings, init psgd with scanned arrays
     optimizer = make_opt(scanned_arrays=scanned_arrays)

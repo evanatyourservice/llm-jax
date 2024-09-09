@@ -24,10 +24,10 @@ datasets.config.STREAMING_READ_RETRY_INTERVAL = 5
 
 OPTIONS = tf.data.Options()
 OPTIONS.deterministic = False
-# OPTIONS.threading.private_threadpool_size = 48
-# OPTIONS.threading.max_intra_op_parallelism = 1
+OPTIONS.threading.private_threadpool_size = 48
+OPTIONS.threading.max_intra_op_parallelism = 1
 # Stop a whole bunch of magic stuff that eats up all RAM:
-# OPTIONS.experimental_optimization.inject_prefetch = False
+OPTIONS.experimental_optimization.inject_prefetch = False
 
 
 def prepare_hellaswag(
