@@ -141,7 +141,7 @@ def scale_by_affine(
         # apply preconditioner, buffer A
         output = []
         for (Ql, Qr), g, n in zip(Qs, gs, inner_scanned_arrays):
-            output.append(_maybe_vmap(_precond_grad_affine_math, n)(Ql, Qr, g))
+            output.append(_maybe_map(_precond_grad_affine_math, n)(Ql, Qr, g))
 
         gs, As = zip(*output)
 
@@ -165,7 +165,7 @@ def scale_by_affine(
                     subkeys = jnp.reshape(subkeys, leading_dims + (2,))
                 else:
                     subkeys = k
-                new_Qs.append(_maybe_vmap(update_precond_fn, n)(subkeys, Ql, Qr, a))
+                new_Qs.append(_maybe_map(update_precond_fn, n)(subkeys, Ql, Qr, a))
 
             new_Qs = otu.tree_cast(new_Qs, precond_dtype)
             return new_Qs
@@ -174,7 +174,7 @@ def scale_by_affine(
 
         # global clipping
         n_params = sum(p.size for p in jax.tree.leaves(gs))
-        max_norm = jnp.sqrt(n_params) / 2
+        max_norm = jnp.sqrt(n_params) / 4
         gs = _global_clip(gs, max_norm)
         # element-wise clipping
         gs = jax.tree.map(lambda x: jnp.clip(x, -1.0, 1.0), gs)
@@ -332,11 +332,14 @@ def _norm_lower_bound(A: jax.Array):
     return jax.lax.cond(max_abs > 0, calc, pass_calc, A)
 
 
-def _maybe_vmap(fn: Callable, n: int):
-    if n > 0:
-        for _ in range(n):
-            fn = jax.vmap(fn)
-    return fn
+def _maybe_map(fn: Callable, n: int):
+    def nested_map(depth):
+        if depth == 0:
+            return fn
+        else:
+            return lambda *xs: jax.lax.map(lambda x: nested_map(depth - 1)(*x), xs)
+    
+    return nested_map(n)
 
 
 def _shape_as_matrix(
@@ -356,8 +359,6 @@ def _shape_as_matrix(
             element is function that converts matrix back to x, and third element
             is the shape of x as a matrix.
     """
-    map = partial(_maybe_vmap, n=ignore_n_leading_dims)
-
     leading_dims = arr.shape[:ignore_n_leading_dims]
     arr_ndim = len(arr.shape) - ignore_n_leading_dims
     arr_shape = arr.shape[ignore_n_leading_dims:]
@@ -385,8 +386,8 @@ def _shape_as_matrix(
     elif arr_ndim < 2:  # scalar or vector, simple reshape to matrix
         mtx_shape = (1, arr_size)
         return (
-            lambda u, shape=mtx_shape: map(partial(jnp.reshape, shape=shape))(u),
-            lambda v, shape=arr_shape: map(partial(jnp.reshape, shape=shape))(v),
+            lambda u, shape=mtx_shape: _maybe_map(partial(jnp.reshape, shape=shape), ignore_n_leading_dims)(u),
+            lambda v, shape=arr_shape: _maybe_map(partial(jnp.reshape, shape=shape), ignore_n_leading_dims)(v),
             leading_dims + mtx_shape,
         )
     else:  # higher order tensor, a little complicated
@@ -402,8 +403,8 @@ def _shape_as_matrix(
         if opt_p == p0:  # no permutation is needed, just reshaping
             mtx_shape = (prod(s0[:opt_i]), prod(s0[opt_i:]))
             return (
-                lambda u, shape=mtx_shape: map(partial(jnp.reshape, shape=shape))(u),
-                lambda v, shape=s0: map(partial(jnp.reshape, shape=shape))(v),
+                lambda u, shape=mtx_shape: _maybe_map(partial(jnp.reshape, shape=shape), ignore_n_leading_dims)(u),
+                lambda v, shape=s0: _maybe_map(partial(jnp.reshape, shape=shape), ignore_n_leading_dims)(v),
                 leading_dims + mtx_shape,
             )
         else:  # need both permutation and reshaping
@@ -412,11 +413,11 @@ def _shape_as_matrix(
                 pair[1] for pair in sorted([(k, i) for (i, k) in enumerate(opt_p)])
             )
             return (
-                lambda u, permute=opt_p, shape=mtx_shape: map(
-                    lambda x: jnp.reshape(jnp.transpose(x, permute), shape)
+                lambda u, permute=opt_p, shape=mtx_shape: _maybe_map(
+                    lambda x: jnp.reshape(jnp.transpose(x, permute), shape), ignore_n_leading_dims
                 )(u),
-                lambda v, permute=q, shape=opt_s: map(
-                    lambda x: jnp.transpose(jnp.reshape(x, shape), permute)
+                lambda v, permute=q, shape=opt_s: _maybe_map(
+                    lambda x: jnp.transpose(jnp.reshape(x, shape), permute), ignore_n_leading_dims
                 )(v),
                 leading_dims + mtx_shape,
             )
