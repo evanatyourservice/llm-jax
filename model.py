@@ -130,8 +130,7 @@ class Block(nn.Module):
     def __call__(self, x):
         attn_layer = Attention(self.num_heads)
 
-        with jax.ensure_compile_time_eval():
-            attn_mask = nn.make_causal_mask(x[:, :, 0], dtype=bool)
+        attn_mask = nn.make_causal_mask(x[:, :, 0], dtype=bool)
 
         x = x + attn_layer(RMSNorm()(x), attn_mask)
         x = x + MLP()(RMSNorm()(x))
