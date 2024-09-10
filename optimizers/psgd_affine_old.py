@@ -176,9 +176,9 @@ def scale_by_affine(
             if flat_sharding is not None:
                 gs = jax.lax.with_sharding_constraint(gs, flat_sharding)
 
-        # global clipping, sqrt(n_params) / 2 seems to work well empirically
+        # global clipping
         n_params = sum(p.size for p in jax.tree.leaves(gs))
-        max_norm = jnp.sqrt(n_params) / 4
+        max_norm = jnp.sqrt(n_params)
         gs = _global_clip(gs, max_norm)
         # element-wise clipping
         gs = jax.tree.map(lambda x: jnp.clip(x, -1.0, 1.0), gs)
