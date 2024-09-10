@@ -18,11 +18,10 @@ python3 train.py \
     --optimizer.type=affine \
     --optimizer.learning_rate=0.003 \
     --optimizer.warmup_steps=0 \
-    --optimizer.nesterov \
     --optimizer.weight_decay=0.01 \
     --optimizer.grad_clip=1.0 \
-    --optimizer.max_size_triangular=8192 \
+    --optimizer.max_size_triangular=16384 \
     --optimizer.max_skew_triangular=16 \
     --optimizer.precond_lr=0.1 \
     --optimizer.precond_init_scale=1.0 \
-    --optimizer.preconditioner_dtype=bfloat16
+    --optimizer.preconditioner_dtype=float32
