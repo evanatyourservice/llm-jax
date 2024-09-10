@@ -155,8 +155,7 @@ def fineweb_edu_dataset(
             yield example["tokens"].astype(np.uint16)
 
     ds = tf.data.Dataset.from_generator(
-        gen,
-        output_signature=tf.TensorSpec(shape=(None,), dtype=tf.uint16)
+        gen, output_signature=tf.TensorSpec(shape=(None,), dtype=tf.uint16)
     )
     ds = ds.shuffle(128)  # shuffle dataset examples
     ds = ds.unbatch()

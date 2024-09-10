@@ -26,6 +26,7 @@ from transformers import AutoTokenizer
 from dataset import prepare_hellaswag, fineweb_edu_dataset
 from configs import TrainConfig
 from optimizers.psgd_affine import affine, _shape_as_matrix
+from optimizers.psgd_affine_old import affine as affine_old
 from optimizers.tearfree import optimizer as tearfree_opt
 from optimizers.tearfree import shampoo, second_order
 from sharding import infer_sharding, fsdp_sharding
@@ -96,6 +97,18 @@ def main(config: TrainConfig):
     def make_opt(reshaped_params_sharding=None, scanned_arrays=None):
         write_note(f"using {config.optimizer.type} optimizer")
 
+        def param_decay_mask(params):
+            """Only lets through kernel weights for weight decay."""
+            non_kernels = flax.traverse_util.ModelParamTraversal(
+                lambda p, _: "bias" in p
+                or "norm" in p
+                or "embedding" in p
+                or "scale" in p
+            )
+            all_true = jax.tree.map(lambda _: True, params)
+            out = non_kernels.update(lambda _: False, all_true)
+            return out
+
         optimizer = []
         if config.optimizer.grad_clip > 0.0:
             optimizer.append(optax.clip_by_global_norm(config.optimizer.grad_clip))
@@ -111,28 +124,46 @@ def main(config: TrainConfig):
                     lr_schedule,
                     *config.optimizer.betas,
                     weight_decay=config.optimizer.weight_decay,
-                    mask=None,
+                    mask=param_decay_mask,
                     mu_dtype=jnp.bfloat16,
                 )
             )
         elif config.optimizer.type in ["psgd", "psgd_affine", "affine"]:
+            # optimizer.append(
+            #     affine(
+            #         lr_schedule,
+            #         preconditioner_update_probability=update_prob_schedule,
+            #         b1=config.optimizer.betas[0],
+            #         nesterov=config.optimizer.nesterov,
+            #         weight_decay=config.optimizer.weight_decay,
+            #         mask=param_decay_mask,
+            #         max_size_triangular=config.optimizer.max_size_triangular,
+            #         max_skew_triangular=config.optimizer.max_skew_triangular,
+            #         precond_lr=config.optimizer.precond_lr,
+            #         precond_init_scale=config.optimizer.precond_init_scale,
+            #         mu_dtype=jnp.bfloat16,
+            #         precond_dtype=config.optimizer.preconditioner_dtype,
+            #         precision="bfloat16",
+            #         reshaped_params_sharding=reshaped_params_sharding,
+            #         scanned_arrays=scanned_arrays,
+            #     )
+            # )
             optimizer.append(
-                affine(
+                affine_old(
                     lr_schedule,
                     preconditioner_update_probability=update_prob_schedule,
                     b1=config.optimizer.betas[0],
                     nesterov=config.optimizer.nesterov,
                     weight_decay=config.optimizer.weight_decay,
-                    mask=None,
+                    mask=param_decay_mask,
                     max_size_triangular=config.optimizer.max_size_triangular,
                     max_skew_triangular=config.optimizer.max_skew_triangular,
                     precond_lr=config.optimizer.precond_lr,
                     precond_init_scale=config.optimizer.precond_init_scale,
-                    mu_dtype=jnp.bfloat16,
                     precond_dtype=config.optimizer.preconditioner_dtype,
                     precision="bfloat16",
                     reshaped_params_sharding=reshaped_params_sharding,
-                    scanned_arrays=scanned_arrays,
+                    best_effort_scan=True,
                 )
             )
         elif config.optimizer.type == "shampoo":
@@ -311,7 +342,9 @@ def main(config: TrainConfig):
 
             targets = tokens[:, 1:]
 
-            loss = optax.softmax_cross_entropy_with_integer_labels(logits, targets).mean()
+            loss = optax.softmax_cross_entropy_with_integer_labels(
+                logits, targets
+            ).mean()
 
             # Palm style z-loss
             zloss = jax.scipy.special.logsumexp(logits, axis=-1).mean()
@@ -343,7 +376,7 @@ def main(config: TrainConfig):
         targets = tokens[:, 1:]
 
         losses = optax.softmax_cross_entropy_with_integer_labels(logits, targets)
-        
+
         @jax.vmap
         def unreduced_losses(loss, seq_len):
             seq_mask = jnp.arange(len(loss)) < seq_len - 1
@@ -353,7 +386,6 @@ def main(config: TrainConfig):
         losses = unreduced_losses(losses, seq_lens)
         assert losses.shape == tokens.shape[:1]
         return losses
-
 
     def eval_hellaswag(state: TrainState, data, seq_lens, labels):
         """Evaluate the hellaswag dataset."""

@@ -1,6 +1,5 @@
-import enum
 from functools import partial
-from typing import Any, Optional, Tuple
+from typing import Tuple
 import flax
 import flax.linen
 import jax
@@ -150,9 +149,11 @@ class GPT(nn.Module):
 
         x = wte.encode(tokens)  # [B, T, num_embeds]
 
-        x = flax_scan(Block, length=self.config.num_layers, unroll=1)(
-            self.config.num_heads
-        )(x)
+        # x = flax_scan(Block, length=self.config.num_layers, unroll=1)(
+        #     self.config.num_heads
+        # )(x)
+        for _ in range(self.config.num_layers):
+            x = Block(self.config.num_heads)(x)
 
         x = RMSNorm()(x)
         logits = wte.decode(x)

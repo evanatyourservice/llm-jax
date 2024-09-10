@@ -1,12 +1,9 @@
 from collections import defaultdict
-from functools import partial
-from pprint import pprint
 from typing import Any, Optional, Union, Callable, NamedTuple, List, Tuple
 
 import jax
 from jax import numpy as jnp
 from jax.random import PRNGKey
-import numpy as np
 from optax import tree_utils as otu
 from optax._src import base, transform
 from optax._src.linear_algebra import global_norm
@@ -34,7 +31,7 @@ def scale_by_affine(
     precond_dtype: Optional[Union[str, jnp.dtype]] = None,
     precision: str = "bfloat16",
     reshaped_params_sharding: Any = None,
-    scanned_arrays: Optional[base.Params] = None,
+    best_effort_scan: bool = True,
 ) -> base.GradientTransformationExtraArgs:
     """
     Implements Affine PSGD from https://github.com/lixilinx/psgd_torch.
@@ -54,11 +51,9 @@ def scale_by_affine(
             Defaults to the same dtype as the parameters.
         precond_dtype: optional str or jnp.dtype, dtype of the preconditioner.
         precision: str, precision for matmul, 'bfloat16', 'tensorfloat32', 'float32'.
-        reshaped_params_sharding: optional Any, sharding for reshaped parameters
-            not including any leading scanned dims passed through `scanned_arrays`.
-        scanned_arrays: optional base.Params, a pytree same structure as params
-            indicating how many leading dimensions are to be scanned. If None,
-            assumes no arrays are scanned.
+        reshaped_params_sharding: optional Any, sharding spec for reshaped parameters.
+        best_effort_scan: bool, try to automatically stack same-shaped matrices
+            and use lax.map to update them to save on compile time and memory.
 
     Returns:
         optax.GradientTransformationExtraArgs
@@ -69,22 +64,13 @@ def scale_by_affine(
     def init_fn(params):
         key = jax.random.PRNGKey(36)
 
-        inner_scanned_arrays = scanned_arrays
-        if inner_scanned_arrays is None:
-            inner_scanned_arrays = jax.tree.map(lambda _: 0, params)
-
         # momentum
         mu = None
         if b1 > 0:
             mu = otu.tree_zeros_like(params, mu_dtype)
 
         # preconditioners
-        affine_reshapers = [
-            _shape_as_matrix(x, n)
-            for x, n in zip(
-                jax.tree.leaves(params), jax.tree.leaves(inner_scanned_arrays)
-            )
-        ]
+        affine_reshapers = [_shape_as_matrix(x) for x in jax.tree.leaves(params)]
         Qs = [
             _initQ(s[2], max_size_triangular, max_skew_triangular, precond_dtype)
             for s in affine_reshapers
@@ -102,10 +88,6 @@ def scale_by_affine(
         count_inc = safe_int32_increment(state.count)
         key = state.key
 
-        inner_scanned_arrays = scanned_arrays
-        if inner_scanned_arrays is None:
-            inner_scanned_arrays = jax.tree.map(lambda _: 0, updates)
-
         update_prob_in = preconditioner_update_probability
         if isinstance(preconditioner_update_probability, Callable):
             update_prob_in = preconditioner_update_probability(count_inc)
@@ -120,16 +102,11 @@ def scale_by_affine(
             updates, mu = _apply_momentum(updates, state.mu, count_inc, b1, nesterov)
 
         # get reshapers
-        affine_reshapers = jax.tree.map(
-            lambda x, n: _shape_as_matrix(x, n),
-            updates,
-            inner_scanned_arrays,
-        )
+        affine_reshapers = jax.tree.map(_shape_as_matrix, updates)
 
         # flatten pytrees
         updates, grads_structure = jax.tree.flatten(updates)
         Qs = grads_structure.flatten_up_to(state.Qs)
-        inner_scanned_arrays = grads_structure.flatten_up_to(inner_scanned_arrays)
         affine_reshapers = grads_structure.flatten_up_to(affine_reshapers)
         flat_sharding = grads_structure.flatten_up_to(reshaped_params_sharding)
 
@@ -138,41 +115,68 @@ def scale_by_affine(
         if flat_sharding is not None:
             gs = jax.lax.with_sharding_constraint(gs, flat_sharding)
 
-        # apply preconditioner, buffer A
-        output = []
-        for (Ql, Qr), g, n in zip(Qs, gs, inner_scanned_arrays):
-            output.append(_maybe_map(_precond_grad_affine_math, n)(Ql, Qr, g))
+        # stack same-shaped matrices to scan over
+        if best_effort_scan:
+            gs, Qs, revert_indices = _stack_matrices(gs, Qs)
 
-        gs, As = zip(*output)
+        map_batch_size = 1  # interpolates between scan and vmap, 1 being scan unroll=1
 
         # update preconditioner
         key, subkey = jax.random.split(key)
         do_update = jax.random.uniform(subkey, dtype=jnp.float32) < update_prob_in
 
         def update_preconditioner():
-            keys = jax.random.split(key, len(Qs))
-            new_Qs = []
-            update_precond_fn = partial(
-                _update_precond_affine_dropv_math,
-                precond_lr=precond_lr_in,
-                precision=precision,
-            )
-            for k, (Ql, Qr), a, n in zip(keys, Qs, As, inner_scanned_arrays):
-                if n > 0:
-                    leading_dims = Ql.shape[:n]
-                    leading_size = np.prod(leading_dims)
-                    subkeys = jax.random.split(k, leading_size)
-                    subkeys = jnp.reshape(subkeys, leading_dims + (2,))
-                else:
-                    subkeys = k
-                new_Qs.append(_maybe_map(update_precond_fn, n)(subkeys, Ql, Qr, a))
+            ukey = key
+            if best_effort_scan:
+                key_list = []
+                for g in gs:
+                    n_keys = jax.random.split(ukey, g.shape[0] + 1)
+                    ukey, keys = n_keys[0], n_keys[1:]
+                    key_list.append(keys)
+
+                new_Qs = [
+                    jax.lax.map(
+                        lambda xs: _update_precond_affine_dropv_math(
+                            *xs, precond_lr_in, precision
+                        ),
+                        (k, Ql, Qr, g),
+                        batch_size=map_batch_size,
+                    )
+                    for (k, (Ql, Qr), g) in zip(key_list, Qs, gs)
+                ]
+            else:
+                keys = jax.random.split(ukey, len(Qs))
+                new_Qs = [
+                    _update_precond_affine_dropv_math(
+                        k, Ql, Qr, g, precond_lr_in, precision
+                    )
+                    for (k, (Ql, Qr), g) in zip(keys, Qs, gs)
+                ]
 
             new_Qs = otu.tree_cast(new_Qs, precond_dtype)
             return new_Qs
 
         Qs = _efficient_cond(do_update, update_preconditioner, Qs)
 
-        # global clipping
+        # precondition grads
+        if best_effort_scan:
+            precond_grad_fn = lambda l, r, g: jax.lax.map(
+                lambda xs: _precond_grad_affine_math(*xs),
+                (l, r, g),
+                batch_size=map_batch_size,
+            )
+        else:
+            precond_grad_fn = _precond_grad_affine_math
+
+        gs = [precond_grad_fn(Ql, Qr, g) for ((Ql, Qr), g) in zip(Qs, gs)]
+
+        # unstack matrices
+        if best_effort_scan:
+            gs, Qs = _unstack_matrices(gs, Qs, revert_indices)
+            if flat_sharding is not None:
+                gs = jax.lax.with_sharding_constraint(gs, flat_sharding)
+
+        # global clipping, sqrt(n_params) / 2 seems to work well empirically
         n_params = sum(p.size for p in jax.tree.leaves(gs))
         max_norm = jnp.sqrt(n_params) / 4
         gs = _global_clip(gs, max_norm)
@@ -194,12 +198,12 @@ def scale_by_affine(
 
 def affine(
     learning_rate: Union[float, Callable[[int], float]] = 0.001,
-    preconditioner_update_probability: Union[float, Callable[[int], float]] = 0.1,
+    preconditioner_update_probability: Union[float, Callable[[int], float]] = 0.5,
     b1: float = 0.9,
     nesterov: bool = False,
     weight_decay: float = 0.0,
     mask: Optional[Union[Any, Callable[[base.Params], Any]]] = None,
-    max_size_triangular: int = 8192,
+    max_size_triangular: int = 4096,
     max_skew_triangular: int = 16,
     precond_lr: Union[float, Callable[[int], float]] = 0.1,
     precond_init_scale: float = 1.0,
@@ -207,7 +211,7 @@ def affine(
     precond_dtype: Optional[Union[str, jnp.dtype]] = None,
     precision: str = "bfloat16",
     reshaped_params_sharding: Any = None,
-    scanned_arrays: Optional[base.Params] = None,
+    best_effort_scan: bool = True,
 ) -> base.GradientTransformationExtraArgs:
     """
     Implements Affine PSGD from https://github.com/lixilinx/psgd_torch.
@@ -231,9 +235,8 @@ def affine(
         precond_dtype: optional str or jnp.dtype, dtype of the preconditioner.
         precision: str, precision for matmul, 'bfloat16', 'tensorfloat32', 'float32'.
         reshaped_params_sharding: optional Any, sharding spec for parameters.
-        scanned_arrays: optional base.Params, a pytree same structure as params
-            indicating how many leading dimensions are to be scanned. If None,
-            assumes no arrays are scanned.
+        best_effort_scan: bool, try to automatically stack same-shaped matrices
+            and use lax.map to update them to save on compile time and memory.
 
     Returns:
         optax.GradientTransformationExtraArgs
@@ -251,7 +254,7 @@ def affine(
             precond_dtype=precond_dtype,
             precision=precision,
             reshaped_params_sharding=reshaped_params_sharding,
-            scanned_arrays=scanned_arrays,
+            best_effort_scan=best_effort_scan,
         )
     ]
     if weight_decay > 0:
@@ -332,37 +335,19 @@ def _norm_lower_bound(A: jax.Array):
     return jax.lax.cond(max_abs > 0, calc, pass_calc, A)
 
 
-def _maybe_map(fn: Callable, n: int):
-    def nested_map(depth):
-        if depth == 0:
-            return fn
-        else:
-            return lambda *xs: jax.lax.map(lambda x: nested_map(depth - 1)(*x), xs)
-
-    return nested_map(n)
-
-
-def _shape_as_matrix(
-    arr: jax.Array,
-    ignore_n_leading_dims: int = 0,
-) -> tuple:
+def _shape_as_matrix(arr: jax.Array) -> tuple:
     """Reshapes tensor x to a matrix with conditions to improve efficiency.
 
     From original pytorch version.
 
     Args:
         arr: jax.Array, tensor to be reshaped.
-        ignore_n_leading_dims: int, number of leading dimensions to ignore.
 
     Returns:
         tuple where first element is function that convert x to matrix, second
             element is function that converts matrix back to x, and third element
             is the shape of x as a matrix.
     """
-    leading_dims = arr.shape[:ignore_n_leading_dims]
-    arr_ndim = len(arr.shape) - ignore_n_leading_dims
-    arr_shape = arr.shape[ignore_n_leading_dims:]
-    arr_size = np.prod(arr_shape)
 
     def prod(arr):
         # prod = lambda arr: 1 if len(arr)==0 else arr[0]*prod(arr[1:])
@@ -381,21 +366,17 @@ def _shape_as_matrix(
                     yield p0[i], *q
 
     # here begins the processing
-    if arr_ndim == 2:  # t already is a matrix, do nothing
-        return lambda u: u, lambda v: v, leading_dims + arr_shape
-    elif arr_ndim < 2:  # scalar or vector, simple reshape to matrix
-        mtx_shape = (1, arr_size)
+    if arr.ndim == 2:  # t already is a matrix, do nothing
+        return lambda u: u, lambda v: v, arr.shape
+    elif arr.ndim < 2:  # scalar or vector, simple reshape to matrix
+        mtx_shape = (1, arr.size)
         return (
-            lambda u, shape=mtx_shape: _maybe_map(
-                partial(jnp.reshape, shape=shape), ignore_n_leading_dims
-            )(u),
-            lambda v, shape=arr_shape: _maybe_map(
-                partial(jnp.reshape, shape=shape), ignore_n_leading_dims
-            )(v),
-            leading_dims + mtx_shape,
+            lambda u, shape=mtx_shape: u.reshape(shape),
+            lambda v, shape=arr.shape: v.reshape(shape),
+            mtx_shape,
         )
     else:  # higher order tensor, a little complicated
-        p0, s0 = tuple(range(arr_ndim)), arr_shape  # original permutation and shape
+        p0, s0 = tuple(range(arr.ndim)), arr.shape  # original permutation and shape
         min_precond_size, opt_p, opt_s, opt_i = float("inf"), None, None, None
         for p in permutations(p0):
             s = tuple(s0[j] for j in p)
@@ -407,13 +388,9 @@ def _shape_as_matrix(
         if opt_p == p0:  # no permutation is needed, just reshaping
             mtx_shape = (prod(s0[:opt_i]), prod(s0[opt_i:]))
             return (
-                lambda u, shape=mtx_shape: _maybe_map(
-                    partial(jnp.reshape, shape=shape), ignore_n_leading_dims
-                )(u),
-                lambda v, shape=s0: _maybe_map(
-                    partial(jnp.reshape, shape=shape), ignore_n_leading_dims
-                )(v),
-                leading_dims + mtx_shape,
+                lambda u, shape=mtx_shape: u.reshape(shape),
+                lambda v, shape=s0: v.reshape(shape),
+                mtx_shape,
             )
         else:  # need both permutation and reshaping
             mtx_shape = (prod(opt_s[:opt_i]), prod(opt_s[opt_i:]))
@@ -421,30 +398,22 @@ def _shape_as_matrix(
                 pair[1] for pair in sorted([(k, i) for (i, k) in enumerate(opt_p)])
             )
             return (
-                lambda u, permute=opt_p, shape=mtx_shape: _maybe_map(
-                    lambda x: jnp.reshape(jnp.transpose(x, permute), shape),
-                    ignore_n_leading_dims,
-                )(u),
-                lambda v, permute=q, shape=opt_s: _maybe_map(
-                    lambda x: jnp.transpose(jnp.reshape(x, shape), permute),
-                    ignore_n_leading_dims,
-                )(v),
-                leading_dims + mtx_shape,
+                lambda u, permute=opt_p, shape=mtx_shape: u.transpose(permute).reshape(
+                    shape
+                ),
+                lambda v, permute=q, shape=opt_s: v.reshape(shape).transpose(permute),
+                mtx_shape,
             )
 
 
 def _initQ(shape, max_size, max_skew, dtype=None):
-    """Initializes Q = kron(Q2, Q1) for param p.
-
-    Q1 and Q2 can reduce to diagonal matrices to save memory if
-    `max_size` or `max_skew` are set to small numbers.
-
-    Broadcasts Q1 and Q2 to any leading dimensions in `shape`, with
-    last two dimensions being the preconditioner dimensions.
     """
-    leading_dims = shape[:-2]
-    s1, s2 = shape[-2:]
-
+    It initializes Q = kron(Q2, Q1) for param p to scale * I,
+    where Q1 and Q2 can reduce to diagonal matrices to save memory if
+    max_size or max_skew are set to small numbers.
+    """
+    assert len(shape) == 2, "preconditioned param shape must be 2D"
+    s1, s2 = shape
     if s1 < 2 or s1 > max_size or s1 > max_skew * s2:
         Q1 = jnp.ones(s1, dtype=dtype)
     else:
@@ -455,27 +424,23 @@ def _initQ(shape, max_size, max_skew, dtype=None):
     else:
         Q2 = jnp.eye(s2, dtype=dtype)
 
-    for n in leading_dims[::-1]:
-        Q1 = jnp.expand_dims(Q1, axis=0)
-        Q2 = jnp.expand_dims(Q2, axis=0)
-        Q1 = jnp.repeat(Q1, n, axis=0)
-        Q2 = jnp.repeat(Q2, n, axis=0)
-
     return [Q1, Q2]
 
 
 def _solve_triangular(a, b, upper, left=True):
-    dtype_in = jnp.promote_types(a.dtype, b.dtype)  # lowest precision of a and b
+    """jax.lax.linalg.triangular_solve rewritten to match PyTorch convention."""
+    dtype_in = jnp.promote_types(a.dtype, b.dtype)
     a, b = a.astype(dtype_in), b.astype(dtype_in)
     return jax.lax.linalg.triangular_solve(a, b, left_side=left, lower=not upper)
 
 
-def _update_precond_affine_math_(key, Ql, Qr, dX, A, precond_lr, precision):
+def _update_precond_affine_math_(key, Ql, Qr, dX, dG, precond_lr, precision):
     step_normalizer = "2nd"
 
     with jax.default_matmul_precision(precision):
         if Ql.ndim == 2:
             if Qr.ndim == 2:  # Ql.dim()=2 and Qr.dim()=2:
+                A = jnp.linalg.multi_dot([Ql, dG, Qr.conj().T])
                 Bh = _solve_triangular(
                     Ql.conj().T,
                     _solve_triangular(Qr, dX, upper=True, left=False),
@@ -497,6 +462,7 @@ def _update_precond_affine_math_(key, Ql, Qr, dX, A, precond_lr, precision):
                 Ql -= step1 * grad1 @ Ql
                 Qr -= step2 * grad2 @ Qr
             else:  # Ql.dim()=2 and Qr.dim()=1:
+                A = Ql @ (dG * Qr.conj())
                 Bh = _solve_triangular(Ql.conj().T, dX / Qr, upper=False)
 
                 AAh, BhB = A @ A.conj().T, Bh @ Bh.conj().T
@@ -517,6 +483,7 @@ def _update_precond_affine_math_(key, Ql, Qr, dX, A, precond_lr, precision):
                 Qr -= step2 * grad2 * Qr
         else:
             if Qr.ndim == 2:  # Ql.dim()=1 and Qr.dim()=2:
+                A = (Ql[:, None] * dG) @ Qr.conj().T
                 Bh = _solve_triangular(Qr, dX, upper=True, left=False) / (
                     Ql.conj()[:, None]
                 )
@@ -538,6 +505,7 @@ def _update_precond_affine_math_(key, Ql, Qr, dX, A, precond_lr, precision):
                 Ql -= step1 * grad1 * Ql
                 Qr -= step2 * grad2 @ Qr
             else:  # Ql.dim()=1 and Qr.dim()=1:
+                A = Ql[:, None] * dG * Qr.conj()
                 Bh = dX / Qr / Ql.conj()[:, None]
 
                 AAc1, BBc1 = jnp.sum(A * A.conj(), axis=1), jnp.sum(
@@ -574,12 +542,13 @@ def _update_precond_affine_math_(key, Ql, Qr, dX, A, precond_lr, precision):
         return [Ql, Qr]
 
 
-def _update_precond_affine_dropv_math(key, Ql, Qr, A, precond_lr, precision):
+def _update_precond_affine_dropv_math(key, Ql, Qr, dG, precond_lr, precision):
     step_normalizer = "2nd"
 
     with jax.default_matmul_precision(precision):
         if Ql.ndim == 1 and Qr.ndim == 1:
             # drop v when both dims use diagonal preconditioners
+            A = Ql[:, None] * dG * Qr.conj()
             invQQl, invQQr = 1 / (Ql * Ql.conj()), 1 / (Qr * Qr.conj())
 
             AAc1, BBc1 = jnp.sum(A * A.conj(), axis=1), jnp.sum(invQQr) * invQQl
@@ -598,6 +567,7 @@ def _update_precond_affine_dropv_math(key, Ql, Qr, A, precond_lr, precision):
             Qr = Qr - step2 * grad2 * Qr
         elif Ql.ndim == 1 and Qr.ndim == 2 and Ql.shape[0] >= Qr.shape[0]:
             # drop v when left is diagonal, right is dense, and gradient is a tall matrix
+            A = (Ql[:, None] * dG) @ Qr.conj().T
             invQQl = 1 / (Ql * Ql.conj())
             invQr = _solve_triangular(
                 Qr, jnp.eye(Qr.shape[0], dtype=Qr.dtype), upper=True
@@ -620,6 +590,7 @@ def _update_precond_affine_dropv_math(key, Ql, Qr, A, precond_lr, precision):
             Qr -= step2 * grad2 @ Qr
         elif Qr.ndim == 1 and Ql.ndim == 2 and Qr.shape[0] >= Ql.shape[0]:
             # drop v when right is diagonal, left is dense, and gradient is a short matrix
+            A = Ql @ (dG * Qr.conj())
             invQl = _solve_triangular(
                 Ql, jnp.eye(Ql.shape[0], dtype=Ql.dtype), upper=True
             )
@@ -647,10 +618,10 @@ def _update_precond_affine_dropv_math(key, Ql, Qr, A, precond_lr, precision):
             #   3) both sides use dense preconditioner, but gradient is skewed (no saving for square shape gradient)
             key, subkey = jax.random.split(key)
             # JAX does an ok job at sharding this so let's leave alone for now
-            v = jax.random.normal(subkey, (Ql.shape[0], Qr.shape[1]), dtype=Ql.dtype)
+            v = jax.random.normal(subkey, dG.shape, dtype=dG.dtype)
             key, subkey = jax.random.split(key)
             return _update_precond_affine_math_(
-                subkey, Ql, Qr, v, A, precond_lr, precision
+                subkey, Ql, Qr, v, dG, precond_lr, precision
             )
 
         def _balance():
@@ -668,21 +639,19 @@ def _update_precond_affine_dropv_math(key, Ql, Qr, A, precond_lr, precision):
         return [Ql, Qr]
 
 
-def _precond_grad_affine_math(Ql, Qr, grad) -> Tuple[jnp.ndarray, jnp.ndarray]:
+def _precond_grad_affine_math(Ql, Qr, grad):
     if Ql.ndim == 2:
         if Qr.ndim == 2:  # Ql.ndim=2 and Qr.ndim=2:
-            A = jnp.linalg.multi_dot([Ql, grad, Qr.conj().T])
-            return jnp.linalg.multi_dot([Ql.conj().T, A, Qr]), A
+            return jnp.linalg.multi_dot([Ql.conj().T, Ql, grad, Qr.conj().T, Qr])
         else:  # Ql.ndim=2 and Qr.ndim=1:
-            A = Ql @ (grad * Qr.conj())
-            return Ql.conj().T @ (A * Qr), A
+            return jnp.linalg.multi_dot([Ql.conj().T, Ql, grad * (Qr * Qr.conj())])
     else:
         if Qr.ndim == 2:  # Ql.ndim=1 and Qr.ndim=2:
-            A = (Ql[:, None] * grad) @ Qr.conj().T
-            return (Ql.conj()[:, None] * A) @ Qr, A
+            return jnp.linalg.multi_dot(
+                [(Ql * Ql.conj())[:, None] * grad, Qr.conj().T, Qr]
+            )
         else:  # Ql.ndim=1 and Qr.ndim=1:
-            A = Ql[:, None] * grad * Qr.conj()
-            return Ql.conj()[:, None] * A * Qr, A
+            return (Ql * Ql.conj())[:, None] * grad * (Qr * Qr.conj())
 
 
 def _sort_and_group_matrices(matrix_shapes: List[Tuple[int, ...]]):
@@ -758,7 +727,7 @@ def _unstack_matrices(
 
 def _efficient_cond(
     predicate: bool, compute_fn: Callable, init_state: Any, *args, **kwargs
-):
+) -> Tuple:
     """Avoids wasteful buffer allocation with XLA.
 
     Useful when the False branch of the cond is only a pass-through. `init_state`
