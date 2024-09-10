@@ -53,24 +53,6 @@ class TrainState(ts):
     lr_fn: Callable = struct.field(pytree_node=False)
 
 
-def get_attention_mask_and_positions(
-    seq_mask: jax.Array,
-) -> tuple[jax.Array, jax.Array]:
-    """Builds the position and attention mask vectors from the given tokens."""
-    positions = jnp.cumsum(seq_mask, axis=-1)
-    # Subtract one for all positions from the first valid one as they are
-    # 0-indexed
-    current_token_position = positions - (positions >= 1)
-
-    seq_len = seq_mask.shape[-1]
-    attn_mask = seq_mask[..., None, :]
-    causal_mask = jnp.tril(jnp.ones((seq_len, seq_len), dtype=jnp.bool_))
-    # Prefixes can be attended by all tokens
-    attn_mask *= causal_mask[None, ...]
-
-    return current_token_position, attn_mask
-
-
 def main(config: TrainConfig):
     write_note(f"Number of JAX devices: {jax.device_count()}")
     write_note(f"Number of JAX processes: {jax.process_count()}")
@@ -190,12 +172,9 @@ def main(config: TrainConfig):
         """Initialize the train state."""
         model = GPT(config.model)
 
-        dummy_tokens = jnp.zeros((1, config.model.block_size), dtype=jnp.uint16)
-        dummy_seq_mask = jnp.ones((1, config.model.block_size), dtype=jnp.bool)
+        dummy_tokens = jnp.zeros((1, config.model.block_size - 1), dtype=jnp.uint16)
 
-        positions, attention_mask = get_attention_mask_and_positions(dummy_seq_mask)
-
-        params = model.init(key, dummy_tokens, positions, attention_mask)
+        params = model.init(key, dummy_tokens)
         params = otu.tree_cast(params, config.params_dtype)
 
         # delay optimizer creation to pass in preconditioner sharding
@@ -297,18 +276,8 @@ def main(config: TrainConfig):
     # ====== datasets ======
     write_note("creating datasets")
 
-    tokenizer = AutoTokenizer.from_pretrained(
-        "gpt2", trust_remote_code=True, use_fast=True
-    )
-    pad_id = tokenizer.pad_token_id
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-        pad_id = tokenizer.eos_token_id
-    write_note(f"pad_id: {pad_id}")
-
     make_train_ds = partial(
         fineweb_edu_dataset,
-        tokenizer=tokenizer,
         batch_size=config.batch_size,
         block_size=config.model.block_size,
         flat_devices=devices_flat,
@@ -321,7 +290,6 @@ def main(config: TrainConfig):
 
     # hellaswag has 4 seqs per example
     hellaswag_ds, hellaswag_len = prepare_hellaswag(
-        tokenizer,
         max(config.batch_size // 4, jax.device_count()),
         config.model.block_size,
         devices_flat,
@@ -332,47 +300,21 @@ def main(config: TrainConfig):
     def train_step(
         state: TrainState,
         tokens: jnp.ndarray,
-        seq_lens: jnp.ndarray,
     ) -> Tuple[jnp.ndarray, jnp.ndarray, TrainState, jnp.ndarray, jnp.ndarray]:
 
         def loss_fn(params):
-            seq_mask = jnp.arange(tokens.shape[1])[None, :] < seq_lens[:, None]
-
-            positions, attention_mask = get_attention_mask_and_positions(seq_mask)
-
             logits = state.apply_fn(
                 otu.tree_cast(params, config.compute_dtype),
-                tokens,
-                positions,
-                attention_mask,
+                tokens[:, :-1],
             )
             assert logits.dtype == config.compute_dtype
 
-            # Exclude the last step as it does not appear in the targets.
-            logits = logits[:, :-1]
+            targets = tokens[:, 1:]
 
-            # Similarly, the first token cannot be predicteds.
-            target_tokens = tokens[:, 1:]
-            target_mask = seq_mask[:, 1:]
-
-            loss = optax.softmax_cross_entropy_with_integer_labels(
-                logits, target_tokens
-            )
-
-            # Don't update on unwanted tokens (all tokens are wanted in this case)
-            loss = loss * target_mask.astype(loss.dtype)
-
-            # Normalization factor
-            norm_factor = jnp.sum(target_mask)
-            norm_factor = jnp.reciprocal(jnp.where(norm_factor == 0, 1, norm_factor))
-
-            # Calculate the loss
-            loss = jnp.sum(loss) * norm_factor
+            loss = optax.softmax_cross_entropy_with_integer_labels(logits, targets).mean()
 
             # Palm style z-loss
-            zloss = jax.scipy.special.logsumexp(logits, axis=-1)
-            zloss = zloss * target_mask.astype(zloss.dtype)
-            zloss = jnp.sum(zloss) * norm_factor
+            zloss = jax.scipy.special.logsumexp(logits, axis=-1).mean()
             loss += 1e-4 * zloss**2
 
             return loss
@@ -392,39 +334,26 @@ def main(config: TrainConfig):
     def eval_step_unreduced(
         state: TrainState, tokens: jnp.ndarray, seq_lens: jnp.ndarray
     ) -> jnp.ndarray:
-        seq_mask = jnp.arange(tokens.shape[1])[None, :] < seq_lens[:, None]
-
-        # Get attention mask and positions
-        positions, attention_mask = get_attention_mask_and_positions(seq_mask)
-
-        # Forward pass
         logits = state.apply_fn(
             otu.tree_cast(state.params, config.compute_dtype),
-            tokens,
-            positions,
-            attention_mask,
+            tokens[:, :-1],
         )
         assert logits.dtype == config.compute_dtype
 
-        # Exclude the last step as it does not appear in the targets
-        logits = logits[:, :-1]
+        targets = tokens[:, 1:]
 
-        # Similarly, the first token cannot be predicted
-        target_tokens = tokens[:, 1:]
-        target_mask = seq_mask[:, 1:]
-
-        loss = optax.softmax_cross_entropy_with_integer_labels(logits, target_tokens)
-
-        # Don't use loss past the sequence length
-        loss = loss * target_mask.astype(loss.dtype)
-
+        losses = optax.softmax_cross_entropy_with_integer_labels(logits, targets)
+        
         @jax.vmap
-        def unreduced_losses(loss, mask):
-            norm_factor = jnp.sum(mask)
-            norm_factor = jnp.reciprocal(jnp.where(norm_factor == 0, 1, norm_factor))
-            return jnp.sum(loss) * norm_factor
+        def unreduced_losses(loss, seq_len):
+            seq_mask = jnp.arange(len(loss)) < seq_len - 1
+            loss = loss * seq_mask
+            return jnp.sum(loss) / jnp.sum(seq_mask)
 
-        return unreduced_losses(loss, target_mask)  # [b * 4]
+        losses = unreduced_losses(losses, seq_lens)
+        assert losses.shape == tokens.shape[:1]
+        return losses
+
 
     def eval_hellaswag(state: TrainState, data, seq_lens, labels):
         """Evaluate the hellaswag dataset."""
@@ -445,7 +374,7 @@ def main(config: TrainConfig):
     train_step_jit = jax.jit(
         train_step,
         donate_argnums=(0,),
-        in_shardings=(train_state_sharding, data_sharding, data_sharding),
+        in_shardings=(train_state_sharding, data_sharding),
         out_shardings=(
             repl_sharding,
             train_state_sharding,
@@ -488,7 +417,7 @@ def main(config: TrainConfig):
     for step in range(step, config.train_steps):
         for accum_step in range(config.optimizer.gradient_accumulation_steps):
             try:
-                tokens, seq_lens = next(train_ds)
+                tokens = next(train_ds)
             except StopIteration:
                 print(
                     f"current dataset subshard exhausted on process "
@@ -512,9 +441,9 @@ def main(config: TrainConfig):
                 shard_idx += 1
                 train_ds = make_train_ds(shard_idx=shard_idx)
 
-                tokens, seq_lens = next(train_ds)
+                tokens = next(train_ds)
 
-            loss, train_state, g_norm, lr = train_step_jit(train_state, tokens, seq_lens)
+            loss, train_state, g_norm, lr = train_step_jit(train_state, tokens)
             train_losses.append(jax.device_get(loss).item())
             grad_norms.append(jax.device_get(g_norm).item())
             if accum_step < config.optimizer.gradient_accumulation_steps - 1:

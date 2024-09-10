@@ -9,6 +9,7 @@ import tensorflow as tf
 import datasets
 from datasets import load_dataset, IterableDataset
 import datasets.config
+import tiktoken
 
 from utils import (
     make_fsarray_from_local_slice,
@@ -31,7 +32,6 @@ OPTIONS.experimental_optimization.inject_prefetch = False
 
 
 def prepare_hellaswag(
-    tokenizer,
     batch_size: int,
     block_size: int,
     flat_devices,
@@ -40,6 +40,8 @@ def prepare_hellaswag(
 ):
     """Read file and tokenize the hellaswag dataset."""
     write_note("preparing hellaswag")
+
+    tokenizer = tiktoken.get_encoding("gpt2")
 
     all_data = []
     all_seq_lens = []
@@ -55,21 +57,24 @@ def prepare_hellaswag(
             seq_lens_to_concat = []
             for ending in endings:
                 input_text = context + " " + ending
-                output = tokenizer(
-                    input_text,
-                    max_length=block_size,
-                    padding="max_length",
-                    truncation=True,
-                )
-                data_to_concat.append(output["input_ids"])
-                seq_lens_to_concat.append(np.count_nonzero(output["attention_mask"]))
+                # encode with gpt2 tokenizer
+                output = tokenizer.encode(input_text)
+                # output len, at least block_size
+                output_len = min(len(output), block_size)
+                # pad with eot_token if less than block_size
+                if output_len < block_size:
+                    output = output + [tokenizer.eot_token] * (block_size - output_len)
+                # max length is block_size
+                output = output[:block_size]
+                data_to_concat.append(output)
+                seq_lens_to_concat.append(output_len)
             all_data.append(np.array(data_to_concat))  # (4, seq_len)
             all_seq_lens.append(np.array(seq_lens_to_concat))  # (4,)
-            all_labels.append(int(correct_end))  # Convert to integer
+            all_labels.append(int(correct_end))  # []
 
-    all_data = np.array(all_data, dtype=np.uint16)
-    all_seq_lens = np.array(all_seq_lens, dtype=np.int32)
-    all_labels = np.array(all_labels, dtype=np.int32)
+    all_data = np.array(all_data, dtype=np.uint16)  # (10042, 4, seq_len)
+    all_seq_lens = np.array(all_seq_lens, dtype=np.int32)  # (10042, 4)
+    all_labels = np.array(all_labels, dtype=np.int32)  # (10042,)
 
     ds = tf.data.Dataset.from_tensor_slices((all_data, all_seq_lens, all_labels))
     ds = ds.shard(jax.process_count(), jax.process_index())
@@ -97,7 +102,6 @@ def prepare_hellaswag(
 
 
 def fineweb_edu_dataset(
-    tokenizer,
     batch_size: int,
     block_size: int,
     flat_devices,
@@ -112,6 +116,8 @@ def fineweb_edu_dataset(
         cache_dir = "/dev/shm/huggingface_cache"
     else:
         cache_dir = None
+
+    tokenizer = tiktoken.get_encoding("gpt2")
 
     if jax.process_count() == 1:
         # just stream fineweb-edu regularly
@@ -134,28 +140,28 @@ def fineweb_edu_dataset(
         )
 
         def tokenize(example):
-            return tokenizer(
-                example["text"],
-                max_length=block_size,
-                padding="max_length",
-                truncation=True,
+            tokenized = tokenizer.encode_batch(
+                example,
+                num_threads=64,
             )
+            tokenized = [t + [tokenizer.eot_token] for t in tokenized]
+            return {"tokens": tokenized}
 
-        hf_ds = hf_ds.map(tokenize, batched=True, batch_size=1024)
+        hf_ds = hf_ds.map(tokenize, input_columns=["text"], batched=True, batch_size=64)
 
         hf_ds = hf_ds.with_format("numpy")
 
         for example in hf_ds:
-            yield (example["input_ids"], np.count_nonzero(example["attention_mask"]))
+            yield example["tokens"].astype(np.uint16)
 
     ds = tf.data.Dataset.from_generator(
         gen,
-        output_signature=(
-            tf.TensorSpec(shape=(block_size,), dtype=tf.uint16),
-            tf.TensorSpec(shape=[], dtype=tf.int32),
-        ),
+        output_signature=tf.TensorSpec(shape=(None,), dtype=tf.uint16)
     )
-    ds = ds.shuffle(10240)
+    ds = ds.shuffle(128)  # shuffle dataset examples
+    ds = ds.unbatch()
+    ds = ds.batch(block_size, drop_remainder=True, num_parallel_calls=tf.data.AUTOTUNE)
+    ds = ds.shuffle(10240)  # shuffle blocks
     ds = ds.batch(
         batch_size // jax.process_count(),
         drop_remainder=True,
