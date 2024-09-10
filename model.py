@@ -11,7 +11,7 @@ from flax.traverse_util import flatten_dict, unflatten_dict
 from configs import ModelConfig
 
 
-initializer = nn.initializers.normal()
+initializer = nn.initializers.normal(0.02)
 
 
 class RMSNorm(nn.Module):
@@ -89,13 +89,13 @@ class Attention(nn.Module):
         qkv = qkv.reshape(B, T, 3 * self.num_heads, head_dim)
         q, k, v = jnp.split(qkv, 3, axis=2)
 
-        q = apply_rope(q, jnp.arange(T)[None, :], head_dim)
+        scale = jnp.reciprocal(jnp.sqrt(head_dim).astype(x.dtype))
+        q = apply_rope(q, jnp.arange(T)[None, :], head_dim) * scale
         k = apply_rope(k, jnp.arange(T)[None, :], head_dim)
 
         # calculate attention matrix
-        scale = jnp.reciprocal(jnp.sqrt(head_dim).astype(x.dtype))
         # attn weight shape is (batch..., num_heads, q_length, kv_length)
-        attn = jnp.einsum("...qhd,...khd->...hqk", q, k) * scale
+        attn = jnp.einsum("...qhd,...khd->...hqk", q, k)
 
         # gemma style soft cap
         attn = jnp.tanh(attn / 50) * 50
@@ -106,7 +106,7 @@ class Attention(nn.Module):
 
         # return weighted sum over values for each query position
         x = jnp.einsum("...hqk,...khd->...qhd", attn, v).reshape(B, T, C)
-        x = nn.Dense(C, use_bias=False)(x)
+        x = nn.Dense(C, use_bias=True)(x)
 
         return x
 
@@ -116,9 +116,9 @@ class MLP(nn.Module):
     @nn.compact
     def __call__(self, x):
         C = x.shape[-1]
-        x = nn.Dense(4 * C, use_bias=False, kernel_init=initializer)(x)
+        x = nn.Dense(4 * C, use_bias=True, kernel_init=initializer)(x)
         x = nn.gelu(x)
-        x = nn.Dense(C, use_bias=False, kernel_init=initializer)(x)
+        x = nn.Dense(C, use_bias=True, kernel_init=initializer)(x)
         return x
 
 

@@ -17,7 +17,7 @@ python3 train.py \
     --params_dtype=float32 \
     --optimizer.type=affine \
     --optimizer.learning_rate=0.003 \
-    --optimizer.warmup_steps=1000 \
+    --optimizer.warmup_steps=0 \
     --optimizer.nesterov \
     --optimizer.weight_decay=0.01 \
     --optimizer.grad_clip=1.0 \
