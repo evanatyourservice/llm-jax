@@ -58,7 +58,7 @@ def prepare_hellaswag(
             for ending in endings:
                 input_text = context + " " + ending
                 # encode with gpt2 tokenizer
-                output = tokenizer.encode(input_text)
+                output = tokenizer.encode_ordinary(input_text)
                 # output len, at least block_size
                 output_len = min(len(output), block_size)
                 # pad with eot_token if less than block_size
@@ -139,7 +139,7 @@ def fineweb_edu_dataset(
         )
 
         def tokenize(example):
-            tokenized = tokenizer.encode_batch(
+            tokenized = tokenizer.encode_ordinary_batch(
                 example,
                 num_threads=64,
             )
