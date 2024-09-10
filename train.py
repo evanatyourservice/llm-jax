@@ -320,8 +320,9 @@ def main(config: TrainConfig):
     train_ds = make_train_ds(shard_idx=shard_idx)
 
     # hellaswag has 4 seqs per example
-    hellaswag_ds, hellaswag_len = prepare_hellaswag(
-        max(config.batch_size // 4, jax.device_count()),
+    hs_batch_size = max(config.batch_size // 4, jax.device_count())
+    hellaswag_ds = prepare_hellaswag(
+        hs_batch_size,
         config.model.block_size,
         devices_flat,
         tf_prefetch=4,
@@ -522,12 +523,12 @@ def main(config: TrainConfig):
             grad_norms = []
 
         # eval hellaswag
-        if step % config.hellaswag_eval_interval == 0 and step > 0:
+        if step % config.hellaswag_eval_interval == 0:
             hs_accs = []
-            for _ in range(10 if platform == "cpu" else hellaswag_len):
+            for _ in range(10 if platform == "cpu" else 10042 // hs_batch_size):
                 hs_batch = next(hellaswag_ds)
                 hs_acc = eval_hellaswag_jit(train_state, *hs_batch)
-                hs_accs.append(jax.device_get(hs_acc))
+                hs_accs.append(jax.device_get(hs_acc).item())
             hellaswag_acc = np.mean(hs_accs)
             max_hellaswag_acc = max(max_hellaswag_acc, hellaswag_acc)
 

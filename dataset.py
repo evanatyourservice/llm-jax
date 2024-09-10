@@ -78,15 +78,14 @@ def prepare_hellaswag(
 
     ds = tf.data.Dataset.from_tensor_slices((all_data, all_seq_lens, all_labels))
     ds = ds.shard(jax.process_count(), jax.process_index())
+    ds = ds.repeat()
+
     ds = ds.batch(
         batch_size // jax.process_count(),
         drop_remainder=True,
         num_parallel_calls=tf.data.AUTOTUNE,
     )
 
-    ds_length = len(ds)
-
-    ds = ds.repeat()
     ds = ds.with_options(OPTIONS)
     ds = ds.prefetch(tf_prefetch)
     ds = ds.as_numpy_iterator()
@@ -98,7 +97,7 @@ def prepare_hellaswag(
     )
     if device_prefetch > 0:
         ds = prefetch_iterator(ds, device_prefetch)
-    return ds, ds_length
+    return ds
 
 
 def fineweb_edu_dataset(
@@ -147,7 +146,9 @@ def fineweb_edu_dataset(
             tokenized = [t + [tokenizer.eot_token] for t in tokenized]
             return {"tokens": tokenized}
 
-        hf_ds = hf_ds.map(tokenize, input_columns=["text"], batched=True, batch_size=128)
+        hf_ds = hf_ds.map(
+            tokenize, input_columns=["text"], batched=True, batch_size=128
+        )
 
         hf_ds = hf_ds.with_format("numpy")
 
