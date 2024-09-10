@@ -11,7 +11,7 @@ from flax.traverse_util import flatten_dict, unflatten_dict
 from configs import ModelConfig
 
 
-initializer = nn.initializers.normal(0.02)
+initializer = nn.initializers.truncated_normal(0.02)
 
 
 class RMSNorm(nn.Module):
@@ -85,7 +85,7 @@ class Attention(nn.Module):
         assert C % self.num_heads == 0
         head_dim = C // self.num_heads
 
-        qkv = nn.Dense(3 * C, use_bias=False)(x)
+        qkv = nn.Dense(3 * C, use_bias=False, kernel_init=initializer)(x)
         qkv = qkv.reshape(B, T, 3 * self.num_heads, head_dim)
         q, k, v = jnp.split(qkv, 3, axis=2)
 
@@ -106,7 +106,7 @@ class Attention(nn.Module):
 
         # return weighted sum over values for each query position
         x = jnp.einsum("...hqk,...khd->...qhd", attn, v).reshape(B, T, C)
-        x = nn.Dense(C, use_bias=True)(x)
+        x = nn.Dense(C, use_bias=False, kernel_init=initializer)(x)
 
         return x
 
@@ -116,9 +116,9 @@ class MLP(nn.Module):
     @nn.compact
     def __call__(self, x):
         C = x.shape[-1]
-        x = nn.Dense(4 * C, use_bias=True, kernel_init=initializer)(x)
+        x = nn.Dense(4 * C, use_bias=False, kernel_init=initializer)(x)
         x = nn.gelu(x)
-        x = nn.Dense(C, use_bias=True, kernel_init=initializer)(x)
+        x = nn.Dense(C, use_bias=False, kernel_init=initializer)(x)
         return x
 
 
