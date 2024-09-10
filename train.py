@@ -114,7 +114,7 @@ def main(config: TrainConfig):
             optimizer.append(optax.clip_by_global_norm(config.optimizer.grad_clip))
 
         # decays to 0.01 by around 2000 steps
-        update_prob_schedule = lambda n: jnp.maximum(jnp.exp(-0.002 * n), 0.01)
+        update_prob_schedule = lambda n: jnp.maximum(jnp.exp(-0.002 * n), 0.03)
         # opposite of update_prob_schedule from 0.01 to 0.1
         # precond_lr_schedule = lambda n: (-0.9 * jnp.exp(-0.002 * n) + 1.0) / 10
 
@@ -162,7 +162,7 @@ def main(config: TrainConfig):
                     precond_init_scale=config.optimizer.precond_init_scale,
                     mu_dtype=jnp.bfloat16,
                     precond_dtype=config.optimizer.preconditioner_dtype,
-                    precision="bfloat16",
+                    precision="tensorfloat32",
                     reshaped_params_sharding=reshaped_params_sharding,
                     best_effort_scan=True,
                 )
