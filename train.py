@@ -15,7 +15,6 @@ import jax
 import jax.numpy as jnp
 from jaxlib import xla_client
 from jax.experimental import mesh_utils
-from jax.experimental.multihost_utils import sync_global_devices
 from jax.sharding import Mesh, PartitionSpec as P, NamedSharding
 import flax
 from flax import struct
@@ -504,7 +503,6 @@ def main(config: TrainConfig):
             # time and print every 100 steps
             if step % 100 == 0:
                 jax.block_until_ready(train_state.params)
-                sync_global_devices("start_100_step_logging")
                 end_time = time.time()
 
                 if start_time is not None:
@@ -525,7 +523,6 @@ def main(config: TrainConfig):
 
         # eval hellaswag
         if step % config.hellaswag_eval_interval == 0 and step > 0:
-            sync_global_devices("start_hellaswag")
             hs_accs = []
             for _ in range(10 if platform == "cpu" else hellaswag_len):
                 hs_batch = next(hellaswag_ds)
