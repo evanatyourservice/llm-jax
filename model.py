@@ -11,7 +11,7 @@ from flax.traverse_util import flatten_dict, unflatten_dict
 from configs import ModelConfig
 
 
-initializer = nn.initializers.normal(0.02)
+initializer = nn.initializers.normal()
 
 
 class RMSNorm(nn.Module):
@@ -89,7 +89,7 @@ class Attention(nn.Module):
         qkv = qkv.reshape(B, T, 3 * self.num_heads, head_dim)
         q, k, v = jnp.split(qkv, 3, axis=2)
 
-        scale = jnp.reciprocal(jnp.sqrt(head_dim).astype(x.dtype))
+        scale = jax.lax.rsqrt(head_dim).astype(x.dtype)
         q = apply_rope(q, jnp.arange(T)[None, :], head_dim) * scale
         k = apply_rope(k, jnp.arange(T)[None, :], head_dim)
 
@@ -102,7 +102,7 @@ class Attention(nn.Module):
 
         # mask out attention to future tokens
         attn = jnp.where(mask, attn, jnp.finfo(x.dtype).min)
-        attn = jax.nn.softmax(attn).astype(x.dtype)
+        attn = jax.nn.softmax(attn)
 
         # return weighted sum over values for each query position
         x = jnp.einsum("...hqk,...khd->...qhd", attn, v).reshape(B, T, C)
