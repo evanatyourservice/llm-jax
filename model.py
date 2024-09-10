@@ -89,7 +89,7 @@ class Attention(nn.Module):
         qkv = qkv.reshape(B, T, 3 * self.num_heads, head_dim)
         q, k, v = jnp.split(qkv, 3, axis=2)
 
-        scale = jax.lax.rsqrt(head_dim).astype(x.dtype)
+        scale = jax.lax.rsqrt(jnp.array(head_dim, dtype=x.dtype))
         q = apply_rope(q, jnp.arange(T)[None, :], head_dim) * scale
         k = apply_rope(k, jnp.arange(T)[None, :], head_dim)
 
