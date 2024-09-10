@@ -160,6 +160,7 @@ def main(config: TrainConfig):
                     max_skew_triangular=config.optimizer.max_skew_triangular,
                     precond_lr=config.optimizer.precond_lr,
                     precond_init_scale=config.optimizer.precond_init_scale,
+                    mu_dtype=jnp.bfloat16,
                     precond_dtype=config.optimizer.preconditioner_dtype,
                     precision="bfloat16",
                     reshaped_params_sharding=reshaped_params_sharding,
