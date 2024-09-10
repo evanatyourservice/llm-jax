@@ -484,32 +484,31 @@ def main(config: TrainConfig):
                 train_state = step_minus_1(train_state)
 
         # log to wandb every 10 steps
-        if config.wandb is not None and step % 10 == 0:
+        if config.wandb is not None and (step + 1) % 10 == 0:
             train_loss = np.mean(train_losses)
             min_loss = min(min_loss, train_loss)
             grad_norm = np.mean(grad_norms)
-            tokens_per_batch = (
-                config.optimizer.gradient_accumulation_steps
-                * config.batch_size
-                * jax.device_count()
-                * config.model.block_size
-            )
             to_log = {
                 "train_loss": train_loss,
                 "grad_norm": grad_norm,
                 "lr": jax.device_get(lr).item(),
-                "tokens": step * tokens_per_batch,
+                "tokens": (step + 1) * config.batch_size * config.model.block_size,
             }
 
             # time and print every 100 steps
-            if step % 100 == 0:
+            if (step + 1) % 100 == 0:
                 jax.block_until_ready(train_state.params)
                 end_time = time.time()
 
+                # performance metrics
                 if start_time is not None:
                     seconds_per_step = (end_time - start_time) / 100
-                    to_log["seconds_per_step"] = seconds_per_step
-                    to_log["tokens_per_second"] = tokens_per_batch / seconds_per_step
+                    to_log["seconds_per_step"] = (
+                        seconds_per_step * config.optimizer.gradient_accumulation_steps
+                    )
+                    to_log["tokens_per_second"] = (
+                        config.batch_size * config.model.block_size / seconds_per_step
+                    )
 
                 write_note(f"step: {step}, loss: {train_loss:.4f}")
 
@@ -523,7 +522,7 @@ def main(config: TrainConfig):
             grad_norms = []
 
         # eval hellaswag
-        if step % config.hellaswag_eval_interval == 0:
+        if (step + 1) % config.hellaswag_eval_interval == 0:
             hs_accs = []
             for _ in range(10 if platform == "cpu" else 10042 // hs_batch_size):
                 hs_batch = next(hellaswag_ds)
