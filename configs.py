@@ -118,3 +118,6 @@ class TrainConfig:
     assert (
         checkpoint_milestone % checkpoint_interval == 0
     ), "checkpoint_milestone must be a multiple of checkpoint_interval"
+    assert (
+        hellaswag_eval_interval % 100 == 0
+    ), "hellaswag_eval_interval must be a multiple of 100"

@@ -33,3 +33,9 @@ cd llm-jax && pip install -U pip && pip install -r requirements.txt && pip insta
 The base settings are in `config/llama3.yaml`. This is loaded in scripts using `export LLM_CONFIG=config/llama3.yaml`. 
 You can override with your own settings by either loading your own config in a script, or using flags 
 like in `scripts/psgd.sh`.
+
+
+create TPU with queued resources
+```shell
+gcloud compute tpus queued-resources create node-1 --node-id node-1 --project distributedmuzerojax --zone us-central2-b --accelerator-type v4-16 --runtime-version tpu-ubuntu2204-base
+```
