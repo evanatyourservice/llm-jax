@@ -527,7 +527,7 @@ def main(config: TrainConfig):
             for _ in range(10 if platform == "cpu" else hellaswag_len):
                 hs_batch = next(hellaswag_ds)
                 hs_acc = eval_hellaswag_jit(train_state, *hs_batch)
-                hs_accs.append(jax.device_get(hs_acc).item())
+                hs_accs.append(jax.device_get(hs_acc))
             hellaswag_acc = np.mean(hs_accs)
             max_hellaswag_acc = max(max_hellaswag_acc, hellaswag_acc)
 
