@@ -15,13 +15,13 @@ import jax
 import jax.numpy as jnp
 from jaxlib import xla_client
 from jax.experimental import mesh_utils
+from jax.experimental.multihost_utils import sync_global_devices
 from jax.sharding import Mesh, PartitionSpec as P, NamedSharding
 import flax
-from flax import struct, linen as nn
+from flax import struct
 from flax.training.train_state import TrainState as ts
 import optax
 import optax.tree_utils as otu
-from transformers import AutoTokenizer
 
 from dataset import prepare_hellaswag, fineweb_edu_dataset
 from configs import TrainConfig
@@ -484,14 +484,10 @@ def main(config: TrainConfig):
                 train_state = step_minus_1(train_state)
 
         # log to wandb every 10 steps
-        if config.wandb is not None and jax.process_index() == 0 and step % 10 == 0:
-            jax.block_until_ready(train_state.params)
-            end_time = time.time()
-
+        if config.wandb is not None and step % 10 == 0:
             train_loss = np.mean(train_losses)
             min_loss = min(min_loss, train_loss)
             grad_norm = np.mean(grad_norms)
-
             tokens_per_batch = (
                 config.optimizer.gradient_accumulation_steps
                 * config.batch_size
@@ -505,26 +501,31 @@ def main(config: TrainConfig):
                 "tokens": step * tokens_per_batch,
             }
 
-            # performance metrics
-            if start_time is not None:
-                seconds_per_step = (end_time - start_time) / 10
-                to_log["seconds_per_step"] = seconds_per_step
-                to_log["tokens_per_second"] = tokens_per_batch / seconds_per_step
+            # time and print every 100 steps
+            if step % 100 == 0:
+                jax.block_until_ready(train_state.params)
+                sync_global_devices("start_100_step_logging")
+                end_time = time.time()
 
-            wandb.log(to_log, step=step)
-            wandb.summary["min_train_loss"] = min_loss
+                if start_time is not None:
+                    seconds_per_step = (end_time - start_time) / 100
+                    to_log["seconds_per_step"] = seconds_per_step
+                    to_log["tokens_per_second"] = tokens_per_batch / seconds_per_step
+
+                write_note(f"step: {step}, loss: {train_loss:.4f}")
+
+                start_time = time.time()
+
+            if wandb.run is not None and jax.process_index() == 0:
+                wandb.log(to_log, step=step)
+                wandb.summary["min_train_loss"] = min_loss
 
             train_losses = []
             grad_norms = []
 
-            # print every 100 steps
-            if step % 100 == 0:
-                write_note(f"step: {step}, loss: {train_loss:.4f}")
-
-            start_time = time.time()
-
         # eval hellaswag
         if step % config.hellaswag_eval_interval == 0 and step > 0:
+            sync_global_devices("start_hellaswag")
             hs_accs = []
             for _ in range(10 if platform == "cpu" else hellaswag_len):
                 hs_batch = next(hellaswag_ds)
@@ -533,7 +534,7 @@ def main(config: TrainConfig):
             hellaswag_acc = np.mean(hs_accs)
             max_hellaswag_acc = max(max_hellaswag_acc, hellaswag_acc)
 
-            if config.wandb is not None and jax.process_index() == 0:
+            if wandb.run is not None and jax.process_index() == 0:
                 wandb.log({"hellaswag_acc": hellaswag_acc}, step=step)
                 wandb.summary["max_hellaswag_acc"] = max_hellaswag_acc
 

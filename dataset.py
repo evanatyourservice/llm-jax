@@ -147,7 +147,7 @@ def fineweb_edu_dataset(
             tokenized = [t + [tokenizer.eot_token] for t in tokenized]
             return {"tokens": tokenized}
 
-        hf_ds = hf_ds.map(tokenize, input_columns=["text"], batched=True, batch_size=64)
+        hf_ds = hf_ds.map(tokenize, input_columns=["text"], batched=True, batch_size=128)
 
         hf_ds = hf_ds.with_format("numpy")
 
