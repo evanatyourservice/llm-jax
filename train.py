@@ -1,6 +1,5 @@
 import builtins
 from functools import partial
-from pathlib import Path
 from pprint import pprint
 import random
 import shutil
@@ -10,7 +9,6 @@ from dataclasses import asdict
 import os
 import numpy as np
 import wandb
-import tyro
 
 import jax
 import jax.numpy as jnp
@@ -144,7 +142,7 @@ def main(config: TrainConfig):
                 optax.constant_schedule(0.1),
                 optax.constant_schedule(0.01),
             ],
-            boundaries=[20, 2000],
+            boundaries=[200, 2000],
         )
 
         if config.optimizer.type in ["adam", "adamw"]:
