@@ -30,6 +30,7 @@ from optimizers.psgd_affine import affine, _shape_as_matrix
 from optimizers.psgd_affine_old import affine as affine_old
 from optimizers.tearfree import optimizer as tearfree_opt
 from optimizers.tearfree import shampoo, second_order
+from optimizers.adam import adamw
 from sharding import infer_sharding, fsdp_sharding
 from utils import check_dtypes, reshard, write_note, count_params
 from model import GPT
@@ -126,60 +127,35 @@ def main(config: TrainConfig):
             all_true = jax.tree.map(lambda _: True, params)
             out = non_kernels.update(lambda _: False, all_true)
             return out
+        
+        if config.optimizer.schedule_free:
+            b1_in = 0.0
+        else:
+            b1_in = config.optimizer.b1
 
         optimizer = []
         if config.optimizer.grad_clip > 0.0:
             optimizer.append(optax.clip_by_global_norm(config.optimizer.grad_clip))
 
-        # decays to 0.01 by around 2000 steps
-        # update_prob_schedule = lambda n: jnp.maximum(jnp.exp(-0.002 * n), 0.03)
-        # opposite of update_prob_schedule from 0.01 to 0.1
-        # precond_lr_schedule = lambda n: (-0.9 * jnp.exp(-0.002 * n) + 1.0) / 10
-
-        update_prob_schedule = optax.join_schedules(
-            schedules=[
-                optax.constant_schedule(1.0),
-                optax.constant_schedule(0.1),
-                optax.constant_schedule(0.01),
-            ],
-            boundaries=[1000, 2000],
-        )
+        update_prob_schedule = lambda n: jnp.maximum(jnp.exp(-0.001 * n), 0.03)
 
         if config.optimizer.type in ["adam", "adamw"]:
             optimizer.append(
-                optax.adamw(
+                adamw(
                     lr_schedule,
-                    *config.optimizer.betas,
+                    b1_in,
+                    config.optimizer.b2,
                     weight_decay=config.optimizer.weight_decay,
                     mask=param_decay_mask,
                     mu_dtype=jnp.bfloat16,
                 )
             )
         elif config.optimizer.type in ["psgd", "psgd_affine", "affine"]:
-            # optimizer.append(
-            #     affine(
-            #         lr_schedule,
-            #         preconditioner_update_probability=update_prob_schedule,
-            #         b1=config.optimizer.betas[0],
-            #         nesterov=config.optimizer.nesterov,
-            #         weight_decay=config.optimizer.weight_decay,
-            #         mask=param_decay_mask,
-            #         max_size_triangular=config.optimizer.max_size_triangular,
-            #         max_skew_triangular=config.optimizer.max_skew_triangular,
-            #         precond_lr=config.optimizer.precond_lr,
-            #         precond_init_scale=config.optimizer.precond_init_scale,
-            #         mu_dtype=jnp.bfloat16,
-            #         precond_dtype=config.optimizer.preconditioner_dtype,
-            #         precision="bfloat16",
-            #         reshaped_params_sharding=reshaped_params_sharding,
-            #         scanned_arrays=scanned_arrays,
-            #     )
-            # )
             optimizer.append(
                 affine_old(
                     lr_schedule,
                     preconditioner_update_probability=update_prob_schedule,
-                    b1=config.optimizer.betas[0],
+                    b1=b1_in,
                     nesterov=config.optimizer.nesterov,
                     weight_decay=config.optimizer.weight_decay,
                     mask=param_decay_mask,
@@ -201,7 +177,7 @@ def main(config: TrainConfig):
                     tearfree_opt.TearfreeOptions(
                         momentum_options=tearfree_opt.momentum.Options(
                             weight_decay=config.optimizer.weight_decay,
-                            momentum_decay=config.optimizer.betas[0],
+                            momentum_decay=b1_in,
                             momentum_dtype="bfloat16",
                         ),
                         second_order_options=second_order.Options(
@@ -214,6 +190,9 @@ def main(config: TrainConfig):
             raise ValueError("Unknown optimizer type")
 
         optimizer = optax.chain(*optimizer)
+
+        if config.optimizer.schedule_free:
+            optimizer = optax.contrib.schedule_free(optimizer, lr_schedule, config.optimizer.b1)
 
         if config.optimizer.gradient_accumulation_steps > 1:
             optimizer = optax.MultiSteps(
@@ -392,6 +371,8 @@ def main(config: TrainConfig):
             )
             assert logits.dtype == config.compute_dtype
 
+            logits = logits.astype(jnp.float32)
+
             targets = tokens[:, 1:]
 
             loss = optax.softmax_cross_entropy_with_integer_labels(
@@ -423,6 +404,8 @@ def main(config: TrainConfig):
             otu.tree_cast(state.params, config.compute_dtype), tokens[:, :-1]
         )
         assert logits.dtype == config.compute_dtype
+
+        logits = logits.astype(jnp.float32)
 
         targets = tokens[:, 1:]
 

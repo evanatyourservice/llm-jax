@@ -78,7 +78,7 @@ class Options:
     second_moment_decay: float = 0.999
     start_preconditioning_step: int = 0
     epsilon: float = 1e-8
-    skip_preconditioning_any_dim_gt: int = 4096
+    skip_preconditioning_any_dim_gt: int = 8192
     skip_preconditioning_rank1: bool = True
     min_dim_size_to_factor: int = 128
     multiply_by_parameter_scale: float = True

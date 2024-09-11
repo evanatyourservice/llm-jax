@@ -14,26 +14,6 @@ from configs import ModelConfig
 initializer = nn.initializers.normal()
 
 
-class RMSNorm(nn.Module):
-    """RMSNorm layer."""
-
-    @nn.compact
-    def __call__(self, x):
-        scale = self.param("scale", nn.initializers.zeros_init(), (x.shape[-1]))
-        var = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
-
-        # Jax.lax.rsqrt is used because it returns different floats than
-        # jnp.reciprocal(jnp.sqrt(var + 1e-06))
-        normed_inputs = x * jax.lax.rsqrt(var + 1e-06)
-
-        # normed_inputs is a rank-K tensor, K > 1 (K is typically 2 or 3). scale is
-        # a rank-1 tensor. To avoid implicit rank-promotion, reshape scale to
-        # a (1, ..., 1, D) tensor, so the rank of scale matches normed_inputs.
-        scale = jnp.expand_dims(scale, axis=range(len(x.shape) - 1))
-        normed_inputs = normed_inputs * (1 + scale)
-        return normed_inputs
-
-
 class Embedder(nn.Module):
     """Embedder module."""
 
@@ -139,8 +119,8 @@ class Block(nn.Module):
 
         attn_mask = nn.make_causal_mask(x[:, :, 0], dtype=bool)
 
-        x = x + attn_layer(RMSNorm()(x), attn_mask)
-        x = x + MLP()(RMSNorm()(x))
+        x = x + attn_layer(nn.LayerNorm(use_bias=False)(x), attn_mask)
+        x = x + MLP()(nn.LayerNorm(use_bias=False)(x))
         return x
 
 
@@ -163,7 +143,8 @@ class GPT(nn.Module):
         for _ in range(self.config.num_layers):
             x = Block(self.config.num_heads)(x)
 
-        x = RMSNorm()(x)
+        x = nn.LayerNorm(use_bias=False)(x)
+
         logits = wte.decode(x)
         return logits
 

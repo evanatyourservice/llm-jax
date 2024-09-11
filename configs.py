@@ -22,12 +22,14 @@ class OptimizerConfig:
 
     Attributes:
         type: Optimizer type.
+        schedule_free: Whether to use a schedule-free optimizer.
         learning_rate: Learning rate.
         warmup_steps: Warmup steps.
         weight_decay: Weight decay.
         grad_clip: Gradient clip.
         gradient_accumulation_steps: Gradient accumulation steps.
-        betas: Betas.
+        b1: Beta 1.
+        b2: Beta 2.
         nesterov: Whether to use nesterov momentum.
         preconditioner_update_probability: Probability of updating the
             preconditioner.
@@ -41,12 +43,14 @@ class OptimizerConfig:
     """
 
     type: str = "adamw"
+    schedule_free: bool = False
     learning_rate: float = 0.001
     warmup_steps: int = 1000
     weight_decay: float = 0.1
     grad_clip: float = 1.0
     gradient_accumulation_steps: int = 1
-    betas: Tuple[float, float] = (0.9, 0.95)
+    b1: float = 0.9
+    b2: float = 0.95
     nesterov: bool = False
     preconditioner_update_probability: float = 0.5
     max_size_triangular: int = 4096

@@ -20,12 +20,12 @@ nohup python3 main_multihost.py \
     --experiment_name=$EXPERIMENT \
     --out_dir=gs://optimizertesting/llm-jax \
     --attempt_to_load_checkpoint \
-    --hellaswag_eval_interval=500 \
+    --hellaswag_eval_interval=1000 \
     --checkpoint_interval=1000 \
-    --train_steps=100000 \
+    --train_steps=200000 \
     --batch_size=256 \
-    --optimizer.gradient_accumulation_steps=1 \
-    --compute_dtype=bfloat16 \
+    --optimizer.gradient_accumulation_steps=2 \
+    --compute_dtype=float32 \
     --params_dtype=float32 \
     --optimizer.type=affine \
     --optimizer.learning_rate=0.003 \
@@ -35,5 +35,5 @@ nohup python3 main_multihost.py \
     --optimizer.max_size_triangular=8192 \
     --optimizer.max_skew_triangular=16 \
     --optimizer.precond_lr=0.1 \
-    --optimizer.precond_init_scale=1.0 \
+    --optimizer.precond_init_scale=0.1 \
     --optimizer.preconditioner_dtype=float32 > nohup.out 2>&1 &"
