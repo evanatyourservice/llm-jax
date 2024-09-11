@@ -1,8 +1,6 @@
 #!/bin/bash
 # usage: bash scripts/multihost.sh <wandb_api_key> <huggingface_token>
 
-umask 000
-
 WANDB_API_KEY=$1
 HF_TOKEN=$2
 
@@ -18,7 +16,7 @@ export LLM_CONFIG=config/gpt2.yaml
 
 cd llm-jax
 
-python3 train.py \
+python3 main_multihost.py \
     --out_dir=gs://uscentral2stuff/llm-jax/$EXPERIMENT \
     --attempt_to_load_checkpoint \
     --hellaswag_eval_interval=500 \
