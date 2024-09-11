@@ -7,7 +7,7 @@ HF_TOKEN=$2
 EXPERIMENT=run_$(date +%Y-%m-%d_%H-%M-%S)
 echo $EXPERIMENT
 
-gcloud compute tpus tpu-vm ssh --zone "us-central2-b" "LLaMA" --project "my-phd-research-o" \
+gcloud compute tpus tpu-vm ssh --zone "us-central2-b" "LLaMA" --project "onyx-etching-425021-p8" \
 --worker=all --command="
 export WANDB_API_KEY=$WANDB_API_KEY && \
 export HF_TOKEN=$HF_TOKEN && \
@@ -17,7 +17,7 @@ export LLM_CONFIG=config/gpt2.yaml && \
 cd llm-jax && \
 
 python3 main_multihost.py \
-    --experiment_name=run_2024-09-10_22-50-29 \
+    --experiment_name=$EXPERIMENT \
     --out_dir=gs://uscentral2stuff/llm-jax \
     --attempt_to_load_checkpoint \
     --hellaswag_eval_interval=500 \

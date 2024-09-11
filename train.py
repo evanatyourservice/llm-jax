@@ -134,9 +134,18 @@ def main(config: TrainConfig):
             optimizer.append(optax.clip_by_global_norm(config.optimizer.grad_clip))
 
         # decays to 0.01 by around 2000 steps
-        update_prob_schedule = lambda n: jnp.maximum(jnp.exp(-0.002 * n), 0.03)
+        # update_prob_schedule = lambda n: jnp.maximum(jnp.exp(-0.002 * n), 0.03)
         # opposite of update_prob_schedule from 0.01 to 0.1
         # precond_lr_schedule = lambda n: (-0.9 * jnp.exp(-0.002 * n) + 1.0) / 10
+
+        update_prob_schedule = optax.join_schedules(
+            schedules=[
+                optax.constant_schedule(1.0),
+                optax.constant_schedule(0.1),
+                optax.constant_schedule(0.01),
+            ],
+            boundaries=[20, 2000],
+        )
 
         if config.optimizer.type in ["adam", "adamw"]:
             optimizer.append(
