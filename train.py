@@ -169,7 +169,7 @@ def main(config: TrainConfig):
                     best_effort_scan=True,
                 )
             )
-        elif config.optimizer.type == "shampoo":
+        elif config.optimizer.type in ["shampoo", "caspr"]:
             optimizer.append(
                 tearfree_opt.tearfree(
                     lr_schedule,
@@ -180,7 +180,9 @@ def main(config: TrainConfig):
                             momentum_dtype="bfloat16",
                         ),
                         second_order_options=second_order.Options(
-                            shampoo_options=shampoo.Options(use_CASPR_variant=False)
+                            shampoo_options=shampoo.Options(
+                                use_CASPR_variant=config.optimizer.type == "caspr"
+                            )
                         ),
                     ),
                 )
