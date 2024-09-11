@@ -23,7 +23,7 @@ python3 main_multihost.py \
     --hellaswag_eval_interval=500 \
     --checkpoint_interval=1000 \
     --train_steps=100000 \
-    --batch_size=1024 \
+    --batch_size=512 \
     --optimizer.gradient_accumulation_steps=1 \
     --compute_dtype=bfloat16 \
     --params_dtype=float32 \
