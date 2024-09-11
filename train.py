@@ -1,5 +1,6 @@
 import builtins
 from functools import partial
+from pathlib import Path
 from pprint import pprint
 import random
 import shutil
@@ -65,8 +66,8 @@ def main(config: TrainConfig):
     # np.random.seed(config.seed)
 
     # wandb init
-    if config.wandb is not None and jax.process_index() == 0:
-        wandb_run_name = config.out_dir.split("/")[-1].replace(".", "")
+    if jax.process_index() == 0 and config.wandb.mode == "online":
+        wandb_run_name = Path(config.out_dir).name
         print(f"wandb_run_name: {wandb_run_name}")
         wandb.init(
             name=wandb_run_name,
