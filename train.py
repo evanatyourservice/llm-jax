@@ -232,7 +232,9 @@ def main(config: TrainConfig):
         )
         return train_state
 
-    rng = jax.random.PRNGKey(jax.device_put(config.seed, jax.devices("cpu")[0]))
+    rng = jax.random.PRNGKey(
+        jax.device_put(config.seed, jax.local_devices(backend="cpu")[0])
+    )
 
     # get train state shapes and shardings
     train_state_shapes = jax.eval_shape(init_train_state, rng)
