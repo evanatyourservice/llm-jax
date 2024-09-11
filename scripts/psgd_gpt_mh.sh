@@ -35,7 +35,7 @@ python3 main_multihost.py \
     --optimizer.max_size_triangular=8192 \
     --optimizer.max_skew_triangular=16 \
     --optimizer.precond_lr=0.1 \
-    --optimizer.precond_init_scale=1.0 \
+    --optimizer.precond_init_scale=0.1 \
     --optimizer.preconditioner_dtype=float32 \
     --model.block_size=1024 \
     --model.num_layers=24 \
