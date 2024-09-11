@@ -16,9 +16,7 @@ export LLM_CONFIG=config/gpt2.yaml && \
 
 cd llm-jax && \
 
-nohup \
-
-python3 main_multihost.py \
+nohup python3 main_multihost.py \
     --experiment_name=$EXPERIMENT \
     --out_dir=gs://optimizertesting/llm-jax \
     --attempt_to_load_checkpoint \
@@ -38,5 +36,4 @@ python3 main_multihost.py \
     --optimizer.max_skew_triangular=16 \
     --optimizer.precond_lr=0.1 \
     --optimizer.precond_init_scale=1.0 \
-    --optimizer.preconditioner_dtype=float32
-"
+    --optimizer.preconditioner_dtype=float32"
