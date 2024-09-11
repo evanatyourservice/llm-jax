@@ -21,7 +21,7 @@ python3 main_multihost.py \
     --attempt_to_load_checkpoint \
     --hellaswag_eval_interval=500 \
     --checkpoint_interval=100 \
-    --train_steps=500 \
+    --train_steps=1000 \
     --batch_size=64 \
     --optimizer.gradient_accumulation_steps=1 \
     --compute_dtype=bfloat16 \

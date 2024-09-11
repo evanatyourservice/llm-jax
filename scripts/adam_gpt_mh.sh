@@ -35,5 +35,9 @@ python3 train.py \
     --optimizer.max_skew_triangular=16 \
     --optimizer.precond_lr=0.1 \
     --optimizer.precond_init_scale=1.0 \
-    --optimizer.preconditioner_dtype=float32
+    --optimizer.preconditioner_dtype=float32 \
+    --model.block_size=1024 \
+    --model.num_layers=24 \
+    --model.num_heads=16 \
+    --model.num_embeds=1024
 "

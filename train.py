@@ -61,8 +61,8 @@ def main(config: TrainConfig):
     write_note(f"Number of JAX processes: {jax.process_count()}")
 
     # set seeds
-    random.seed(config.seed)
-    np.random.seed(config.seed)
+    # random.seed(config.seed)
+    # np.random.seed(config.seed)
 
     # wandb init
     if config.wandb is not None and jax.process_index() == 0:
@@ -71,7 +71,7 @@ def main(config: TrainConfig):
             name=wandb_run_name,
             id=wandb_run_name,
             resume="allow",
-            **asdict(config.wandb)
+            **asdict(config.wandb),
         )
         wandb_config = asdict(config)
         wandb_config["jax_n_devices"] = jax.device_count()
@@ -348,6 +348,7 @@ def main(config: TrainConfig):
         ds_name = None
     else:
         # use separate shards per process
+        # we just restart this with a new random shuffle if restarting
         process_shard = _fw_shard_names[jax.process_index() :: jax.process_count()]
         random.shuffle(process_shard)
         ds_name = process_shard[shard_idx % len(process_shard)]
@@ -589,6 +590,6 @@ def main(config: TrainConfig):
 
             start_time = time.time()
 
-    with jax.transfer_guard("allow"):   
+    with jax.transfer_guard("allow"):
         async_checkpoint_manager.save(step, train_state)
         async_checkpoint_manager.wait_until_finished()
