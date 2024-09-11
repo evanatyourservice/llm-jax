@@ -532,7 +532,7 @@ def main(config: TrainConfig):
                 train_state = step_minus_1(train_state)
 
         # log to wandb every 10 steps
-        if config.wandb is not None and (step + 1) % 10 == 0:
+        if step % 10 == 0 and step > 0:
             train_loss = np.mean(train_losses)
             min_loss = min(min_loss, train_loss)
             grad_norm = np.mean(grad_norms)
@@ -544,12 +544,12 @@ def main(config: TrainConfig):
             }
 
             # time and print every 100 steps
-            if (step + 1) % 100 == 0:
-                jax.block_until_ready(train_state.params)
-                end_time = time.time()
-
+            if step % 100 == 0 and step > 0:
                 # performance metrics
                 if start_time is not None:
+                    jax.block_until_ready(train_state.params)
+                    end_time = time.time()
+
                     seconds_per_step = (end_time - start_time) / 100
                     to_log["seconds_per_step"] = (
                         seconds_per_step * config.optimizer.gradient_accumulation_steps
@@ -570,11 +570,11 @@ def main(config: TrainConfig):
             grad_norms = []
 
         with jax.transfer_guard("allow"):
-            if (step + 1) % config.checkpoint_interval == 0:
+            if step % config.checkpoint_interval == 0 and step > 0:
                 async_checkpoint_manager.save(step, train_state)
 
         # eval hellaswag
-        if (step + 1) % config.hellaswag_eval_interval == 0:
+        if step % config.hellaswag_eval_interval == 0 and step > 0:
             hs_accs = []
             for _ in range(10 if platform == "cpu" else 10042 // hs_batch_size):
                 hs_batch = next(hellaswag_ds)
