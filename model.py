@@ -81,32 +81,40 @@ class Attention(nn.Module):
 
     @nn.compact
     def __call__(self, x, mask):
-        B, T, C = x.shape
+        _, T, C = x.shape
         assert C % self.num_heads == 0
         head_dim = C // self.num_heads
 
-        qkv = nn.Dense(3 * C, use_bias=False, kernel_init=initializer)(x)
-        qkv = qkv.reshape(B, T, 3 * self.num_heads, head_dim)
-        q, k, v = jnp.split(qkv, 3, axis=2)
+        dense = partial(
+            nn.DenseGeneral,
+            axis=-1,
+            features=(self.num_heads, head_dim),
+            kernel_init=initializer,
+            use_bias=False,
+        )
+        q = dense(q)
+        k = dense(k)
+        v = dense(v)
 
         scale = jax.lax.rsqrt(jnp.array(head_dim, dtype=x.dtype))
         q = apply_rope(q, jnp.arange(T)[None, :], head_dim) * scale
         k = apply_rope(k, jnp.arange(T)[None, :], head_dim)
 
-        # calculate attention matrix
-        # attn weight shape is (batch..., num_heads, q_length, kv_length)
         attn = jnp.einsum("...qhd,...khd->...hqk", q, k)
 
         # gemma style soft cap
         attn = jnp.tanh(attn / 50) * 50
 
-        # mask out attention to future tokens
         attn = jnp.where(mask, attn, jnp.finfo(x.dtype).min)
         attn = jax.nn.softmax(attn)
+        x = jnp.einsum("...hqk,...khd->...qhd", attn, v)
 
-        # return weighted sum over values for each query position
-        x = jnp.einsum("...hqk,...khd->...qhd", attn, v).reshape(B, T, C)
-        x = nn.Dense(C, use_bias=False, kernel_init=initializer)(x)
+        x = nn.DenseGeneral(
+            features=C,
+            axis=(-2, -1),
+            kernel_init=initializer,
+            use_bias=False,
+        )(x)
 
         return x
 

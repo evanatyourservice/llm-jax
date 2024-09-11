@@ -17,7 +17,7 @@ export LLM_CONFIG=config/gpt2.yaml && \
 cd llm-jax && \
 
 python3 main_multihost.py \
-    --experiment_name=$EXPERIMENT \
+    --experiment_name=run_2024-09-10_22-50-29 \
     --out_dir=gs://uscentral2stuff/llm-jax \
     --attempt_to_load_checkpoint \
     --hellaswag_eval_interval=500 \
