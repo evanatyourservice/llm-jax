@@ -18,26 +18,26 @@ class ModelConfig:
 
 @dataclass(frozen=True)
 class OptimizerConfig:
-    """optimizer configuration.
+    """Optimizer configuration.
 
     Attributes:
-        type: optimizer type.
-        learning_rate: learning rate.
-        warmup_steps: warmup steps.
-        weight_decay: weight decay.
-        grad_clip: gradient clip.
-        gradient_accumulation_steps: gradient accumulation steps.
-        betas: betas.
-        nesterov: whether to use nesterov momentum.
-        preconditioner_update_probability: probability of updating the
+        type: Optimizer type.
+        learning_rate: Learning rate.
+        warmup_steps: Warmup steps.
+        weight_decay: Weight decay.
+        grad_clip: Gradient clip.
+        gradient_accumulation_steps: Gradient accumulation steps.
+        betas: Betas.
+        nesterov: Whether to use nesterov momentum.
+        preconditioner_update_probability: Probability of updating the
             preconditioner.
-        max_size_triangular: max size for affine preconditioner to be
+        max_size_triangular: Max size for affine preconditioner to be
             triangular.
-        max_skew_triangular: max skew for affine preconditioner to be
+        max_skew_triangular: Max skew for affine preconditioner to be
             triangular.
-        precond_lr: learning rate for the preconditioner.
-        precond_init_scale: initial scale for the preconditioner.
-        preconditioner_dtype: dtype of the preconditioner.
+        precond_lr: Learning rate for the preconditioner.
+        precond_init_scale: Initial scale for the preconditioner.
+        preconditioner_dtype: Dtype of the preconditioner.
     """
 
     type: str = "adamw"
@@ -58,21 +58,11 @@ class OptimizerConfig:
 
 @dataclass(frozen=True)
 class WandbConfig:
-    """wandb logging configuration.
+    """Wandb logging configuration."""
 
-    Attributes:
-        entity: Username or team name where you're sending runs.
-        project: Project name.
-        name: Experiment name.
-        mode: Can be 'offline', 'online', or 'disabled'.
-        notes: Notes for this run.
-    """
-
-    entity: str = "evanatyourservice"
+    entity: str = ""
     project: str = "llm-jax"
-    name: str = ""
     mode: str = "online"
-    notes: str = ""
 
 
 date_and_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -80,25 +70,25 @@ date_and_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
 @dataclass(frozen=True)
 class TrainConfig:
-    """training configuration.
+    """Training configuration.
 
     Attributes:
-        seed: random seed.
-        out_dir: output directory for checkpoints (can be gcs path).
-        attempt_to_load_checkpoint: whether to attempt to load a checkpoint.
-        only_print_model: whether to only print the model then quit.
-        min_size_to_shard_mb: minimum size of shards to create.
-        hellaswag_eval_interval: interval to evaluate hellaswag.
-        checkpoint_interval: interval to save checkpoints.
-        checkpoint_milestone: milestone to save checkpoints.
-        keep_checkpoints: number of historical checkpoints to keep.
-        batch_size: batch size.
-        train_steps: total number of training iterations.
-        compute_dtype: compute dtype.
-        params_dtype: params dtype.
-        optimizer: optimizer config.
-        wandb: wandb logging config.
-        model: model config.
+        seed: Random seed.
+        out_dir: Output directory for checkpoints (can be gcs path).
+        attempt_to_load_checkpoint: Whether to attempt to load a checkpoint.
+        only_print_model: Whether to only print the model then quit.
+        min_size_to_shard_mb: Minimum size of shards to create.
+        hellaswag_eval_interval: Interval to evaluate hellaswag.
+        checkpoint_interval: Interval to save checkpoints.
+        checkpoint_milestone: Milestone to save checkpoints.
+        keep_checkpoints: Number of historical checkpoints to keep.
+        batch_size: Batch size.
+        train_steps: Total number of training iterations.
+        compute_dtype: Compute dtype.
+        params_dtype: Params dtype.
+        optimizer: Optimizer config.
+        wandb: Wandb logging config.
+        model: Model config.
     """
 
     seed: int = 10
@@ -122,18 +112,18 @@ class TrainConfig:
 
     assert (
         checkpoint_milestone % checkpoint_interval == 0
-    ), "checkpoint_milestone must be a multiple of checkpoint_interval"
+    ), "Checkpoint_milestone must be a multiple of checkpoint_interval"
     assert (
         hellaswag_eval_interval % 100 == 0
-    ), "hellaswag_eval_interval must be a multiple of 100"
+    ), "Hellaswag_eval_interval must be a multiple of 100"
 
 
 def get_default_config() -> TrainConfig:
-    # use this file to set default values
+    # Use this file to set default values
     path = os.environ.get("LLM_CONFIG", os.path.join("config", "gpt2.yaml"))
     if not os.path.exists(path):
-        write_note("using default config")
+        write_note("Using default config")
         return TrainConfig()
-    write_note(f"using config file at {path}")
+    write_note(f"Using config file at {path}")
     with open(path, "r") as f:
         return tyro.from_yaml(TrainConfig, f)

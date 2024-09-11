@@ -23,7 +23,7 @@ from flax.training import orbax_utils
 import flax.traverse_util
 import optax
 import optax.tree_utils as otu
-import orbax.checkpoint
+import orbax.checkpoint as ocp
 
 from dataset import prepare_hellaswag, fineweb_edu_dataset, _fw_shard_names
 from configs import TrainConfig
@@ -66,7 +66,12 @@ def main(config: TrainConfig):
 
     # wandb init
     if config.wandb is not None and jax.process_index() == 0:
-        wandb.init(**asdict(config.wandb))
+        wandb.init(
+            name=config.out_dir.split("/")[-1],
+            magic=True,
+            resume="allow",
+            **asdict(config.wandb)
+        )
         wandb_config = asdict(config)
         wandb_config["jax_n_devices"] = jax.device_count()
         wandb_config["jax_n_processes"] = jax.process_count()
@@ -76,11 +81,11 @@ def main(config: TrainConfig):
 
     # ====== checkpointer ======
     with jax.transfer_guard("allow"):
-        options = orbax.checkpoint.CheckpointManagerOptions(max_to_keep=2, create=True)
-        async_checkpointer = orbax.checkpoint.AsyncCheckpointer(
-            orbax.checkpoint.PyTreeCheckpointHandler(), timeout_secs=60
+        options = ocp.CheckpointManagerOptions(max_to_keep=2, create=True)
+        async_checkpointer = ocp.AsyncCheckpointer(
+            ocp.PyTreeCheckpointHandler(), timeout_secs=60
         )
-        async_checkpoint_manager = orbax.checkpoint.CheckpointManager(
+        async_checkpoint_manager = ocp.CheckpointManager(
             config.out_dir, async_checkpointer, options
         )
 
