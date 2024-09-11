@@ -75,13 +75,14 @@ def main(config: TrainConfig):
     platform = jax.devices()[0].platform
 
     # ====== checkpointer ======
-    options = orbax.checkpoint.CheckpointManagerOptions(max_to_keep=2, create=True)
-    async_checkpointer = orbax.checkpoint.AsyncCheckpointer(
-        orbax.checkpoint.PyTreeCheckpointHandler(), timeout_secs=60
-    )
-    async_checkpoint_manager = orbax.checkpoint.CheckpointManager(
-        config.out_dir, async_checkpointer, options
-    )
+    with jax.transfer_guard("allow"):
+        options = orbax.checkpoint.CheckpointManagerOptions(max_to_keep=2, create=True)
+        async_checkpointer = orbax.checkpoint.AsyncCheckpointer(
+            orbax.checkpoint.PyTreeCheckpointHandler(), timeout_secs=60
+        )
+        async_checkpoint_manager = orbax.checkpoint.CheckpointManager(
+            config.out_dir, async_checkpointer, options
+        )
 
     # ====== create device mesh ======
     write_note("Creating 1D FSDP mesh")
@@ -302,17 +303,18 @@ def main(config: TrainConfig):
     )
 
     # load checkpoint
-    if (
-        config.attempt_to_load_checkpoint
-        and async_checkpoint_manager.latest_step() is not None
-    ):
-        write_note(f"LOADING CHECKPOINT from {config.out_dir}")
-        restore_args = orbax_utils.restore_args_from_target(train_state)
-        train_state = async_checkpoint_manager.restore(
-            async_checkpoint_manager.latest_step(),
-            items=train_state,
-            restore_kwargs={"restore_args": restore_args},
-        )
+    with jax.transfer_guard("allow"):
+        if (
+            config.attempt_to_load_checkpoint
+            and async_checkpoint_manager.latest_step() is not None
+        ):
+            write_note(f"LOADING CHECKPOINT from {config.out_dir}")
+            restore_args = orbax_utils.restore_args_from_target(train_state)
+            train_state = async_checkpoint_manager.restore(
+                async_checkpoint_manager.latest_step(),
+                items=train_state,
+                restore_kwargs={"restore_args": restore_args},
+            )
 
     num_params = count_params(train_state.params)
     if jax.process_index() == 0:
@@ -554,8 +556,9 @@ def main(config: TrainConfig):
             train_losses = []
             grad_norms = []
 
-        if (step + 1) % config.checkpoint_interval == 0:
-            async_checkpoint_manager.save(step, train_state)
+        with jax.transfer_guard("allow"):
+            if (step + 1) % config.checkpoint_interval == 0:
+                async_checkpoint_manager.save(step, train_state)
 
         # eval hellaswag
         if (step + 1) % config.hellaswag_eval_interval == 0:
@@ -578,5 +581,6 @@ def main(config: TrainConfig):
 
             start_time = time.time()
 
-    async_checkpoint_manager.save(step, train_state)
-    async_checkpoint_manager.wait_until_finished()
+    with jax.transfer_guard("allow"):   
+        async_checkpoint_manager.save(step, train_state)
+        async_checkpoint_manager.wait_until_finished()
