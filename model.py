@@ -92,9 +92,9 @@ class Attention(nn.Module):
             kernel_init=initializer,
             use_bias=False,
         )
-        q = dense(q)
-        k = dense(k)
-        v = dense(v)
+        q = dense(x)
+        k = dense(x)
+        v = dense(x)
 
         scale = jax.lax.rsqrt(jnp.array(head_dim, dtype=x.dtype))
         q = apply_rope(q, jnp.arange(T)[None, :], head_dim) * scale

@@ -4,3 +4,4 @@ wandb
 *.pyc
 .DS_Store
 scratch
+nohup.out
