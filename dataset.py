@@ -130,7 +130,7 @@ def fineweb_edu_dataset(
 
         def tokenize(example):
             tokenized = tokenizer.encode_ordinary_batch(example, num_threads=64)
-            # cap tokenized lengths to 10 * block_size
+            # cap tokenized lengths to 10 * block_size and add eot_token
             tokenized = [
                 t[: 10 * block_size] + [tokenizer.eot_token] for t in tokenized
             ]

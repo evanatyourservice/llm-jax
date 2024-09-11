@@ -19,9 +19,11 @@ from jax.sharding import Mesh, PartitionSpec as P, NamedSharding
 import flax
 from flax import struct
 from flax.training.train_state import TrainState as ts
+from flax.training import orbax_utils
 import flax.traverse_util
 import optax
 import optax.tree_utils as otu
+import orbax.checkpoint
 
 from dataset import prepare_hellaswag, fineweb_edu_dataset, _fw_shard_names
 from configs import TrainConfig
@@ -30,7 +32,7 @@ from optimizers.psgd_affine_old import affine as affine_old
 from optimizers.tearfree import optimizer as tearfree_opt
 from optimizers.tearfree import shampoo, second_order
 from sharding import infer_sharding, fsdp_sharding
-from utils import check_dtypes, reshard, write_note, count_params, get_default_config
+from utils import check_dtypes, reshard, write_note, count_params
 from model import GPT
 
 
@@ -72,14 +74,23 @@ def main(config: TrainConfig):
 
     platform = jax.devices()[0].platform
 
+    # ====== checkpointer ======
+    options = orbax.checkpoint.CheckpointManagerOptions(max_to_keep=2, create=True)
+    async_checkpointer = orbax.checkpoint.AsyncCheckpointer(
+        orbax.checkpoint.PyTreeCheckpointHandler(), timeout_secs=60
+    )
+    async_checkpoint_manager = orbax.checkpoint.CheckpointManager(
+        config.out_dir, async_checkpointer, options
+    )
+
     # ====== create device mesh ======
-    write_note("creating 1D FSDP mesh")
+    write_note("Creating 1D FSDP mesh")
     device_mesh = mesh_utils.create_device_mesh((jax.device_count(),))
     devices_flat = device_mesh.flatten()
     mesh = Mesh(devices=device_mesh, axis_names="fsdp")
 
     # ====== optimizer ======
-    write_note("creating optimizer")
+    write_note("Creating optimizer")
     lr_schedule = optax.join_schedules(
         schedules=[
             optax.linear_schedule(
@@ -95,7 +106,7 @@ def main(config: TrainConfig):
     )
 
     def make_opt(reshaped_params_sharding=None, scanned_arrays=None):
-        write_note(f"using {config.optimizer.type} optimizer")
+        write_note(f"Using {config.optimizer.type} optimizer")
 
         def param_decay_mask(params):
             """Only lets through kernel weights for weight decay."""
@@ -196,7 +207,7 @@ def main(config: TrainConfig):
         return optimizer
 
     # ====== train state and sharding ======
-    write_note("creating and sharding train state")
+    write_note("Creating and sharding train state")
     repl_sharding = NamedSharding(mesh, P())
     data_sharding = NamedSharding(mesh, P("fsdp"))
 
@@ -290,6 +301,19 @@ def main(config: TrainConfig):
         tx=optimizer, opt_state=opt_state_sharding
     )
 
+    # load checkpoint
+    if (
+        config.attempt_to_load_checkpoint
+        and async_checkpoint_manager.latest_step() is not None
+    ):
+        write_note(f"LOADING CHECKPOINT from {config.out_dir}")
+        restore_args = orbax_utils.restore_args_from_target(train_state)
+        train_state = async_checkpoint_manager.restore(
+            async_checkpoint_manager.latest_step(),
+            items=train_state,
+            restore_kwargs={"restore_args": restore_args},
+        )
+
     num_params = count_params(train_state.params)
     if jax.process_index() == 0:
         print("TRAIN STATE SHAPES AND DTYPES:")
@@ -306,7 +330,7 @@ def main(config: TrainConfig):
             raise KeyboardInterrupt("Only printing model")
 
     # ====== datasets ======
-    write_note("creating datasets")
+    write_note("Creating datasets")
 
     shard_idx = 0
     if jax.process_count() == 1:
@@ -332,22 +356,17 @@ def main(config: TrainConfig):
     # hellaswag has 4 seqs per example
     hs_batch_size = max(config.batch_size // 4, jax.device_count())
     hellaswag_ds = prepare_hellaswag(
-        hs_batch_size,
-        config.model.block_size,
-        devices_flat,
-        tf_prefetch=4,
+        hs_batch_size, config.model.block_size, devices_flat, tf_prefetch=4
     )
 
     # ====== train and eval steps ======
     def train_step(
-        state: TrainState,
-        tokens: jnp.ndarray,
+        state: TrainState, tokens: jnp.ndarray
     ) -> Tuple[jnp.ndarray, jnp.ndarray, TrainState, jnp.ndarray, jnp.ndarray]:
 
         def loss_fn(params):
             logits = state.apply_fn(
-                otu.tree_cast(params, config.compute_dtype),
-                tokens[:, :-1],
+                otu.tree_cast(params, config.compute_dtype), tokens[:, :-1]
             )
             assert logits.dtype == config.compute_dtype
 
@@ -379,8 +398,7 @@ def main(config: TrainConfig):
         state: TrainState, tokens: jnp.ndarray, seq_lens: jnp.ndarray
     ) -> jnp.ndarray:
         logits = state.apply_fn(
-            otu.tree_cast(state.params, config.compute_dtype),
-            tokens[:, :-1],
+            otu.tree_cast(state.params, config.compute_dtype), tokens[:, :-1]
         )
         assert logits.dtype == config.compute_dtype
 
@@ -448,7 +466,7 @@ def main(config: TrainConfig):
     # ======= train ========
     # grab start step from train state
     step = jax.device_get(train_state.step).item()
-    write_note(f"starting training at step {step}")
+    write_note(f"Starting training at step {step}")
 
     orig_dtypes = jax.tree.map(lambda x: x.dtype, train_state)
     min_loss = float("inf")
@@ -456,7 +474,7 @@ def main(config: TrainConfig):
     train_losses = []
     grad_norms = []
     start_time = None  # skip first loop for compile
-    write_note("starting training")
+    write_note("Starting training")
     for step in range(step, config.train_steps):
         for accum_step in range(config.optimizer.gradient_accumulation_steps):
             try:
@@ -464,7 +482,7 @@ def main(config: TrainConfig):
 
             except StopIteration:
                 print(
-                    f"current dataset subshard exhausted on process "
+                    f"Current dataset subshard exhausted on process "
                     f"{jax.process_index()}, loading next subshard"
                 )
                 del train_ds
@@ -475,7 +493,7 @@ def main(config: TrainConfig):
                 else:
                     hf_cache_dir = os.path.expanduser("~/.cache/huggingface/datasets")
                 if os.path.exists(hf_cache_dir):
-                    print(f"removing {hf_cache_dir} to save space")
+                    print(f"Removing {hf_cache_dir} to save space")
                     try:
                         shutil.rmtree(hf_cache_dir)
                     except Exception as e:
@@ -536,6 +554,9 @@ def main(config: TrainConfig):
             train_losses = []
             grad_norms = []
 
+        if (step + 1) % config.checkpoint_interval == 0:
+            async_checkpoint_manager.save(step, train_state)
+
         # eval hellaswag
         if (step + 1) % config.hellaswag_eval_interval == 0:
             hs_accs = []
@@ -557,7 +578,5 @@ def main(config: TrainConfig):
 
             start_time = time.time()
 
-
-if __name__ == "__main__":
-    config = tyro.cli(TrainConfig, default=get_default_config(), use_underscores=True)
-    main(config)
+    async_checkpoint_manager.save(step, train_state)
+    async_checkpoint_manager.wait_until_finished()

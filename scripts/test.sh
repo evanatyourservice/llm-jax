@@ -7,7 +7,7 @@ export XLA_FLAGS="--xla_force_host_platform_device_count=2"
 export LLM_CONFIG=config/gpt2.yaml  # base config
 
 
-python3 train.py \
+python3 main.py \
     --out_dir=/Users/evanwalters/llm_testing/run_checkpointing_test \
     --attempt_to_load_checkpoint \
     --compute_dtype=float32 \

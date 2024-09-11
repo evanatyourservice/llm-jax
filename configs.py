@@ -1,6 +1,10 @@
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Tuple, Optional
+import tyro
+import os
+
+from utils import write_note
 
 
 @dataclass(frozen=True)
@@ -99,10 +103,11 @@ class TrainConfig:
 
     seed: int = 10
     out_dir: str = f"gs://uscentral2stuff/llm-jax/run_{date_and_time}"
-    attempt_to_load_checkpoint: bool = False
+    initialize_xla_distributed: bool = True
+    attempt_to_load_checkpoint: bool = True
     only_print_model: bool = False
     min_size_to_shard_mb: int = 0.1
-    hellaswag_eval_interval: int = 500
+    hellaswag_eval_interval: int = 1000
     checkpoint_interval: int = 1000
     keep_checkpoints: int = 2
     checkpoint_milestone: int = 10000
@@ -121,3 +126,14 @@ class TrainConfig:
     assert (
         hellaswag_eval_interval % 100 == 0
     ), "hellaswag_eval_interval must be a multiple of 100"
+
+
+def get_default_config() -> TrainConfig:
+    # use this file to set default values
+    path = os.environ.get("LLM_CONFIG", os.path.join("config", "gpt2.yaml"))
+    if not os.path.exists(path):
+        write_note("using default config")
+        return TrainConfig()
+    write_note(f"using config file at {path}")
+    with open(path, "r") as f:
+        return tyro.from_yaml(TrainConfig, f)

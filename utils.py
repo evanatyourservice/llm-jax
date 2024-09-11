@@ -1,16 +1,12 @@
 import collections
 import itertools
-import os
 from multiprocessing.pool import ThreadPool
 from typing import Mapping
 import dataclasses
 import numpy as np
-import tyro
 
 import jax
 import flax
-
-from configs import TrainConfig
 
 
 def _traverse_with_names(tree, with_inner_nodes=False):
@@ -215,14 +211,3 @@ def check_dtypes(orig_dtype_tree, current_dtype_tree):
 
 def count_params(params) -> int:
     return sum(np.prod(x.shape) for x in jax.tree_util.tree_leaves(params))
-
-
-def get_default_config() -> TrainConfig:
-    # use this file to set default values
-    path = os.environ.get("LLM_CONFIG", os.path.join("config", "gpt2.yaml"))
-    if not os.path.exists(path):
-        write_note("using default config")
-        return TrainConfig()
-    write_note(f"using config file at {path}")
-    with open(path, "r") as f:
-        return tyro.from_yaml(TrainConfig, f)
