@@ -137,7 +137,7 @@ def main(config: TrainConfig):
         if config.optimizer.grad_clip > 0.0:
             optimizer.append(optax.clip_by_global_norm(config.optimizer.grad_clip))
 
-        update_prob_schedule = lambda n: jnp.maximum(jnp.exp(-0.001 * n), 0.03)
+        update_prob_schedule = lambda n: jnp.maximum(jnp.exp(-0.001 * n), 0.05)
 
         if config.optimizer.type in ["adam", "adamw"]:
             optimizer.append(
