@@ -67,11 +67,9 @@ def main(config: TrainConfig):
 
     # wandb init
     if jax.process_index() == 0 and config.wandb.mode == "online":
-        wandb_run_name = Path(config.out_dir).name
-        print(f"wandb_run_name: {wandb_run_name}")
         wandb.init(
-            name=wandb_run_name,
-            id=wandb_run_name,
+            name=config.experiment_name,
+            id=config.experiment_name,
             resume="allow",
             **asdict(config.wandb),
         )
@@ -89,7 +87,9 @@ def main(config: TrainConfig):
             ocp.PyTreeCheckpointHandler(), timeout_secs=60
         )
         async_checkpoint_manager = ocp.CheckpointManager(
-            config.out_dir, async_checkpointer, options
+            config.out_dir + "/" + config.experiment_name,
+            async_checkpointer,
+            options,
         )
 
     # ====== create device mesh ======
@@ -318,7 +318,9 @@ def main(config: TrainConfig):
             config.attempt_to_load_checkpoint
             and async_checkpoint_manager.latest_step() is not None
         ):
-            write_note(f"LOADING CHECKPOINT from {config.out_dir}")
+            write_note(
+                f"LOADING CHECKPOINT from {config.out_dir}/{config.experiment_name}"
+            )
             restore_args = orbax_utils.restore_args_from_target(train_state)
             train_state = async_checkpoint_manager.restore(
                 async_checkpoint_manager.latest_step(),

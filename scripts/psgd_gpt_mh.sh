@@ -4,20 +4,21 @@
 WANDB_API_KEY=$1
 HF_TOKEN=$2
 
-gcloud compute tpus tpu-vm ssh --zone "us-central2-b" "LLaMA" --project "my-phd-research-o" \
---worker=all --command="
 EXPERIMENT=run_$(date +%Y-%m-%d_%H-%M-%S)
 echo $EXPERIMENT
 
-export WANDB_API_KEY=$WANDB_API_KEY
-export HF_TOKEN=$HF_TOKEN
+gcloud compute tpus tpu-vm ssh --zone "us-central2-b" "LLaMA" --project "my-phd-research-o" \
+--worker=all --command="
+export WANDB_API_KEY=$WANDB_API_KEY && \
+export HF_TOKEN=$HF_TOKEN && \
 
-export LLM_CONFIG=config/gpt2.yaml
+export LLM_CONFIG=config/gpt2.yaml && \
 
-cd llm-jax
+cd llm-jax && \
 
 python3 main_multihost.py \
-    --out_dir=gs://uscentral2stuff/llm-jax/$EXPERIMENT \
+    --experiment_name=$EXPERIMENT \
+    --out_dir=gs://uscentral2stuff/llm-jax \
     --attempt_to_load_checkpoint \
     --hellaswag_eval_interval=500 \
     --checkpoint_interval=1000 \

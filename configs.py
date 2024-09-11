@@ -73,7 +73,7 @@ class TrainConfig:
     """Training configuration.
 
     Attributes:
-        seed: Random seed.
+        experiment_name: Name of the experiment.
         out_dir: Output directory for checkpoints (can be gcs path).
         attempt_to_load_checkpoint: Whether to attempt to load a checkpoint.
         only_print_model: Whether to only print the model then quit.
@@ -92,7 +92,8 @@ class TrainConfig:
     """
 
     seed: int = 10
-    out_dir: str = f"gs://uscentral2stuff/llm-jax/run_{date_and_time}"
+    experiment_name: str = f"run_{date_and_time}"
+    out_dir: str = "gs://uscentral2stuff/llm-jax"
     initialize_xla_distributed: bool = True
     attempt_to_load_checkpoint: bool = True
     only_print_model: bool = False
