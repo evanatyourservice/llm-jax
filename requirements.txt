@@ -11,3 +11,5 @@ einops
 psgd-jax
 chex
 google-cloud-storage
+tiktoken
+orbax-checkpoint

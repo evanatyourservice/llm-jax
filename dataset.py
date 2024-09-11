@@ -1,5 +1,6 @@
 import os
 import json
+from typing import Optional
 import numpy as np
 from tqdm import tqdm
 import random
@@ -104,9 +105,9 @@ def fineweb_edu_dataset(
     batch_size: int,
     block_size: int,
     flat_devices,
+    fineweb_edu_name: Optional[str] = None,
     tf_prefetch: int = 5,
     device_prefetch: int = 0,
-    shard_idx: int = 0,
 ):
     """Load the fineweb-edu dataset."""
     platform = jax.devices()[0].platform
@@ -118,32 +119,21 @@ def fineweb_edu_dataset(
 
     tokenizer = tiktoken.get_encoding("gpt2")
 
-    if jax.process_count() == 1:
-        # just stream fineweb-edu regularly
-        proc_subshard = None
-    else:
-        # use different shards pre process
-        # grab current shard and shuffle
-        proc_shard = _fw_shard_names[jax.process_index() :: jax.process_count()]
-        random.shuffle(proc_shard)
-
-        proc_subshard = proc_shard[shard_idx % len(proc_shard)]
-
     def gen():
         hf_ds: IterableDataset = load_dataset(
             "HuggingFaceFW/fineweb-edu",
             split="train",
-            name=proc_subshard,
+            name=fineweb_edu_name,
             cache_dir=cache_dir,
             streaming=True,
         )
 
         def tokenize(example):
-            tokenized = tokenizer.encode_ordinary_batch(
-                example,
-                num_threads=64,
-            )
-            tokenized = [t + [tokenizer.eot_token] for t in tokenized]
+            tokenized = tokenizer.encode_ordinary_batch(example, num_threads=64)
+            # cap tokenized lengths to 10 * block_size
+            tokenized = [
+                t[: 10 * block_size] + [tokenizer.eot_token] for t in tokenized
+            ]
             return {"tokens": tokenized}
 
         hf_ds = hf_ds.map(

@@ -4,7 +4,7 @@
 WANDB_API_KEY=$1
 HF_TOKEN=$2
 
-gcloud compute tpus tpu-vm ssh --zone "us-central2-b" "LLaMA" --project "onyx-etching-425021-p8" \
+gcloud compute tpus tpu-vm ssh --zone "us-central2-b" "LLaMA" --project "my-phd-research-o" \
 --worker=all --command="
 EXPERIMENT=run_$(date +%Y-%m-%d_%H-%M-%S)
 echo $EXPERIMENT

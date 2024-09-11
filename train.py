@@ -1,12 +1,12 @@
 import builtins
 from functools import partial
 from pprint import pprint
+import random
 import shutil
 import time
 from typing import Callable, Tuple
 from dataclasses import asdict
 import os
-import flax.traverse_util
 import numpy as np
 import wandb
 import tyro
@@ -19,10 +19,11 @@ from jax.sharding import Mesh, PartitionSpec as P, NamedSharding
 import flax
 from flax import struct
 from flax.training.train_state import TrainState as ts
+import flax.traverse_util
 import optax
 import optax.tree_utils as otu
 
-from dataset import prepare_hellaswag, fineweb_edu_dataset
+from dataset import prepare_hellaswag, fineweb_edu_dataset, _fw_shard_names
 from configs import TrainConfig
 from optimizers.psgd_affine import affine, _shape_as_matrix
 from optimizers.psgd_affine_old import affine as affine_old
@@ -58,8 +59,8 @@ def main(config: TrainConfig):
     write_note(f"Number of JAX processes: {jax.process_count()}")
 
     # set seeds
-    # random.seed(config.seed)
-    # np.random.seed(config.seed)
+    random.seed(config.seed)
+    np.random.seed(config.seed)
 
     # wandb init
     if config.wandb is not None and jax.process_index() == 0:
@@ -161,7 +162,7 @@ def main(config: TrainConfig):
                     precond_init_scale=config.optimizer.precond_init_scale,
                     mu_dtype=jnp.bfloat16,
                     precond_dtype=config.optimizer.preconditioner_dtype,
-                    precision="tensorfloat32",
+                    precision="bfloat16",
                     reshaped_params_sharding=reshaped_params_sharding,
                     best_effort_scan=True,
                 )
@@ -307,6 +308,16 @@ def main(config: TrainConfig):
     # ====== datasets ======
     write_note("creating datasets")
 
+    shard_idx = 0
+    if jax.process_count() == 1:
+        # stream fineweb-edu regularly
+        ds_name = None
+    else:
+        # use separate shards per process
+        process_shard = _fw_shard_names[jax.process_index() :: jax.process_count()]
+        random.shuffle(process_shard)
+        ds_name = process_shard[shard_idx % len(process_shard)]
+
     make_train_ds = partial(
         fineweb_edu_dataset,
         batch_size=config.batch_size,
@@ -316,8 +327,7 @@ def main(config: TrainConfig):
         device_prefetch=2 if platform == "gpu" else 0,
     )
 
-    shard_idx = 0
-    train_ds = make_train_ds(shard_idx=shard_idx)
+    train_ds = make_train_ds(fineweb_edu_name=ds_name)
 
     # hellaswag has 4 seqs per example
     hs_batch_size = max(config.batch_size // 4, jax.device_count())
@@ -381,11 +391,11 @@ def main(config: TrainConfig):
         @jax.vmap
         def unreduced_losses(loss, seq_len):
             seq_mask = jnp.arange(len(loss)) < seq_len - 1
+            seq_mask = seq_mask.astype(logits.dtype)
             loss = loss * seq_mask
             return jnp.sum(loss) / jnp.sum(seq_mask)
 
         losses = unreduced_losses(losses, seq_lens)
-        assert losses.shape == tokens.shape[:1]
         return losses
 
     def eval_hellaswag(state: TrainState, data, seq_lens, labels):
@@ -451,6 +461,7 @@ def main(config: TrainConfig):
         for accum_step in range(config.optimizer.gradient_accumulation_steps):
             try:
                 tokens = next(train_ds)
+
             except StopIteration:
                 print(
                     f"current dataset subshard exhausted on process "
@@ -470,9 +481,13 @@ def main(config: TrainConfig):
                     except Exception as e:
                         print(f"Error removing {hf_cache_dir}: {e}")
 
-                # start next subshard
+                # start next subshard or restart whole dataset
                 shard_idx += 1
-                train_ds = make_train_ds(shard_idx=shard_idx)
+                if jax.process_count() == 1:
+                    ds_name = None
+                else:
+                    ds_name = process_shard[shard_idx % len(process_shard)]
+                train_ds = make_train_ds(fineweb_edu_name=ds_name)
 
                 tokens = next(train_ds)
 

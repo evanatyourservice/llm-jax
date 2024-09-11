@@ -11,7 +11,7 @@ from flax.traverse_util import flatten_dict, unflatten_dict
 from configs import ModelConfig
 
 
-initializer = nn.initializers.truncated_normal(0.02)
+initializer = nn.initializers.normal()
 
 
 class RMSNorm(nn.Module):

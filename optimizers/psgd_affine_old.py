@@ -727,7 +727,7 @@ def _unstack_matrices(
 
 def _efficient_cond(
     predicate: bool, compute_fn: Callable, init_state: Any, *args, **kwargs
-) -> Tuple:
+):
     """Avoids wasteful buffer allocation with XLA.
 
     Useful when the False branch of the cond is only a pass-through. `init_state`
