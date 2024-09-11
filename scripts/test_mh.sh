@@ -17,7 +17,7 @@ export LLM_CONFIG=config/gpt2.yaml
 cd llm-jax
 
 python3 main_multihost.py \
-    --out_dir=gs://uscentral2stuff/llm-jax/test_mh \
+    --out_dir=gs://uscentral2stuff/llm-jax/test_mh2 \
     --attempt_to_load_checkpoint \
     --hellaswag_eval_interval=500 \
     --checkpoint_interval=100 \

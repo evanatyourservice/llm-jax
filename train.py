@@ -66,8 +66,10 @@ def main(config: TrainConfig):
 
     # wandb init
     if config.wandb is not None and jax.process_index() == 0:
+        wandb_run_name = config.out_dir.split("/")[-1]
         wandb.init(
-            name=config.out_dir.split("/")[-1],
+            name=wandb_run_name,
+            id=wandb_run_name,
             resume="allow",
             **asdict(config.wandb)
         )
