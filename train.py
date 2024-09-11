@@ -26,8 +26,7 @@ import orbax.checkpoint as ocp
 
 from dataset import prepare_hellaswag, fineweb_edu_dataset, _fw_shard_names
 from configs import TrainConfig
-from optimizers.psgd_affine import affine, _shape_as_matrix
-from optimizers.psgd_affine_old import affine as affine_old
+from optimizers.psgd_affine_old import affine, _shape_as_matrix
 from optimizers.tearfree import optimizer as tearfree_opt
 from optimizers.tearfree import shampoo, second_order
 from optimizers.adam import adamw
@@ -127,7 +126,7 @@ def main(config: TrainConfig):
             all_true = jax.tree.map(lambda _: True, params)
             out = non_kernels.update(lambda _: False, all_true)
             return out
-        
+
         if config.optimizer.schedule_free:
             b1_in = 0.0
         else:
@@ -152,7 +151,7 @@ def main(config: TrainConfig):
             )
         elif config.optimizer.type in ["psgd", "psgd_affine", "affine"]:
             optimizer.append(
-                affine_old(
+                affine(
                     lr_schedule,
                     preconditioner_update_probability=update_prob_schedule,
                     b1=b1_in,
@@ -192,7 +191,9 @@ def main(config: TrainConfig):
         optimizer = optax.chain(*optimizer)
 
         if config.optimizer.schedule_free:
-            optimizer = optax.contrib.schedule_free(optimizer, lr_schedule, config.optimizer.b1)
+            optimizer = optax.contrib.schedule_free(
+                optimizer, lr_schedule, config.optimizer.b1
+            )
 
         if config.optimizer.gradient_accumulation_steps > 1:
             optimizer = optax.MultiSteps(
@@ -244,17 +245,8 @@ def main(config: TrainConfig):
         rng_init
     )
 
-    # get pytree of how many times we scan each array in params
-    scanned_arrays = jax.tree.map(lambda _: 0, train_state.params)
-    scanned_arrays = flax.traverse_util.ModelParamTraversal(
-        lambda path, _: "scan" in path
-    ).update(lambda _: 1, scanned_arrays)
-    scanned_arrays = flax.traverse_util.ModelParamTraversal(
-        lambda path, _: "qkv_einsum" in path
-    ).update(lambda _: 2, scanned_arrays)
-
     # make optimizer and get its shardings, init psgd with scanned arrays
-    optimizer = make_opt(scanned_arrays=scanned_arrays)
+    optimizer = make_opt()
 
     opt_state_shapes = jax.eval_shape(optimizer.init, train_state.params)
     opt_state_sharding, _ = infer_sharding(params=opt_state_shapes, mesh=mesh, op=op)
@@ -267,11 +259,10 @@ def main(config: TrainConfig):
     # similarly to params. We can pass this into PSGD for internal sharding
     # constraints, although it's not absolutely necessary. If all params are
     # already matrices, then this is unnecessary.
-    def get_reshaped_params_shapes(params, scanned_layers):
+    def get_reshaped_params_shapes(params):
         """Get the shapes of params after PSGD reshapes."""
-        # TODO move to psgd file and print which params are being reshaped in a nice way
         affine_reshapers = jax.tree.map(
-            _shape_as_matrix, params, scanned_layers
+            _shape_as_matrix, params
         )  # returns tuples of (reshape_fn, unreshape_fn, shape)
         p_struct = jax.tree.structure(params)
         affine_reshapers = p_struct.flatten_up_to(affine_reshapers)
@@ -280,17 +271,13 @@ def main(config: TrainConfig):
         ]
         return p_struct.unflatten(matrix_shapes)
 
-    reshaped_params_shapes = get_reshaped_params_shapes(
-        train_state.params, scanned_arrays
-    )
+    reshaped_params_shapes = get_reshaped_params_shapes(train_state.params)
     reshaped_params_sharding, _ = infer_sharding(
         params=reshaped_params_shapes, mesh=mesh, op=op
     )
 
     # remake optimizer with reshaped params sharding and scanned layers passed in
-    optimizer = make_opt(
-        reshaped_params_sharding=reshaped_params_sharding, scanned_arrays=scanned_arrays
-    )
+    optimizer = make_opt(reshaped_params_sharding=reshaped_params_sharding)
 
     # finish making train state (pass in optimizer and opt_state)
     train_state = train_state.replace(tx=optimizer, opt_state=opt_state)

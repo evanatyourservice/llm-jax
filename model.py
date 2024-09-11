@@ -83,7 +83,8 @@ class Attention(nn.Module):
         attn = jnp.einsum("...qhd,...khd->...hqk", q, k)
 
         # gemma style soft cap
-        attn = jnp.tanh(attn / 50) * 50
+        soft_cap_scaler = jnp.array(50.0, dtype=x.dtype)
+        attn = jnp.tanh(attn / soft_cap_scaler) * soft_cap_scaler
 
         attn = jnp.where(mask, attn, jnp.finfo(x.dtype).min)
         attn = jax.nn.softmax(attn)

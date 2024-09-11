@@ -15,7 +15,7 @@ export LLM_CONFIG=config/gpt2.yaml
 cd llm-jax
 nohup python3 main_multihost.py \
     --experiment_name=$EXPERIMENT \
-    --out_dir=gs://optimizertesting/llm-jax \
+    --out_dir=gs://uscentral2stuff/llm-jax \
     --attempt_to_load_checkpoint \
     --hellaswag_eval_interval=1000 \
     --checkpoint_interval=1000 \

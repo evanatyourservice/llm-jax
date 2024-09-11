@@ -108,11 +108,12 @@ def scale_by_affine(
         updates, grads_structure = jax.tree.flatten(updates)
         Qs = grads_structure.flatten_up_to(state.Qs)
         affine_reshapers = grads_structure.flatten_up_to(affine_reshapers)
-        flat_sharding = grads_structure.flatten_up_to(reshaped_params_sharding)
+        if reshaped_params_sharding is not None:
+            flat_sharding = grads_structure.flatten_up_to(reshaped_params_sharding)
 
         # reshape updates using affine reshapers
         gs = [r[0](x) for x, r in zip(updates, affine_reshapers)]
-        if flat_sharding is not None:
+        if reshaped_params_sharding is not None:
             gs = jax.lax.with_sharding_constraint(gs, flat_sharding)
 
         # stack same-shaped matrices to scan over
@@ -173,7 +174,7 @@ def scale_by_affine(
         # unstack matrices
         if best_effort_scan:
             gs, Qs = _unstack_matrices(gs, Qs, revert_indices)
-            if flat_sharding is not None:
+            if reshaped_params_sharding is not None:
                 gs = jax.lax.with_sharding_constraint(gs, flat_sharding)
 
         # global clipping
