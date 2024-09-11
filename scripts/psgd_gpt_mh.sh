@@ -36,4 +36,4 @@ nohup python3 main_multihost.py \
     --optimizer.max_skew_triangular=16 \
     --optimizer.precond_lr=0.1 \
     --optimizer.precond_init_scale=1.0 \
-    --optimizer.preconditioner_dtype=float32"
+    --optimizer.preconditioner_dtype=float32 > nohup.out 2>&1 &"

@@ -142,7 +142,7 @@ def main(config: TrainConfig):
                 optax.constant_schedule(0.1),
                 optax.constant_schedule(0.01),
             ],
-            boundaries=[200, 2000],
+            boundaries=[1000, 2000],
         )
 
         if config.optimizer.type in ["adam", "adamw"]:
