@@ -112,7 +112,7 @@ def main(config: TrainConfig):
         boundaries=[config.optimizer.warmup_steps],
     )
 
-    def make_opt(reshaped_params_sharding=None, scanned_arrays=None):
+    def make_opt(reshaped_params_sharding=None):
         write_note(f"Using {config.optimizer.type} optimizer")
 
         def param_decay_mask(params):
@@ -127,22 +127,17 @@ def main(config: TrainConfig):
             out = non_kernels.update(lambda _: False, all_true)
             return out
 
-        if config.optimizer.schedule_free:
-            b1_in = 0.0
-        else:
-            b1_in = config.optimizer.b1
-
         optimizer = []
         if config.optimizer.grad_clip > 0.0:
             optimizer.append(optax.clip_by_global_norm(config.optimizer.grad_clip))
 
-        update_prob_schedule = lambda n: jnp.maximum(jnp.exp(-0.001 * n), 0.05)
+        update_prob_schedule = lambda n: jnp.maximum(jnp.exp(-0.001 * n), 0.03)
 
         if config.optimizer.type in ["adam", "adamw"]:
             optimizer.append(
                 adamw(
                     lr_schedule,
-                    b1_in,
+                    config.optimizer.b1,
                     config.optimizer.b2,
                     weight_decay=config.optimizer.weight_decay,
                     mask=param_decay_mask,
@@ -154,7 +149,7 @@ def main(config: TrainConfig):
                 affine(
                     lr_schedule,
                     preconditioner_update_probability=update_prob_schedule,
-                    b1=b1_in,
+                    b1=config.optimizer.b1,
                     nesterov=config.optimizer.nesterov,
                     weight_decay=config.optimizer.weight_decay,
                     mask=param_decay_mask,
@@ -164,7 +159,7 @@ def main(config: TrainConfig):
                     precond_init_scale=config.optimizer.precond_init_scale,
                     mu_dtype=jnp.bfloat16,
                     precond_dtype=config.optimizer.preconditioner_dtype,
-                    precision="bfloat16",
+                    precision="tensorfloat32",
                     reshaped_params_sharding=reshaped_params_sharding,
                     best_effort_scan=True,
                 )
@@ -176,7 +171,7 @@ def main(config: TrainConfig):
                     tearfree_opt.TearfreeOptions(
                         momentum_options=tearfree_opt.momentum.Options(
                             weight_decay=config.optimizer.weight_decay,
-                            momentum_decay=b1_in,
+                            momentum_decay=config.optimizer.b1,
                             momentum_dtype="bfloat16",
                         ),
                         second_order_options=second_order.Options(
@@ -187,15 +182,20 @@ def main(config: TrainConfig):
                     ),
                 )
             )
+        elif config.optimizer.type == "schedule_free":
+            optimizer.append(
+                optax.contrib.schedule_free_adamw(
+                    config.optimizer.learning_rate,
+                    warmup_steps=config.optimizer.warmup_steps,
+                    b1=config.optimizer.b1,
+                    b2=config.optimizer.b2,
+                    weight_decay=config.optimizer.weight_decay,
+                )
+            )
         else:
             raise ValueError("Unknown optimizer type")
 
         optimizer = optax.chain(*optimizer)
-
-        if config.optimizer.schedule_free:
-            optimizer = optax.contrib.schedule_free(
-                optimizer, lr_schedule, config.optimizer.b1
-            )
 
         if config.optimizer.gradient_accumulation_steps > 1:
             optimizer = optax.MultiSteps(

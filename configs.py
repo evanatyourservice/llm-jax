@@ -21,8 +21,8 @@ class OptimizerConfig:
     """Optimizer configuration.
 
     Attributes:
-        type: Optimizer type.
-        schedule_free: Whether to use a schedule-free optimizer.
+        type: Optimizer type, one of ["adamw", "psgd_affine", "shampoo", 
+            "caspr", "schedule_free"]
         learning_rate: Learning rate.
         warmup_steps: Warmup steps.
         weight_decay: Weight decay.
@@ -43,7 +43,6 @@ class OptimizerConfig:
     """
 
     type: str = "adamw"
-    schedule_free: bool = False
     learning_rate: float = 0.001
     warmup_steps: int = 1000
     weight_decay: float = 0.1
