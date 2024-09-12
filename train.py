@@ -346,7 +346,7 @@ def main(config: TrainConfig):
         process_shard = _fw_shard_names[jax.process_index() :: jax.process_count()]
         # shuffle using current step so first steps are deterministic,
         # after that it doesn't matter as much
-        rng = np.random.RandomState(curr_step)
+        rng = np.random.RandomState(curr_step + jax.process_index() + 10)
         rng.shuffle(process_shard)
         ds_name = process_shard[shard_idx % len(process_shard)]
 
