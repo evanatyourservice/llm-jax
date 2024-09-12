@@ -142,16 +142,6 @@ def main(config: TrainConfig):
                 jnp.maximum(jnp.exp(-decay * (n - flat_start)), min_prob), max_prob
             )
 
-        precond_lr_schedule = optax.join_schedules(
-            schedules=[
-                optax.linear_schedule(
-                    0.1, config.optimizer.precond_lr, 10
-                ),
-                optax.constant_schedule(config.optimizer.precond_lr),
-            ],
-            boundaries=[10],
-        )
-
         if config.optimizer.type in ["adam", "adamw"]:
             optimizer.append(
                 adamw(
@@ -174,7 +164,7 @@ def main(config: TrainConfig):
                     mask=param_decay_mask,
                     max_size_triangular=config.optimizer.max_size_triangular,
                     max_skew_triangular=config.optimizer.max_skew_triangular,
-                    precond_lr=precond_lr_schedule,
+                    precond_lr=config.optimizer.precond_lr,
                     precond_init_scale=config.optimizer.precond_init_scale,
                     mu_dtype=jnp.bfloat16,
                     precond_dtype=config.optimizer.preconditioner_dtype,
