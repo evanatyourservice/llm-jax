@@ -386,6 +386,10 @@ def main(config: TrainConfig):
                 logits, targets
             ).mean()
 
+            # Palm style z-loss
+            zloss = jax.scipy.special.logsumexp(logits, axis=-1).mean()
+            loss += 1e-4 * zloss**2
+
             # Calculate average kurtosis
             excess_kurtosis = kurtosis_sum / (
                 config.model.num_layers * tokens.shape[0] * tokens.shape[1]

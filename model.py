@@ -150,8 +150,9 @@ class GPT(nn.Module):
         )
 
         x = wte.encode(tokens)  # [B, T, num_embeds]
-        kurtosis_sum = jnp.array(0.0, dtype=x.dtype)
 
+        kurtosis_sum = jnp.array(0.0, dtype=x.dtype)
+        
         for _ in range(self.config.num_layers):
             x = Block(self.config.num_heads, self.config.head_dim)(x)
             if return_kurtosis:
@@ -160,10 +161,6 @@ class GPT(nn.Module):
         x = nn.LayerNorm(use_bias=False)(x)
 
         logits = wte.decode(x)
-
-        # gemma style soft cap
-        soft_cap_scaler = jnp.array(30.0, dtype=x.dtype)
-        logits = jnp.tanh(logits / soft_cap_scaler) * soft_cap_scaler
 
         if return_kurtosis:
             return logits, kurtosis_sum
