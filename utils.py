@@ -211,7 +211,3 @@ def check_dtypes(orig_dtype_tree, current_dtype_tree):
 
 def count_params(params) -> int:
     return sum(np.prod(x.shape) for x in jax.tree_util.tree_leaves(params))
-
-
-def get_step(state) -> int:
-    return jax.device_get(state.step).item()

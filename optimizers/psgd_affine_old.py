@@ -159,8 +159,7 @@ def scale_by_affine(
         # precondition grads
         if best_effort_scan:
             precond_grad_fn = lambda l, r, g: jax.lax.map(
-                lambda xs: _precond_grad_affine_math(*xs),
-                (l, r, g),
+                lambda xs: _precond_grad_affine_math(*xs), (l, r, g)
             )
         else:
             precond_grad_fn = _precond_grad_affine_math
@@ -326,7 +325,7 @@ def _norm_lower_bound(A: jax.Array):
 
         return jax.lax.cond(value0 > value1, gt_branch, le_branch)
 
-    def pass_calc(_):
+    def pass_calc(A):
         return max_abs
 
     return jax.lax.cond(max_abs > 0, calc, pass_calc, A)
