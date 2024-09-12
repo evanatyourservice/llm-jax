@@ -1,5 +1,6 @@
 from functools import partial
 from typing import Tuple
+
 import flax
 import flax.linen
 import jax
@@ -58,16 +59,15 @@ def apply_rope(
 
 class Attention(nn.Module):
     num_heads: int
+    head_dim: int
 
     @nn.compact
     def __call__(self, x, mask):
         _, T, C = x.shape
-        assert C % self.num_heads == 0
-        head_dim = C // self.num_heads
 
         dense = partial(
             nn.DenseGeneral,
-            features=(self.num_heads, head_dim),
+            features=(self.num_heads, self.head_dim),
             axis=-1,
             kernel_init=initializer,
             use_bias=False,
@@ -76,9 +76,9 @@ class Attention(nn.Module):
         k = dense()(x)
         v = dense()(x)
 
-        scale = jax.lax.rsqrt(jnp.array(head_dim, dtype=x.dtype))
-        q = apply_rope(q, jnp.arange(T)[None, :], head_dim) * scale
-        k = apply_rope(k, jnp.arange(T)[None, :], head_dim)
+        scale = jax.lax.rsqrt(jnp.array(self.head_dim, dtype=x.dtype))
+        q = apply_rope(q, jnp.arange(T)[None, :], self.head_dim) * scale
+        k = apply_rope(k, jnp.arange(T)[None, :], self.head_dim)
 
         attn = jnp.einsum("...qhd,...khd->...hqk", q, k)
 
@@ -113,41 +113,62 @@ class MLP(nn.Module):
 
 class Block(nn.Module):
     num_heads: int
+    head_dim: int
 
     @nn.compact
     def __call__(self, x):
-        attn_layer = Attention(self.num_heads)
+        attn_layer = Attention(self.num_heads, self.head_dim)
 
         attn_mask = nn.make_causal_mask(x[:, :, 0], dtype=bool)
 
-        x = x + attn_layer(nn.LayerNorm(use_bias=False)(x), attn_mask)
-        x = x + MLP()(nn.LayerNorm(use_bias=False)(x))
+        attn_in = nn.LayerNorm(use_bias=False)(x)
+        x = x + attn_layer(attn_in, attn_mask)
+        mlp_in = nn.LayerNorm(use_bias=False)(x)
+        x = x + MLP()(mlp_in)
+
         return x
 
 
 class GPT(nn.Module):
     config: ModelConfig
 
-    @nn.checkpoint
     @nn.compact
-    def __call__(self, tokens):
+    def __call__(self, tokens, return_kurtosis: bool = True):
+        def excess_kurtosis(emb):
+            mean = jnp.mean(emb, axis=-1, keepdims=True)
+            std = jnp.std(emb, axis=-1, keepdims=True)
+            centralized = emb - mean
+            fourth_moment = jnp.mean(centralized**4, axis=-1, keepdims=True)
+            kurtosis = jnp.squeeze(fourth_moment / (std**4 + 1e-6), axis=-1)
+            kurtosis = kurtosis.reshape(-1) - 3
+            kurtosis = jnp.maximum(kurtosis, 0.0)
+            return jnp.sum(kurtosis)
+
         wte = Embedder(
             self.config.vocab_size,
             self.config.num_embeds,
         )
 
         x = wte.encode(tokens)  # [B, T, num_embeds]
+        kurtosis_sum = jnp.array(0.0, dtype=x.dtype)
 
-        # x = flax_scan(Block, length=self.config.num_layers, unroll=1)(
-        #     self.config.num_heads
-        # )(x)
         for _ in range(self.config.num_layers):
-            x = Block(self.config.num_heads)(x)
+            x = Block(self.config.num_heads, self.config.head_dim)(x)
+            if return_kurtosis:
+                kurtosis_sum += excess_kurtosis(x)
 
         x = nn.LayerNorm(use_bias=False)(x)
 
         logits = wte.decode(x)
-        return logits
+
+        # gemma style soft cap
+        soft_cap_scaler = jnp.array(30.0, dtype=x.dtype)
+        logits = jnp.tanh(logits / soft_cap_scaler) * soft_cap_scaler
+
+        if return_kurtosis:
+            return logits, kurtosis_sum
+        else:
+            return logits
 
 
 def convert_hf_params(hf_params: FrozenDict, num_heads, num_embeds) -> FrozenDict:

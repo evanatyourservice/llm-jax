@@ -13,6 +13,7 @@ class ModelConfig:
     vocab_size: int = 50304
     num_layers: int = 12
     num_heads: int = 12
+    head_dim: int = 64
     num_embeds: int = 768
 
 
@@ -51,9 +52,9 @@ class OptimizerConfig:
     b1: float = 0.9
     b2: float = 0.95
     nesterov: bool = False
-    preconditioner_update_probability: float = 0.5
+    preconditioner_update_probability: float = 0.02
     max_size_triangular: int = 4096
-    max_skew_triangular: int = 16
+    max_skew_triangular: int = 10
     precond_lr: float = 0.1
     precond_init_scale: Optional[float] = 1.0
     preconditioner_dtype: str = "float32"
@@ -108,14 +109,11 @@ class TrainConfig:
     train_steps: int = 100000
     compute_dtype: str = "float32"
     params_dtype: str = "float32"
-    remat: bool = True
+    remat: bool = False
     optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
     wandb: WandbConfig = field(default_factory=WandbConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
 
-    assert (
-        checkpoint_milestone % checkpoint_interval == 0
-    ), "Checkpoint_milestone must be a multiple of checkpoint_interval"
     assert (
         hellaswag_eval_interval % 100 == 0
     ), "Hellaswag_eval_interval must be a multiple of 100"
