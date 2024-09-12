@@ -23,7 +23,7 @@ class Embedder(nn.Module):
 
     def setup(self):
         self.input_embedding_table = self.param(
-            "input_embedding", initializer, (self.vocab_size, self.embed_dim)
+            "embedding", initializer, (self.vocab_size, self.embed_dim)
         )
 
     def encode(self, x: jax.Array) -> jax.Array:

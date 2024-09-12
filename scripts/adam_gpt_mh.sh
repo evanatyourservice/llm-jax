@@ -23,6 +23,10 @@ nohup python3 main_multihost.py \
     --batch_size=512 \
     --compute_dtype=bfloat16 \
     --params_dtype=float32 \
+    --model.num_layers=12 \
+    --model.num_heads=12 \
+    --model.head_dim=64 \
+    --model.num_embeds=768 \
     --optimizer.type=adamw \
     --optimizer.learning_rate=0.003 \
     --optimizer.warmup_steps=500 \

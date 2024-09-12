@@ -121,13 +121,10 @@ def main(config: TrainConfig):
 
         def param_decay_mask(params):
             """Only lets through kernel weights for weight decay."""
-            non_kernels = flax.traverse_util.ModelParamTraversal(
-                lambda p, _: "bias" in p
-                or "norm" in p
-                or "embedding" in p
-                or "scale" in p
-            )
             all_true = jax.tree.map(lambda _: True, params)
+            non_kernels = flax.traverse_util.ModelParamTraversal(
+                lambda p, _: "bias" in p or "scale" in p or "embedding" in p
+            )
             out = non_kernels.update(lambda _: False, all_true)
             return out
 
@@ -531,7 +528,9 @@ def main(config: TrainConfig):
 
             tokens = next(train_ds)
 
-        loss, train_state, g_norm, lr, excess_kurtosis = train_step_jit(train_state, tokens)
+        loss, train_state, g_norm, lr, excess_kurtosis = train_step_jit(
+            train_state, tokens
+        )
         train_losses.append(jax.device_get(loss).item())
         grad_norms.append(jax.device_get(g_norm).item())
         excess_kurtosis_list.append(jax.device_get(excess_kurtosis).item())
@@ -554,7 +553,9 @@ def main(config: TrainConfig):
             grad_norm = np.mean(grad_norms)
             excess_kurtosis = np.mean(excess_kurtosis_list)
             curr_lr = jax.device_get(lr).item()
-            curr_tokens = (curr_step + 1) * effective_batch_size * config.model.block_size
+            curr_tokens = (
+                (curr_step + 1) * effective_batch_size * config.model.block_size
+            )
             to_log = {
                 "train_loss": train_loss,
                 "grad_norm": grad_norm,

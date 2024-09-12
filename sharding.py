@@ -68,17 +68,14 @@ def fsdp_sharding(axis, min_size_to_shard_mb=1):
         axis_size = np.prod([mesh.shape[a] for a in axis_tuple])
         shape = x.shape
 
-        # Params sharding
-        if np.prod(shape) * x.dtype.itemsize < min_size_to_shard_mb * (2**20):
-            return cur_spec
-
         # Partition along largest axis that is divisible and not taken starting
         # from last dimension.
-        idx = np.argsort(shape)[::-1]
-        for i in idx:
-            if shape[i] % axis_size == 0:
-                if cur_spec[i] is None:
-                    return cur_spec[:i] + (axis,) + cur_spec[i + 1 :]
+        if np.prod(shape) * x.dtype.itemsize >= min_size_to_shard_mb * (2**20):
+            idx = np.argsort(shape)[::-1]
+            for i in idx:
+                if shape[i] % axis_size == 0:
+                    if cur_spec[i] is None:
+                        return cur_spec[:i] + (axis,) + cur_spec[i + 1 :]
 
         write_note(
             f"Failed to apply `fsdp` rule to the parameter {name}:{shape}, "
