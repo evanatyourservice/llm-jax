@@ -109,7 +109,7 @@ def main(config: TrainConfig):
             ),
             optax.linear_schedule(
                 config.optimizer.learning_rate,
-                0.0,
+                config.optimizer.learning_rate * 0.05,
                 config.train_steps - config.optimizer.warmup_steps,
             ),
         ],
@@ -135,12 +135,22 @@ def main(config: TrainConfig):
         def update_prob_schedule(n):
             """Exponentially anneal PSGD update probability at beginning of training."""
             decay = 0.001  # 0.001 decays to min_prob at around 5000 steps
-            flat_start = 20
+            flat_start = 200
             min_prob = config.optimizer.preconditioner_update_probability
             max_prob = 1.0
             return jnp.minimum(
                 jnp.maximum(jnp.exp(-decay * (n - flat_start)), min_prob), max_prob
             )
+
+        precond_lr_schedule = optax.join_schedules(
+            schedules=[
+                optax.linear_schedule(
+                    0.1, config.optimizer.precond_lr, 10
+                ),
+                optax.constant_schedule(config.optimizer.precond_lr),
+            ],
+            boundaries=[10],
+        )
 
         if config.optimizer.type in ["adam", "adamw"]:
             optimizer.append(
@@ -164,7 +174,7 @@ def main(config: TrainConfig):
                     mask=param_decay_mask,
                     max_size_triangular=config.optimizer.max_size_triangular,
                     max_skew_triangular=config.optimizer.max_skew_triangular,
-                    precond_lr=config.optimizer.precond_lr,
+                    precond_lr=precond_lr_schedule,
                     precond_init_scale=config.optimizer.precond_init_scale,
                     mu_dtype=jnp.bfloat16,
                     precond_dtype=config.optimizer.preconditioner_dtype,
@@ -346,8 +356,7 @@ def main(config: TrainConfig):
         process_shard = _fw_shard_names[jax.process_index() :: jax.process_count()]
         # shuffle using current step so first steps are deterministic,
         # after that it doesn't matter as much
-        # TODO (evanatyourservice): add process index
-        rng = np.random.RandomState(curr_step)
+        rng = np.random.RandomState(42 + curr_step + jax.process_index())
         rng.shuffle(process_shard)
         ds_name = process_shard[shard_idx % len(process_shard)]
 

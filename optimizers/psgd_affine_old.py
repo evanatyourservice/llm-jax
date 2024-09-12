@@ -281,7 +281,7 @@ def _apply_momentum(
 
 
 def _add_eps(x):
-    return jnp.clip(x, 1.0, None)
+    return jnp.clip(x, 1e-25, None)
 
 
 def _global_clip(updates, max_norm):
