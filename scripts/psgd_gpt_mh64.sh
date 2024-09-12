@@ -20,8 +20,8 @@ nohup python3 main_multihost.py \
     --hellaswag_eval_interval=1000 \
     --checkpoint_interval=1000 \
     --train_steps=191000 \
-    --batch_size=256 \
-    --optimizer.gradient_accumulation_steps=2 \
+    --batch_size=512 \
+    --optimizer.gradient_accumulation_steps=1 \
     --compute_dtype=bfloat16 \
     --params_dtype=float32 \
     --model.num_layers=24 \
@@ -29,13 +29,13 @@ nohup python3 main_multihost.py \
     --model.num_embeds=1536 \
     --optimizer.type=affine \
     --optimizer.learning_rate=0.003 \
-    --optimizer.warmup_steps=0 \
+    --optimizer.warmup_steps=500 \
     --optimizer.weight_decay=0.01 \
     --optimizer.grad_clip=1.0 \
     --optimizer.max_size_triangular=10000 \
     --optimizer.max_skew_triangular=10 \
     --optimizer.precond_lr=0.1 \
-    --optimizer.precond_init_scale=0.1 \
+    --optimizer.precond_init_scale=1.0 \
     --optimizer.preconditioner_dtype=float32 > nohup.out 2>&1 &
 echo 'Background process started'
 exit

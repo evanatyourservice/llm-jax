@@ -131,7 +131,15 @@ def main(config: TrainConfig):
         if config.optimizer.grad_clip > 0.0:
             optimizer.append(optax.clip_by_global_norm(config.optimizer.grad_clip))
 
-        update_prob_schedule = lambda n: jnp.maximum(jnp.exp(-0.001 * n), 0.03)
+        def update_prob_schedule(n):
+            """Exponentially anneal PSGD update probability at beginning of training."""
+            decay = 0.001
+            max_prob = 1.0
+            min_prob = 0.05
+            flat_start = 10
+            return jnp.minimum(
+                jnp.maximum(jnp.exp(-decay * (n - flat_start)), min_prob), max_prob
+            )
 
         if config.optimizer.type in ["adam", "adamw"]:
             optimizer.append(

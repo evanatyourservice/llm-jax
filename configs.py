@@ -21,7 +21,7 @@ class OptimizerConfig:
     """Optimizer configuration.
 
     Attributes:
-        type: Optimizer type, one of ["adamw", "psgd_affine", "shampoo", 
+        type: Optimizer type, one of ["adamw", "psgd_affine", "shampoo",
             "caspr", "schedule_free"]
         learning_rate: Learning rate.
         warmup_steps: Warmup steps.
@@ -97,7 +97,6 @@ class TrainConfig:
     seed: int = 10
     experiment_name: str = f"run_{date_and_time}"
     out_dir: str = "gs://uscentral2stuff/llm-jax"
-    initialize_xla_distributed: bool = True
     attempt_to_load_checkpoint: bool = True
     only_print_model: bool = False
     min_size_to_shard_mb: int = 0.1
