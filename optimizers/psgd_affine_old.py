@@ -157,7 +157,7 @@ def scale_by_affine(
             new_Qs = otu.tree_cast(new_Qs, precond_dtype)
             return new_Qs
 
-        Qs = _efficient_cond(do_update, update_preconditioner, Qs)
+        Qs = jax.lax.cond(do_update, update_preconditioner, lambda: Qs)
 
         # precondition grads
         if best_effort_scan:
@@ -538,7 +538,11 @@ def _update_precond_affine_math_(key, Ql, Qr, dX, dG, precond_lr, precision):
             return new_Ql, new_Qr
 
         key, subkey = jax.random.split(key)
-        Ql, Qr = _efficient_cond(jax.random.uniform(subkey) < 0.01, _balance, (Ql, Qr))
+        Ql, Qr = jax.lax.cond(
+            jax.random.uniform(subkey) < 0.01, 
+            _balance, 
+            lambda: (Ql, Qr)
+        )
 
         return [Ql, Qr]
 
@@ -635,7 +639,11 @@ def _update_precond_affine_dropv_math(key, Ql, Qr, dG, precond_lr, precision):
             return new_Ql, new_Qr
 
         key, subkey = jax.random.split(key)
-        Ql, Qr = _efficient_cond(jax.random.uniform(subkey) < 0.01, _balance, (Ql, Qr))
+        Ql, Qr = jax.lax.cond(
+            jax.random.uniform(subkey) < 0.01, 
+            _balance, 
+            lambda: (Ql, Qr)
+        )
 
         return [Ql, Qr]
 

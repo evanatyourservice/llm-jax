@@ -25,14 +25,14 @@ nohup python3 main_multihost.py \
     --compute_dtype=bfloat16 \
     --params_dtype=float32 \
     --optimizer.type=affine \
-    --optimizer.learning_rate=0.01 \
+    --optimizer.learning_rate=0.003 \
     --optimizer.warmup_steps=500 \
     --optimizer.weight_decay=0.1 \
     --optimizer.grad_clip=1.0 \
     --optimizer.preconditioner_update_probability=0.05 \
     --optimizer.max_size_triangular=10000 \
     --optimizer.max_skew_triangular=10 \
-    --optimizer.precond_lr=0.2 \
+    --optimizer.precond_lr=0.3 \
     --optimizer.precond_init_scale=1.0 \
     --optimizer.preconditioner_dtype=float32
 "

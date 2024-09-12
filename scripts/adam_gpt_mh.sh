@@ -8,11 +8,11 @@ EXPERIMENT=run_$(date +%Y-%m-%d_%H-%M-%S)
 echo $EXPERIMENT
 
 gcloud compute tpus tpu-vm ssh --zone "us-central2-b" "node-3" --project "distributedmuzerojax" \
---worker=all --command "bash -c \"
-export WANDB_API_KEY=$WANDB_API_KEY
-export HF_TOKEN=$HF_TOKEN
-export LLM_CONFIG=config/gpt2.yaml
-cd llm-jax
+--worker=all --command="
+export WANDB_API_KEY=$WANDB_API_KEY && \
+export HF_TOKEN=$HF_TOKEN && \
+export LLM_CONFIG=config/gpt2.yaml && \
+cd llm-jax && \
 nohup python3 main_multihost.py \
     --experiment_name=$EXPERIMENT \
     --out_dir=gs://optimizertesting/llm-jax \
@@ -20,23 +20,13 @@ nohup python3 main_multihost.py \
     --hellaswag_eval_interval=1000 \
     --checkpoint_interval=1000 \
     --train_steps=200000 \
-    --batch_size=512 \
+    --batch_size=256 \
+    --optimizer.gradient_accumulation_steps=2 \
     --compute_dtype=bfloat16 \
     --params_dtype=float32 \
-    --model.num_layers=12 \
-    --model.num_heads=12 \
-    --model.head_dim=64 \
-    --model.num_embeds=768 \
     --optimizer.type=adamw \
     --optimizer.learning_rate=0.003 \
     --optimizer.warmup_steps=500 \
-    --optimizer.weight_decay=0.01 \
-    --optimizer.grad_clip=1.0 \
-    --optimizer.max_size_triangular=10000 \
-    --optimizer.max_skew_triangular=10 \
-    --optimizer.precond_lr=0.1 \
-    --optimizer.precond_init_scale=1.0 \
-    --optimizer.preconditioner_dtype=float32 > nohup.out 2>&1 &
-echo 'Background process started'
-exit
-\""
+    --optimizer.weight_decay=0.1 \
+    --optimizer.grad_clip=1.0
+"
