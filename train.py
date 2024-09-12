@@ -31,7 +31,7 @@ from optimizers.tearfree import optimizer as tearfree_opt
 from optimizers.tearfree import shampoo, second_order
 from optimizers.adam import adamw
 from sharding import infer_sharding, fsdp_sharding
-from utils import check_dtypes, reshard, write_note, count_params
+from utils import check_dtypes, reshard, write_note, count_params, get_step
 from model import GPT
 
 
@@ -334,6 +334,8 @@ def main(config: TrainConfig):
     # ====== datasets ======
     write_note("Creating datasets")
 
+    curr_step = get_step(train_state)
+
     shard_idx = 0
     if jax.process_count() == 1:
         # stream fineweb-edu regularly
@@ -342,7 +344,10 @@ def main(config: TrainConfig):
         # use separate shards per process
         # we just restart this with a new random shuffle if restarting
         process_shard = _fw_shard_names[jax.process_index() :: jax.process_count()]
-        random.shuffle(process_shard)
+        # shuffle using current step so first steps are deterministic,
+        # after that it doesn't matter as much
+        rng = np.random.RandomState(curr_step)
+        rng.shuffle(process_shard)
         ds_name = process_shard[shard_idx % len(process_shard)]
 
     make_train_ds = partial(
@@ -479,11 +484,7 @@ def main(config: TrainConfig):
         out_shardings=repl_sharding,
     )
 
-    def get_step(state):
-        return jax.device_get(state.step).item()
-
     # ======= train ========
-    curr_step = get_step(train_state)
     write_note(f"Starting training at step {curr_step}")
 
     orig_dtypes = jax.tree.map(lambda x: x.dtype, train_state)
