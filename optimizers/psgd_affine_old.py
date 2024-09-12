@@ -120,8 +120,6 @@ def scale_by_affine(
         if best_effort_scan:
             gs, Qs, revert_indices = _stack_matrices(gs, Qs)
 
-        map_batch_size = 1  # interpolates between scan and vmap, 1 being scan unroll=1
-
         # update preconditioner
         key, subkey = jax.random.split(key)
         do_update = jax.random.uniform(subkey, dtype=jnp.float32) < update_prob_in
@@ -141,7 +139,6 @@ def scale_by_affine(
                             *xs, precond_lr_in, precision
                         ),
                         (k, Ql, Qr, g),
-                        batch_size=map_batch_size,
                     )
                     for (k, (Ql, Qr), g) in zip(key_list, Qs, gs)
                 ]
@@ -164,7 +161,6 @@ def scale_by_affine(
             precond_grad_fn = lambda l, r, g: jax.lax.map(
                 lambda xs: _precond_grad_affine_math(*xs),
                 (l, r, g),
-                batch_size=map_batch_size,
             )
         else:
             precond_grad_fn = _precond_grad_affine_math
