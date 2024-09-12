@@ -89,7 +89,9 @@ def main(config: TrainConfig):
         )
         async_checkpointer = ocp.AsyncCheckpointer(ocp.PyTreeCheckpointHandler())
         async_checkpoint_manager = ocp.CheckpointManager(
-            config.out_dir + "/" + config.experiment_name, async_checkpointer, options
+            config.out_dir + "/" + config.experiment_name,
+            async_checkpointer,
+            options,
         )
 
     # ====== create device mesh ======
@@ -107,7 +109,7 @@ def main(config: TrainConfig):
             ),
             optax.linear_schedule(
                 config.optimizer.learning_rate,
-                config.optimizer.learning_rate * 0.05,
+                0.0,
                 config.train_steps - config.optimizer.warmup_steps,
             ),
         ],
@@ -133,12 +135,10 @@ def main(config: TrainConfig):
         def update_prob_schedule(n):
             """Exponentially anneal PSGD update probability at beginning of training."""
             decay = 0.001  # 0.001 decays to min_prob at around 5000 steps
-            flat_start = 200
+            flat_start = 20
             min_prob = config.optimizer.preconditioner_update_probability
             max_prob = 1.0
-            return jnp.minimum(
-                jnp.maximum(jnp.exp(-decay * (n - flat_start)), min_prob), max_prob
-            )
+            return jnp.maximum(jnp.exp(-decay * n), min_prob)
 
         if config.optimizer.type in ["adam", "adamw"]:
             optimizer.append(
