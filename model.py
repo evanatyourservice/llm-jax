@@ -129,21 +129,22 @@ class Block(nn.Module):
         return x
 
 
+def excess_kurtosis(emb):
+    mean = jnp.mean(emb, axis=-1, keepdims=True)
+    std = jnp.std(emb, axis=-1, keepdims=True)
+    centralized = emb - mean
+    fourth_moment = jnp.mean(centralized**4, axis=-1, keepdims=True)
+    kurtosis = jnp.squeeze(fourth_moment / (std**4 + 1e-6), axis=-1)
+    kurtosis = kurtosis.reshape(-1) - 3
+    kurtosis = jnp.maximum(kurtosis, 0.0)
+    return jnp.sum(kurtosis)
+
+
 class GPT(nn.Module):
     config: ModelConfig
 
     @nn.compact
     def __call__(self, tokens, return_kurtosis: bool = True):
-        def excess_kurtosis(emb):
-            mean = jnp.mean(emb, axis=-1, keepdims=True)
-            std = jnp.std(emb, axis=-1, keepdims=True)
-            centralized = emb - mean
-            fourth_moment = jnp.mean(centralized**4, axis=-1, keepdims=True)
-            kurtosis = jnp.squeeze(fourth_moment / (std**4 + 1e-6), axis=-1)
-            kurtosis = kurtosis.reshape(-1) - 3
-            kurtosis = jnp.maximum(kurtosis, 0.0)
-            return jnp.sum(kurtosis)
-
         wte = Embedder(
             self.config.vocab_size,
             self.config.num_embeds,
