@@ -153,7 +153,7 @@ class GPT(nn.Module):
         x = wte.encode(tokens)  # [B, T, num_embeds]
 
         kurtosis_sum = jnp.array(0.0, dtype=x.dtype)
-        
+
         for _ in range(self.config.num_layers):
             x = Block(self.config.num_heads, self.config.head_dim)(x)
             if return_kurtosis:

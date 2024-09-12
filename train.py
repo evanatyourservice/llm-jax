@@ -89,9 +89,7 @@ def main(config: TrainConfig):
         )
         async_checkpointer = ocp.AsyncCheckpointer(ocp.PyTreeCheckpointHandler())
         async_checkpoint_manager = ocp.CheckpointManager(
-            config.out_dir + "/" + config.experiment_name,
-            async_checkpointer,
-            options,
+            config.out_dir + "/" + config.experiment_name, async_checkpointer, options
         )
 
     # ====== create device mesh ======
@@ -344,10 +342,7 @@ def main(config: TrainConfig):
         # use separate shards per process
         # we just restart this with a new random shuffle if restarting
         process_shard = _fw_shard_names[jax.process_index() :: jax.process_count()]
-        # shuffle using current step so first steps are deterministic,
-        # after that it doesn't matter as much
-        rng = np.random.RandomState(42 + curr_step + jax.process_index())
-        rng.shuffle(process_shard)
+        random.shuffle(process_shard)
         ds_name = process_shard[shard_idx % len(process_shard)]
 
     make_train_ds = partial(
