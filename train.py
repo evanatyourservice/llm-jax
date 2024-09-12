@@ -536,10 +536,11 @@ def main(config: TrainConfig):
         excess_kurtosis_list.append(jax.device_get(excess_kurtosis).item())
 
         curr_step = get_step(train_state)
-        if config.optimizer.gradient_accumulation_steps > 1:
-            advanced_step = train_state.tx.has_updated(train_state.opt_state)
-        else:
-            advanced_step = True
+        with jax.transfer_guard("allow"):
+            if config.optimizer.gradient_accumulation_steps > 1:
+                advanced_step = train_state.tx.has_updated(train_state.opt_state)
+            else:
+                advanced_step = True
 
         # save checkpoint
         with jax.transfer_guard("allow"):
