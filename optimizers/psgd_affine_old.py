@@ -281,7 +281,7 @@ def _apply_momentum(
 
 
 def _add_eps(x):
-    return jnp.clip(x, 1e-25, None)
+    return jnp.clip(x, 1e-6, None)
 
 
 def _global_clip(updates, max_norm):
@@ -326,7 +326,7 @@ def _norm_lower_bound(A: jax.Array):
 
         return jax.lax.cond(value0 > value1, gt_branch, le_branch)
 
-    def pass_calc(A):
+    def pass_calc(_):
         return max_abs
 
     return jax.lax.cond(max_abs > 0, calc, pass_calc, A)
