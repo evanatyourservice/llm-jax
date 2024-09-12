@@ -12,7 +12,7 @@ from flax.traverse_util import flatten_dict, unflatten_dict
 from configs import ModelConfig
 
 
-initializer = nn.initializers.normal()
+initializer = nn.initializers.normal(0.02)
 
 
 class Embedder(nn.Module):

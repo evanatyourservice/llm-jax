@@ -27,7 +27,7 @@ nohup python3 main_multihost.py \
     --optimizer.type=affine \
     --optimizer.learning_rate=0.003 \
     --optimizer.warmup_steps=0 \
-    --optimizer.weight_decay=0.1 \
+    --optimizer.weight_decay=0.01 \
     --optimizer.grad_clip=1.0 \
     --optimizer.preconditioner_update_probability=0.05 \
     --optimizer.max_size_triangular=10000 \
