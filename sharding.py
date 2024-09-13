@@ -68,11 +68,8 @@ def fsdp_sharding(axis, min_size_to_shard_mb=1):
         axis_size = np.prod([mesh.shape[a] for a in axis_tuple])
         shape = x.shape
 
-        if "embedding" in name:
-            if len(x.shape) > 1:
-                return (None,) * (len(x.shape) - 1) + (axis,)
-            else:
-                return (None,)
+        if "embedding" in name and len(x.shape) > 1:
+            return (None,) * (len(x.shape) - 1) + (axis,)
 
         # Partition along largest axis that is divisible and not taken starting
         # from last dimension.

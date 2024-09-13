@@ -24,15 +24,17 @@ nohup python3 main_multihost.py \
     --optimizer.gradient_accumulation_steps=1 \
     --compute_dtype=bfloat16 \
     --params_dtype=float32 \
+    --model.block_size=1024 \
+    --model.sliding_window_size=512 \
     --optimizer.type=affine \
-    --optimizer.learning_rate=0.003 \
+    --optimizer.learning_rate=0.001 \
     --optimizer.warmup_steps=0 \
     --optimizer.weight_decay=0.1 \
     --optimizer.grad_clip=1.0 \
     --optimizer.preconditioner_update_probability=0.05 \
     --optimizer.max_size_triangular=10000 \
     --optimizer.max_skew_triangular=10 \
-    --optimizer.precond_lr=0.1 \
+    --optimizer.precond_lr=0.2 \
     --optimizer.precond_init_scale=0.0001 \
     --optimizer.preconditioner_dtype=float32 > nohup.out 2>&1 &
 echo 'Background process started'
