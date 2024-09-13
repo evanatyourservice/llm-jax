@@ -3,14 +3,13 @@ import json
 from typing import Optional
 import numpy as np
 from tqdm import tqdm
-import random
 
 import jax
 import tensorflow as tf
 import datasets
 from datasets import load_dataset, IterableDataset
 import datasets.config
-import tiktoken
+from transformers import AutoTokenizer
 
 from utils import (
     make_fsarray_from_local_slice,
@@ -32,6 +31,9 @@ OPTIONS.threading.max_intra_op_parallelism = 1
 OPTIONS.experimental_optimization.inject_prefetch = False
 
 
+model_id = "mistralai/Mistral-7B-v0.3"
+
+
 def prepare_hellaswag(
     batch_size: int,
     block_size: int,
@@ -42,7 +44,9 @@ def prepare_hellaswag(
     """Read file and tokenize the hellaswag dataset."""
     write_note("preparing hellaswag")
 
-    tokenizer = tiktoken.get_encoding("gpt2")
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_id, trust_remote_code=True, use_fast=True
+    )
 
     all_data = []
     all_seq_lens = []
@@ -58,19 +62,21 @@ def prepare_hellaswag(
             seq_lens_to_concat = []
             for ending in endings:
                 input_text = context + " " + ending
-                # encode with gpt2 tokenizer
-                output = tokenizer.encode_ordinary(input_text)
+                # encode with tokenizer
+                output = tokenizer(input_text)["input_ids"]
                 # output len, at least block_size
                 output_len = min(len(output), block_size)
-                # pad with eot_token if less than block_size
+                # pad if less than block_size
                 if output_len < block_size:
-                    output = output + [tokenizer.eot_token] * (block_size - output_len)
+                    output = output + [tokenizer.eos_token_id] * (
+                        block_size - output_len
+                    )
                 # max length is block_size
                 output = output[:block_size]
                 data_to_concat.append(output)
                 seq_lens_to_concat.append(output_len)
-            all_data.append(np.array(data_to_concat))  # (4, seq_len)
-            all_seq_lens.append(np.array(seq_lens_to_concat))  # (4,)
+            all_data.append(np.array(data_to_concat, dtype=np.uint16))  # (4, seq_len)
+            all_seq_lens.append(np.array(seq_lens_to_concat, dtype=np.int32))  # (4,)
             all_labels.append(int(correct_end))  # []
 
     all_data = np.array(all_data, dtype=np.uint16)  # (10042, 4, seq_len)
@@ -117,7 +123,9 @@ def fineweb_edu_dataset(
     else:
         cache_dir = None
 
-    tokenizer = tiktoken.get_encoding("gpt2")
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_id, trust_remote_code=True, use_fast=True
+    )
 
     def gen():
         hf_ds: IterableDataset = load_dataset(
@@ -129,16 +137,12 @@ def fineweb_edu_dataset(
         )
 
         def tokenize(example):
-            tokenized = tokenizer.encode_ordinary_batch(example, num_threads=64)
+            tokenized = tokenizer(example)["input_ids"]
             # cap tokenized lengths to 10 * block_size and add eot_token
-            tokenized = [
-                t[: 10 * block_size] + [tokenizer.eot_token] for t in tokenized
-            ]
+            tokenized = [t[: 10 * block_size] for t in tokenized]
             return {"tokens": tokenized}
 
-        hf_ds = hf_ds.map(
-            tokenize, input_columns=["text"], batched=True, batch_size=128
-        )
+        hf_ds = hf_ds.map(tokenize, input_columns="text", batched=True, batch_size=128)
 
         hf_ds = hf_ds.with_format("numpy")
 

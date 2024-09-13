@@ -11,7 +11,7 @@ gcloud compute tpus tpu-vm ssh --zone "us-central2-b" "node-3" --project "distri
 --worker=all --command="
 export WANDB_API_KEY=$WANDB_API_KEY && \
 export HF_TOKEN=$HF_TOKEN && \
-export LLM_CONFIG=config/gpt2.yaml && \
+export LLM_CONFIG=config/mistral.yaml && \
 cd llm-jax && \
 nohup python3 main_multihost.py \
     --experiment_name=$EXPERIMENT \

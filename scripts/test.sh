@@ -4,7 +4,7 @@ EXPERIMENT=run_$(date +%Y-%m-%d_%H-%M-%S)
 echo $EXPERIMENT
 
 export XLA_FLAGS="--xla_force_host_platform_device_count=2"
-export LLM_CONFIG=config/gpt2.yaml  # base config
+export LLM_CONFIG=config/mistral.yaml  # base config
 
 
 python3 main.py \
@@ -28,6 +28,10 @@ python3 main.py \
     --optimizer.precond_init_scale=0.01 \
     --optimizer.precond_lr=0.1 \
     --model.block_size=64 \
-    --model.num_layers=4 \
-    --model.num_heads=2 \
-    --model.num_embeds=8
+    --model.num_layers=2 \
+    --model.num_heads=4 \
+    --model.num_embeds=8 \
+    --model.head_dim=4 \
+    --model.hidden_dim=16 \
+    --model.num_kv_heads=2 \
+    --model.sliding_window_size=32

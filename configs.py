@@ -9,12 +9,16 @@ from utils import write_note
 
 @dataclass(frozen=True)
 class ModelConfig:
-    block_size: int = 1024
-    vocab_size: int = 50304
-    num_layers: int = 12
-    num_heads: int = 12
-    head_dim: int = 64
-    num_embeds: int = 768
+    block_size: int = 2048
+    sliding_window_size: int = 1024
+    vocab_size: int = 32768
+    num_layers: int = 30
+    num_heads: int = 9
+    num_kv_heads: int = 3
+    head_dim: int = 576 // 9
+    num_embeds: int = 576
+    hidden_dim: int = 1536
+    scan_layers: bool = True
 
 
 @dataclass(frozen=True)
@@ -121,7 +125,7 @@ class TrainConfig:
 
 def get_default_config() -> TrainConfig:
     # Use this file to set default values
-    path = os.environ.get("LLM_CONFIG", os.path.join("config", "gpt2.yaml"))
+    path = os.environ.get("LLM_CONFIG", os.path.join("config", "mistral.yaml"))
     if not os.path.exists(path):
         write_note("Using default config")
         return TrainConfig()

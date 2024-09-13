@@ -6,7 +6,9 @@ import dataclasses
 import numpy as np
 
 import jax
+import jax.numpy as jnp
 import flax
+import flax.linen as nn
 
 
 def _traverse_with_names(tree, with_inner_nodes=False):

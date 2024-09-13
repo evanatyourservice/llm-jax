@@ -26,13 +26,19 @@ import orbax.checkpoint as ocp
 
 from dataset import prepare_hellaswag, fineweb_edu_dataset, _fw_shard_names
 from configs import TrainConfig
-from optimizers.psgd_affine_old import affine, _shape_as_matrix
+from optimizers.psgd_affine_old import affine, _shape_as_matrix, unstack_scanned_layers
 from optimizers.tearfree import optimizer as tearfree_opt
 from optimizers.tearfree import shampoo, second_order
 from optimizers.adam import adamw
 from sharding import infer_sharding, fsdp_sharding
-from utils import check_dtypes, reshard, write_note, count_params, get_step
-from model import GPT
+from utils import (
+    check_dtypes,
+    reshard,
+    write_note,
+    count_params,
+    get_step,
+)
+from model.mistral import Mistral
 
 
 # hack to allow pickling of bfloat16 arrays
@@ -169,6 +175,7 @@ def main(config: TrainConfig):
                     precision="tensorfloat32",
                     reshaped_params_sharding=reshaped_params_sharding,
                     best_effort_scan=True,
+                    split_scanned_layers=config.model.scan_layers,
                 )
             )
         elif config.optimizer.type in ["shampoo", "caspr"]:
@@ -218,9 +225,9 @@ def main(config: TrainConfig):
 
     def init_train_state(key):
         """Initialize the train state."""
-        model = GPT(config.model)
+        model = Mistral(config.model)
 
-        dummy_tokens = jnp.zeros((1, config.model.block_size - 1), dtype=jnp.uint16)
+        dummy_tokens = jnp.zeros((1, config.model.block_size), dtype=jnp.uint16)
 
         params = model.init(key, dummy_tokens)
         params = otu.tree_cast(params, config.params_dtype)
@@ -268,23 +275,32 @@ def main(config: TrainConfig):
         train_state.params
     )
 
-    # PSGD reshapes params into matrices. Here we get sharding rules for them
-    # similarly to params. We can pass this into PSGD for internal sharding
-    # constraints, although it's not absolutely necessary. If all params are
-    # already matrices, then this is unnecessary.
     def get_reshaped_params_shapes(params):
-        """Get the shapes of params after PSGD reshapes."""
+        """Get the internal shapes of params in PSGD.
+        
+        PSGD reshapes params to matrices, and optionally unstacks scanned layers.
+        This function returns the shapes of the resulting matrices so we can 
+        make sharding rules for them and pass these rules into PSGD for internal 
+        sharding constraints.
+        
+        This isn't necessary if you want JAX to automatically handle intermediate 
+        sharding."""
+        if config.model.scan_layers:
+            params = unstack_scanned_layers(params)
+
         affine_reshapers = jax.tree.map(
             _shape_as_matrix, params
         )  # returns tuples of (reshape_fn, unreshape_fn, shape)
+
         p_struct = jax.tree.structure(params)
         affine_reshapers = p_struct.flatten_up_to(affine_reshapers)
         matrix_shapes = [
             jax.ShapeDtypeStruct(r[2], jnp.float32) for r in affine_reshapers
         ]
-        return p_struct.unflatten(matrix_shapes)
+        matrix_shapes = p_struct.unflatten(matrix_shapes)
+        return matrix_shapes
 
-    reshaped_params_shapes = get_reshaped_params_shapes(train_state.params)
+    reshaped_params_shapes = jax.eval_shape(get_reshaped_params_shapes, train_state.params)
     reshaped_params_sharding, _ = infer_sharding(
         params=reshaped_params_shapes, mesh=mesh, op=op
     )
@@ -351,7 +367,7 @@ def main(config: TrainConfig):
     make_train_ds = partial(
         fineweb_edu_dataset,
         batch_size=config.batch_size,
-        block_size=config.model.block_size,
+        block_size=config.model.block_size + 1,
         flat_devices=devices_flat,
         tf_prefetch=10,
         device_prefetch=2 if platform == "gpu" else 0,
@@ -362,7 +378,7 @@ def main(config: TrainConfig):
     # hellaswag has 4 seqs per example
     hs_batch_size = max(config.batch_size // 4, jax.device_count())
     hellaswag_ds = prepare_hellaswag(
-        hs_batch_size, config.model.block_size, devices_flat, tf_prefetch=4
+        hs_batch_size, config.model.block_size + 1, devices_flat, tf_prefetch=4
     )
 
     # ====== train and eval steps ======
@@ -445,8 +461,8 @@ def main(config: TrainConfig):
 
     def eval_hellaswag(state: TrainState, data, seq_lens, labels):
         """Evaluate the hellaswag dataset."""
-        # data comes in shape (b, 4, block_size)
-        # masks comes in shape (b, 4, block_size)
+        # data comes in shape (b, 4, block_size + 1)
+        # masks comes in shape (b, 4, block_size + 1)
         # labels comes in shape (b,)
         bs_in = data.shape[0]
         data = jnp.reshape(data, (-1, data.shape[-1]))
@@ -541,8 +557,7 @@ def main(config: TrainConfig):
             else:
                 advanced_step = True
 
-        # save checkpoint
-        with jax.transfer_guard("allow"):
+            # save checkpoint
             if curr_step > 0 and advanced_step:
                 async_checkpoint_manager.save(curr_step, train_state)
 

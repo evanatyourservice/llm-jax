@@ -11,7 +11,7 @@ gcloud compute tpus tpu-vm ssh --zone "us-central2-b" "node-1" --project "distri
 --worker=all --command="
 export WANDB_API_KEY=$WANDB_API_KEY && \
 export HF_TOKEN=$HF_TOKEN && \
-export LLM_CONFIG=config/gpt2.yaml && \
+export LLM_CONFIG=config/mistral.yaml && \
 cd llm-jax && \
 nohup python3 main_multihost.py \
     --experiment_name=$EXPERIMENT \
@@ -34,5 +34,5 @@ nohup python3 main_multihost.py \
     --optimizer.max_skew_triangular=10 \
     --optimizer.precond_lr=0.1 \
     --optimizer.precond_init_scale=0.0001 \
-    --optimizer.preconditioner_dtype=float32
+    --optimizer.preconditioner_dtype=float32 > /dev/null 2>&1
 "
