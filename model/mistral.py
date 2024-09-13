@@ -7,7 +7,7 @@ import jax.numpy as jnp
 import flax.linen as nn
 
 from configs import ModelConfig
-from model.rotary_embedding import apply_rotary_embedding
+from model.rotary_embedding import apply_rotary_embedding, sine_table
 
 
 initializer = nn.initializers.normal(0.02)
@@ -63,7 +63,7 @@ class Attention(nn.Module):
 
     @nn.compact
     def __call__(self, x, mask):
-        C = x.shape[-1]
+        B, T, C = x.shape
 
         q_params = self.param(
             "q_kernel",
@@ -86,15 +86,15 @@ class Attention(nn.Module):
         k = jnp.einsum("bdm,mhk->bhdk", x, k_params)
         v = jnp.einsum("bdm,mhv->bhdv", x, v_params)
 
-        q = apply_rotary_embedding(q)
-        k = apply_rotary_embedding(k)
+        sin, cos = sine_table(self.head_dim, T, max_timescale=1000000.0)
+        q, k = apply_rotary_embedding(q, k, cos, sin)
 
         scale = jax.lax.rsqrt(jnp.array(self.head_dim, dtype=x.dtype))
         qk = jnp.einsum("brhsk,bhdk->brhsd", q, k) * scale
 
-        qk = jnp.tanh(qk.astype(jnp.float32) / 50) * 50  # gemma style soft cap
+        qk = jnp.tanh(qk / 50) * 50  # gemma style soft cap
         mask = jnp.expand_dims(mask, axis=1)
-        qk = jax.nn.softmax(qk, where=mask).astype(x.dtype)
+        qk = jax.nn.softmax(qk.astype(jnp.float32), where=mask).astype(x.dtype)
         qkv = jnp.einsum("brhsd,bhdv->brhsv", qk, v)
 
         out = jnp.einsum("brhsv,rhvm->bsm", qkv, out_params)
@@ -142,7 +142,7 @@ class Block(nn.Module):
 
         attn_layer = Attention(self.num_heads, self.num_kv_heads, self.head_dim)
 
-        attn_mask = nn.make_causal_mask(x[:, :, 0], dtype=jnp.bool)
+        attn_mask = nn.make_causal_mask(x[:1, :, 0], dtype=jnp.bool)
 
         all_ones = jnp.ones_like(attn_mask)
         sliding_mask = jnp.triu(all_ones, -1 * self.sliding_window_size + 1) * jnp.tril(
