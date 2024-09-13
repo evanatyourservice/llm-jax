@@ -269,7 +269,8 @@ def main(config: TrainConfig):
     )
 
     reshaped_params_shapes = jax.eval_shape(
-        get_reshaped_params_shapes, train_state.params, config.model.scan_layers
+        partial(get_reshaped_params_shapes, scanning_layers=config.model.scan_layers), 
+        train_state.params
     )
     reshaped_params_sharding, _ = infer_sharding(
         params=reshaped_params_shapes, mesh=mesh, op=op
