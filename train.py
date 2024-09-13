@@ -31,7 +31,7 @@ from optimizers.tearfree import optimizer as tearfree_opt
 from optimizers.tearfree import shampoo, second_order
 from optimizers.adam import adamw
 from sharding import infer_sharding, fsdp_sharding
-from utils import check_dtypes, reshard, write_note, count_params
+from utils import check_dtypes, reshard, write_note, count_params, get_step
 from model import GPT
 
 
@@ -89,9 +89,7 @@ def main(config: TrainConfig):
         )
         async_checkpointer = ocp.AsyncCheckpointer(ocp.PyTreeCheckpointHandler())
         async_checkpoint_manager = ocp.CheckpointManager(
-            config.out_dir + "/" + config.experiment_name,
-            async_checkpointer,
-            options,
+            config.out_dir + "/" + config.experiment_name, async_checkpointer, options
         )
 
     # ====== create device mesh ======
@@ -109,7 +107,7 @@ def main(config: TrainConfig):
             ),
             optax.linear_schedule(
                 config.optimizer.learning_rate,
-                0.0,
+                config.optimizer.learning_rate * 0.05,
                 config.train_steps - config.optimizer.warmup_steps,
             ),
         ],
@@ -135,10 +133,12 @@ def main(config: TrainConfig):
         def update_prob_schedule(n):
             """Exponentially anneal PSGD update probability at beginning of training."""
             decay = 0.001  # 0.001 decays to min_prob at around 5000 steps
-            flat_start = 20
+            flat_start = 200
             min_prob = config.optimizer.preconditioner_update_probability
             max_prob = 1.0
-            return jnp.maximum(jnp.exp(-decay * n), min_prob)
+            return jnp.minimum(
+                jnp.maximum(jnp.exp(-decay * (n - flat_start)), min_prob), max_prob
+            )
 
         if config.optimizer.type in ["adam", "adamw"]:
             optimizer.append(
@@ -332,6 +332,8 @@ def main(config: TrainConfig):
     # ====== datasets ======
     write_note("Creating datasets")
 
+    curr_step = get_step(train_state)
+
     shard_idx = 0
     if jax.process_count() == 1:
         # stream fineweb-edu regularly
@@ -340,7 +342,10 @@ def main(config: TrainConfig):
         # use separate shards per process
         # we just restart this with a new random shuffle if restarting
         process_shard = _fw_shard_names[jax.process_index() :: jax.process_count()]
-        random.shuffle(process_shard)
+        # shuffle using current step so first steps are deterministic,
+        # after that it doesn't matter as much
+        rng = np.random.RandomState(curr_step + jax.process_index())
+        rng.shuffle(process_shard)
         ds_name = process_shard[shard_idx % len(process_shard)]
 
     make_train_ds = partial(
@@ -477,11 +482,7 @@ def main(config: TrainConfig):
         out_shardings=repl_sharding,
     )
 
-    def get_step(state):
-        return jax.device_get(state.step).item()
-
     # ======= train ========
-    curr_step = get_step(train_state)
     write_note(f"Starting training at step {curr_step}")
 
     orig_dtypes = jax.tree.map(lambda x: x.dtype, train_state)
