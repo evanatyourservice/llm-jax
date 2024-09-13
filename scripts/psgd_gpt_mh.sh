@@ -19,15 +19,16 @@ nohup python3 main_multihost.py \
     --attempt_to_load_checkpoint \
     --hellaswag_eval_interval=1000 \
     --checkpoint_interval=1000 \
-    --train_steps=2000000 \
+    --train_steps=200000 \
     --batch_size=256 \
     --optimizer.gradient_accumulation_steps=2 \
     --compute_dtype=bfloat16 \
     --params_dtype=float32 \
-    --model.block_size=2048 \
-    --model.sliding_window_size=1024 \
+    --remat \
+    --model.block_size=1024 \
+    --model.sliding_window_size=512 \
     --optimizer.type=affine \
-    --optimizer.learning_rate=0.003 \
+    --optimizer.learning_rate=0.01 \
     --optimizer.warmup_steps=0 \
     --optimizer.weight_decay=0.1 \
     --optimizer.grad_clip=1.0 \
