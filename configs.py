@@ -18,7 +18,7 @@ class ModelConfig:
     head_dim: int = 576 // 9
     num_embeds: int = 576
     hidden_dim: int = 1536
-    scan_layers: bool = True
+    scan_layers: bool = False
 
 
 @dataclass(frozen=True)
