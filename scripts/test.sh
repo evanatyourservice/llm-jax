@@ -18,10 +18,15 @@ python3 main.py \
     --checkpoint_interval=100 \
     --keep_checkpoints=2 \
     --batch_size=2 \
+    --optimizer.gradient_accumulation_steps=2 \
+    --remat \
     --optimizer.type=affine \
     --optimizer.learning_rate=0.001 \
     --optimizer.warmup_steps=20 \
     --optimizer.preconditioner_dtype=float32 \
+    --optimizer.preconditioner_update_probability=0.05 \
+    --optimizer.precond_init_scale=0.01 \
+    --optimizer.precond_lr=0.1 \
     --model.block_size=64 \
     --model.num_layers=4 \
     --model.num_heads=2 \

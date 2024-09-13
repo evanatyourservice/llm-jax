@@ -33,6 +33,6 @@ nohup python3 main_multihost.py \
     --optimizer.max_size_triangular=10000 \
     --optimizer.max_skew_triangular=10 \
     --optimizer.precond_lr=0.1 \
-    --optimizer.precond_init_scale=0.000001 \
+    --optimizer.precond_init_scale=0.0001 \
     --optimizer.preconditioner_dtype=float32
 "
