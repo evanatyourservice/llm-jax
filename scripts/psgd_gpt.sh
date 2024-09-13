@@ -5,7 +5,7 @@ echo $EXPERIMENT
 
 export LLM_CONFIG=config/gpt2.yaml  # base config
 
-python3 train.py \
+python3 main.py \
     --experiment_name=$EXPERIMENT \
     --out_dir=gs://uscentral2stuff/llm-jax \
     --attempt_to_load_checkpoint \
