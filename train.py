@@ -1,7 +1,6 @@
 import builtins
 from functools import partial
 from pprint import pprint
-import random
 import shutil
 import time
 from typing import Callable, Tuple
@@ -26,18 +25,12 @@ import orbax.checkpoint as ocp
 
 from dataset import prepare_hellaswag, fineweb_edu_dataset, _fw_shard_names
 from configs import TrainConfig
-from optimizers.psgd_affine_old import affine, _shape_as_matrix, unstack_scanned_layers
+from optimizers.psgd_affine_old import affine, get_reshaped_params_shapes
 from optimizers.tearfree import optimizer as tearfree_opt
 from optimizers.tearfree import shampoo, second_order
 from optimizers.adam import adamw
 from sharding import infer_sharding, fsdp_sharding
-from utils import (
-    check_dtypes,
-    reshard,
-    write_note,
-    count_params,
-    get_step,
-)
+from utils import check_dtypes, reshard, write_note, count_params, get_step
 from model.mistral import Mistral
 
 
@@ -275,32 +268,9 @@ def main(config: TrainConfig):
         train_state.params
     )
 
-    def get_reshaped_params_shapes(params):
-        """Get the internal shapes of params in PSGD.
-        
-        PSGD reshapes params to matrices, and optionally unstacks scanned layers.
-        This function returns the shapes of the resulting matrices so we can 
-        make sharding rules for them and pass these rules into PSGD for internal 
-        sharding constraints.
-        
-        This isn't necessary if you want JAX to automatically handle intermediate 
-        sharding."""
-        if config.model.scan_layers:
-            params = unstack_scanned_layers(params)
-
-        affine_reshapers = jax.tree.map(
-            _shape_as_matrix, params
-        )  # returns tuples of (reshape_fn, unreshape_fn, shape)
-
-        p_struct = jax.tree.structure(params)
-        affine_reshapers = p_struct.flatten_up_to(affine_reshapers)
-        matrix_shapes = [
-            jax.ShapeDtypeStruct(r[2], jnp.float32) for r in affine_reshapers
-        ]
-        matrix_shapes = p_struct.unflatten(matrix_shapes)
-        return matrix_shapes
-
-    reshaped_params_shapes = jax.eval_shape(get_reshaped_params_shapes, train_state.params)
+    reshaped_params_shapes = jax.eval_shape(
+        get_reshaped_params_shapes, train_state.params, config.model.scan_layers
+    )
     reshaped_params_sharding, _ = infer_sharding(
         params=reshaped_params_shapes, mesh=mesh, op=op
     )

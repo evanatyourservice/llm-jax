@@ -2,7 +2,7 @@ from collections import defaultdict
 from typing import Any, Optional, Union, Callable, NamedTuple, List, Tuple
 
 import jax
-from jax import numpy as jnp
+from jax import numpy as jnp, numpy
 from jax.random import PRNGKey
 from optax import tree_utils as otu
 from optax._src import base, transform
@@ -759,7 +759,7 @@ def _efficient_cond(
 def unstack_scanned_layers(params):
     """Split scanned layers along first axis into a tuple of arrays.
 
-    Identifies scanned layers by checking for "scan" in the path. This is 
+    Identifies scanned layers by checking for "scan" in the path. This is
     somewhat specific to our model and may not generalize."""
     return flax.traverse_util.ModelParamTraversal(
         lambda path, _: "scan" in path
@@ -779,3 +779,27 @@ def stack_scanned_layers(params):
             x, (tuple, jax.Array, nn.Partitioned, jax.ShapeDtypeStruct)
         ),
     )
+
+
+def get_reshaped_params_shapes(params, scanning_layers: bool):
+    """Get the internal shapes of params in PSGD.
+
+    PSGD reshapes params to matrices, and optionally unstacks scanned layers.
+    This function returns the shapes of the resulting matrices so we can
+    make sharding rules for them and pass these rules into PSGD for internal
+    sharding constraints.
+
+    This isn't necessary if you want JAX to automatically handle intermediate
+    sharding."""
+    if scanning_layers:
+        params = unstack_scanned_layers(params)
+
+    affine_reshapers = jax.tree.map(
+        _shape_as_matrix, params
+    )  # returns tuples of (reshape_fn, unreshape_fn, shape)
+
+    p_struct = jax.tree.structure(params)
+    affine_reshapers = p_struct.flatten_up_to(affine_reshapers)
+    matrix_shapes = [jax.ShapeDtypeStruct(r[2], jnp.float32) for r in affine_reshapers]
+    matrix_shapes = p_struct.unflatten(matrix_shapes)
+    return matrix_shapes
