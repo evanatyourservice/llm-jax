@@ -170,7 +170,7 @@ class Mistral(nn.Module):
         kurtosis_sum = jnp.array(0.0)
 
         if self.config.scan_layers:
-            x, kurtosis_sum = flax_scan(Block, self.config.num_layers, unroll=2)(
+            x, kurtosis_sum = flax_scan(Block, self.config.num_layers, unroll=8)(
                 self.config.num_heads,
                 self.config.num_kv_heads,
                 self.config.head_dim,
