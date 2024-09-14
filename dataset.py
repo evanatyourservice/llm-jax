@@ -49,41 +49,57 @@ def prepare_hellaswag(
     )
 
     all_data = []
-    all_seq_lens = []
+    all_beginning_lengths = []
+    all_seq_lengths = []
     all_labels = []
     with open("data/hellaswag_val.jsonl", "r") as f:
         # iterate over lines and tokenize
         for line in tqdm(f, total=10042):
             item = json.loads(line)
+
             context = item["ctx"]
             endings = item["endings"]
             correct_end = item["label"]
+
+            beginning_length = len(tokenizer(context)["input_ids"])
+
             data_to_concat = []
-            seq_lens_to_concat = []
+            beginning_lengths_to_concat = []
+            seq_lengths_to_concat = []
             for ending in endings:
-                input_text = context + " " + ending
-                # encode with tokenizer
-                output = tokenizer(input_text)["input_ids"]
-                # output len, at least block_size
-                output_len = min(len(output), block_size)
-                # pad if less than block_size
-                if output_len < block_size:
+                output = tokenizer(context + " " + ending)["input_ids"]
+
+                # pad to block_size
+                if len(output) < block_size:
                     output = output + [tokenizer.eos_token_id] * (
-                        block_size - output_len
+                        block_size - len(output)
                     )
                 # max length is block_size
                 output = output[:block_size]
+
                 data_to_concat.append(output)
-                seq_lens_to_concat.append(output_len)
+                beginning_lengths_to_concat.append(beginning_length)
+                seq_lengths_to_concat.append(len(output))
+
             all_data.append(np.array(data_to_concat, dtype=np.uint16))  # (4, seq_len)
-            all_seq_lens.append(np.array(seq_lens_to_concat, dtype=np.int32))  # (4,)
+            all_beginning_lengths.append(
+                np.array(beginning_lengths_to_concat, dtype=np.int32)
+            )  # (4,)
+            all_seq_lengths.append(
+                np.array(seq_lengths_to_concat, dtype=np.int32)
+            )  # (4,)
             all_labels.append(int(correct_end))  # []
 
     all_data = np.array(all_data, dtype=np.uint16)  # (10042, 4, seq_len)
-    all_seq_lens = np.array(all_seq_lens, dtype=np.int32)  # (10042, 4)
+    all_beginning_lengths = np.array(
+        all_beginning_lengths, dtype=np.int32
+    )  # (10042, 4)
+    all_seq_lengths = np.array(all_seq_lengths, dtype=np.int32)  # (10042, 4)
     all_labels = np.array(all_labels, dtype=np.int32)  # (10042,)
 
-    ds = tf.data.Dataset.from_tensor_slices((all_data, all_seq_lens, all_labels))
+    ds = tf.data.Dataset.from_tensor_slices(
+        (all_data, all_beginning_lengths, all_seq_lengths, all_labels)
+    )
     ds = ds.shard(jax.process_count(), jax.process_index())
     ds = ds.repeat()
 
@@ -137,6 +153,7 @@ def fineweb_edu_dataset(
         )
 
         def tokenize(example):
+            # mistral tokenizer adds bos token to beginning
             tokenized = tokenizer(example)["input_ids"]
             # cap tokenized lengths to 10 * block_size and add eot_token
             tokenized = [t[: 10 * block_size] for t in tokenized]

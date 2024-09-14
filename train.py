@@ -101,18 +101,23 @@ def main(config: TrainConfig):
 
     # ====== optimizer ======
     write_note("Creating optimizer")
+    # lr schedule keeps flat for 10k steps after warmup, then linear decay
     lr_schedule = optax.join_schedules(
         schedules=[
             optax.linear_schedule(
                 0.0, config.optimizer.learning_rate, config.optimizer.warmup_steps
             ),
+            optax.constant_schedule(config.optimizer.learning_rate),
             optax.linear_schedule(
                 config.optimizer.learning_rate,
                 config.optimizer.learning_rate * 0.05,
-                config.train_steps - config.optimizer.warmup_steps,
+                config.train_steps - config.optimizer.warmup_steps - 10000,
             ),
         ],
-        boundaries=[config.optimizer.warmup_steps],
+        boundaries=[
+            config.optimizer.warmup_steps,
+            config.optimizer.warmup_steps + 10000,
+        ],
     )
 
     def make_opt(reshaped_params_sharding=None):
@@ -370,9 +375,11 @@ def main(config: TrainConfig):
 
             targets = tokens[:, 1:]
 
-            loss = optax.softmax_cross_entropy_with_integer_labels(
-                logits, targets
-            ).mean()
+            loss = optax.softmax_cross_entropy_with_integer_labels(logits, targets)
+
+            bos_token_id = 1
+            mask = targets != bos_token_id
+            loss = jnp.sum(loss * mask) / jnp.sum(mask)
 
             return loss
 
@@ -402,8 +409,11 @@ def main(config: TrainConfig):
 
         return loss, new_state, grad_norm, lr
 
-    def eval_step_unreduced(
-        state: TrainState, tokens: jnp.ndarray, seq_lens: jnp.ndarray
+    def hs_eval_step_unreduced(
+        state: TrainState,
+        tokens: jnp.ndarray,
+        begin_lens: jnp.ndarray,
+        seq_lens: jnp.ndarray,
     ) -> jnp.ndarray:
         logits = state.apply_fn(
             otu.tree_cast(state.params, config.compute_dtype), tokens[:, :-1]
@@ -417,24 +427,27 @@ def main(config: TrainConfig):
         losses = optax.softmax_cross_entropy_with_integer_labels(logits, targets)
 
         @jax.vmap
-        def unreduced_losses(loss, seq_len):
-            seq_mask = jnp.arange(len(loss)) < seq_len - 1
-            seq_mask = seq_mask.astype(logits.dtype)
+        def unreduced_losses(loss, begin_len, seq_len):
+            seq_range = jnp.arange(len(loss))
+            seq_mask = jnp.logical_and(
+                seq_range < seq_len - 1, seq_range >= begin_len - 1
+            ).astype(jnp.bool)
             loss = loss * seq_mask
             return jnp.sum(loss) / jnp.sum(seq_mask)
 
-        losses = unreduced_losses(losses, seq_lens)
+        losses = unreduced_losses(losses, begin_lens, seq_lens)
         return losses
 
-    def eval_hellaswag(state: TrainState, data, seq_lens, labels):
+    def eval_hellaswag(state: TrainState, data, begin_lens, seq_lens, labels):
         """Evaluate the hellaswag dataset."""
         # data comes in shape (b, 4, block_size + 1)
-        # masks comes in shape (b, 4, block_size + 1)
-        # labels comes in shape (b,)
+        # seq lens come in shape (b, 4)
+        # labels come in shape (b,)
         bs_in = data.shape[0]
         data = jnp.reshape(data, (-1, data.shape[-1]))
+        begin_lens = jnp.reshape(begin_lens, (-1,))
         seq_lens = jnp.reshape(seq_lens, (-1,))
-        losses = eval_step_unreduced(state, data, seq_lens)
+        losses = hs_eval_step_unreduced(state, data, begin_lens, seq_lens)
         choices = jnp.argmin(jnp.reshape(losses, (bs_in, 4)), axis=-1)
         correct = jnp.sum(choices == labels)
         accuracy = correct / bs_in
@@ -457,6 +470,7 @@ def main(config: TrainConfig):
         eval_hellaswag,
         in_shardings=(
             train_state_sharding,
+            data_sharding,
             data_sharding,
             data_sharding,
             data_sharding,
@@ -561,7 +575,10 @@ def main(config: TrainConfig):
                 )
 
                 # eval hellaswag
-                if curr_step % config.hellaswag_eval_interval == 0:
+                if (
+                    curr_step % config.hellaswag_eval_interval == 0
+                    and config.model.block_size >= 1024
+                ):
                     hs_accs = []
                     for _ in range(10 if platform == "cpu" else 10042 // hs_batch_size):
                         hs_batch = next(hellaswag_ds)

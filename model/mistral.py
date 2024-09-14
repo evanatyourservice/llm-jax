@@ -100,7 +100,9 @@ class Block(nn.Module):
 
     @nn.compact
     def __call__(self, x):
-        attn_layer = Attention(self.num_heads, self.num_kv_heads, self.head_dim, self.rope_theta)
+        attn_layer = Attention(
+            self.num_heads, self.num_kv_heads, self.head_dim, self.rope_theta
+        )
 
         attn_mask = nn.make_causal_mask(x[:1, :, 0], dtype=jnp.bool)
 
@@ -131,14 +133,18 @@ class Mistral(nn.Module):
         x *= jnp.sqrt(self.config.num_embeds).astype(x.dtype)
 
         if self.config.scan_layers:
-            x = flax_scan(Block, self.config.num_layers, unroll=self.config.scan_unroll)(
+            x = flax_scan(
+                Block, self.config.num_layers, unroll=self.config.scan_unroll
+            )(
                 self.config.num_heads,
                 self.config.num_kv_heads,
                 self.config.head_dim,
                 self.config.sliding_window_size,
                 self.config.hidden_dim,
                 self.config.rope_theta,
-            )(x)
+            )(
+                x
+            )
         else:
             for _ in range(self.config.num_layers):
                 x = Block(
