@@ -1,5 +1,5 @@
 #!/bin/bash
 # sudo bash scripts/delete_tpu_lockfile.sh
 
-sudo rm -f /tmp/libtpu_lockfile
-sudo rm -r /tmp/tpu_logs
+sudo rm -rf /tmp/libtpu_lockfile
+sudo rm -rf /tmp/tpu_logs
