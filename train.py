@@ -220,7 +220,7 @@ def main(config: TrainConfig):
     def init_train_state(key):
         """Initialize the train state."""
         if config.remat:
-            nn.remat(
+            model = nn.remat(
                 Mistral, policy=jax.checkpoint_policies.dots_with_no_batch_dims_saveable
             )(config.model)
         else:
