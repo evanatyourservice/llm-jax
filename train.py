@@ -227,10 +227,7 @@ def main(config: TrainConfig):
 
         # delay optimizer creation to pass in preconditioner sharding
         if config.remat:
-            apply_fn = jax.checkpoint(
-                model.apply,
-                policy=jax.checkpoint_policies.dots_with_no_batch_dims_saveable,
-            )
+            apply_fn = jax.checkpoint(model.apply)
         else:
             apply_fn = model.apply
         train_state = TrainState(
