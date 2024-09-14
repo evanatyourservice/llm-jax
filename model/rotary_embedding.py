@@ -28,13 +28,12 @@ def apply_rotary_embedding(q, k, cos, sin):
     batch, rep, qheads, qlen, d = q.shape
     kbatch, kheads, klen, kd = k.shape
 
-    qcos = jax.lax.broadcast_in_dim(cos[:qlen, :], (1, 1, 1, qlen, d), (3, 4))
-    qsin = jax.lax.broadcast_in_dim(sin[:qlen, :], (1, 1, 1, qlen, d), (3, 4))
-
-    kcos = jax.lax.broadcast_in_dim(cos[:klen, :], (1, 1, klen, d), (2, 3))
-    ksin = jax.lax.broadcast_in_dim(sin[:klen, :], (1, 1, klen, d), (2, 3))
-
+    qcos = jnp.expand_dims(cos[:qlen, :], range(len(q.shape) - 2))
+    qsin = jnp.expand_dims(sin[:qlen, :], range(len(q.shape) - 2))
     out_q = q * qcos + rotate_half(q) * qsin
+
+    kcos = jnp.expand_dims(cos[:klen, :], range(len(k.shape) - 2))
+    ksin = jnp.expand_dims(sin[:klen, :], range(len(k.shape) - 2))
     out_k = k * kcos + rotate_half(k) * ksin
 
     return out_q.astype(q.dtype), out_k.astype(k.dtype)

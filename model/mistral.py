@@ -91,14 +91,13 @@ class Attention(nn.Module):
 
         scale = jax.lax.rsqrt(jnp.array(self.head_dim, dtype=x.dtype))
         qk = jnp.einsum("brhsk,bhdk->brhsd", q, k) * scale
-
         qk = jnp.tanh(qk / 50) * 50  # gemma style soft cap
+
         mask = jnp.expand_dims(mask, axis=1)
         qk = jax.nn.softmax(qk.astype(jnp.float32), where=mask).astype(x.dtype)
         qkv = jnp.einsum("brhsd,bhdv->brhsv", qk, v)
 
         out = jnp.einsum("brhsv,rhvm->bsm", qkv, out_params)
-
         return out
 
 
@@ -138,24 +137,22 @@ class Block(nn.Module):
 
     @nn.compact
     def __call__(self, x):
-        x, kurtosis_sum = x
-
         attn_layer = Attention(self.num_heads, self.num_kv_heads, self.head_dim)
 
         attn_mask = nn.make_causal_mask(x[:1, :, 0], dtype=jnp.bool)
 
-        all_ones = jnp.ones_like(attn_mask)
+        all_ones = jnp.ones_like(attn_mask, dtype=jnp.bool)
         sliding_mask = jnp.triu(all_ones, -1 * self.sliding_window_size + 1) * jnp.tril(
             all_ones, self.sliding_window_size - 1
         )
-        attn_mask = sliding_mask * attn_mask
+        attn_mask = (sliding_mask * attn_mask).astype(jnp.bool)
 
         attn_in = RMSNorm()(x)
         x = x + attn_layer(attn_in, attn_mask)
         mlp_in = RMSNorm()(x)
         x = x + MLP(self.hidden_dim)(mlp_in)
 
-        return x, kurtosis_sum + excess_kurtosis(x)
+        return x
 
 
 class Mistral(nn.Module):
@@ -167,25 +164,23 @@ class Mistral(nn.Module):
 
         x = wte.encode(tokens)  # [B, T, num_embeds]
 
-        kurtosis_sum = jnp.array(0.0)
-
         if self.config.scan_layers:
-            x, kurtosis_sum = flax_scan(Block, self.config.num_layers, unroll=8)(
+            x = flax_scan(Block, self.config.num_layers, unroll=4)(
                 self.config.num_heads,
                 self.config.num_kv_heads,
                 self.config.head_dim,
                 self.config.sliding_window_size,
                 self.config.hidden_dim,
-            )((x, kurtosis_sum))
+            )(x)
         else:
             for _ in range(self.config.num_layers):
-                x, kurtosis_sum = Block(
+                x = Block(
                     self.config.num_heads,
                     self.config.num_kv_heads,
                     self.config.head_dim,
                     self.config.sliding_window_size,
                     self.config.hidden_dim,
-                )((x, kurtosis_sum))
+                )(x)
 
         x = RMSNorm()(x)
 
@@ -195,7 +190,7 @@ class Mistral(nn.Module):
         soft_cap_scaler = jnp.array(30.0, dtype=logits.dtype)
         logits = jnp.tanh(logits / soft_cap_scaler) * soft_cap_scaler
 
-        return logits, kurtosis_sum
+        return logits
 
 
 def _flax_scan(

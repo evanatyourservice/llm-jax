@@ -24,7 +24,6 @@ nohup python3 main_multihost.py \
     --optimizer.gradient_accumulation_steps=2 \
     --compute_dtype=bfloat16 \
     --params_dtype=float32 \
-    --remat \
     --model.block_size=1024 \
     --model.sliding_window_size=512 \
     --optimizer.type=affine \

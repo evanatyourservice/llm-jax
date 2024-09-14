@@ -226,13 +226,9 @@ def main(config: TrainConfig):
         params = otu.tree_cast(params, config.params_dtype)
 
         # delay optimizer creation to pass in preconditioner sharding
-        if config.remat:
-            apply_fn = jax.checkpoint(model.apply)
-        else:
-            apply_fn = model.apply
         train_state = TrainState(
             step=0,
-            apply_fn=apply_fn,
+            apply_fn=model.apply,
             params=params,
             tx=None,
             opt_state=None,
@@ -355,10 +351,10 @@ def main(config: TrainConfig):
     # ====== train and eval steps ======
     def train_step(
         state: TrainState, tokens: jnp.ndarray
-    ) -> Tuple[jnp.ndarray, TrainState, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    ) -> Tuple[jnp.ndarray, TrainState, jnp.ndarray, jnp.ndarray]:
 
         def loss_fn(params):
-            logits, kurtosis_sum = state.apply_fn(
+            logits = state.apply_fn(
                 otu.tree_cast(params, config.compute_dtype), tokens[:, :-1]
             )
             assert logits.dtype == config.compute_dtype
@@ -371,16 +367,11 @@ def main(config: TrainConfig):
                 logits, targets
             ).mean()
 
-            # Calculate average kurtosis
-            excess_kurtosis = kurtosis_sum / (
-                config.model.num_layers * tokens.shape[0] * tokens.shape[1]
-            )
-
-            return loss, excess_kurtosis
+            return loss
 
         before_dtypes = jax.tree.map(lambda x: x.dtype, state)
 
-        (loss, excess_kurtosis), grads = jax.value_and_grad(loss_fn, has_aux=True)(
+        loss, grads = jax.value_and_grad(loss_fn)(
             state.params
         )
 
@@ -404,14 +395,14 @@ def main(config: TrainConfig):
         grad_norm = optax.global_norm(grads)
         lr = state.lr_fn(state.step)
 
-        return loss, new_state, grad_norm, lr, excess_kurtosis
+        return loss, new_state, grad_norm, lr
 
     def eval_step_unreduced(
         state: TrainState, tokens: jnp.ndarray, seq_lens: jnp.ndarray
     ) -> jnp.ndarray:
         logits = state.apply_fn(
             otu.tree_cast(state.params, config.compute_dtype), tokens[:, :-1]
-        )[0]
+        )
         assert logits.dtype == config.compute_dtype
 
         logits = logits.astype(jnp.float32)
@@ -455,7 +446,6 @@ def main(config: TrainConfig):
             train_state_sharding,
             repl_sharding,
             repl_sharding,
-            repl_sharding,
         ),
     )
     eval_hellaswag_jit = jax.jit(
@@ -480,7 +470,6 @@ def main(config: TrainConfig):
     max_hellaswag_acc = 0.0
     train_losses = []
     grad_norms = []
-    excess_kurtosis_list = []
     start_time = None  # skip first loop for compile
     while curr_step < config.train_steps:
         try:
@@ -514,12 +503,11 @@ def main(config: TrainConfig):
 
             tokens = next(train_ds)
 
-        loss, train_state, g_norm, lr, excess_kurtosis = train_step_jit(
+        loss, train_state, g_norm, lr = train_step_jit(
             train_state, tokens
         )
         train_losses.append(jax.device_get(loss).item())
         grad_norms.append(jax.device_get(g_norm).item())
-        excess_kurtosis_list.append(jax.device_get(excess_kurtosis).item())
 
         curr_step = get_step(train_state)
         with jax.transfer_guard("allow"):
@@ -537,7 +525,6 @@ def main(config: TrainConfig):
             train_loss = np.mean(train_losses)
             min_loss = min(min_loss, train_loss)
             grad_norm = np.mean(grad_norms)
-            excess_kurtosis = np.mean(excess_kurtosis_list)
             curr_lr = jax.device_get(lr).item()
             curr_tokens = (
                 (curr_step + 1) * effective_batch_size * config.model.block_size
@@ -545,7 +532,6 @@ def main(config: TrainConfig):
             to_log = {
                 "train_loss": train_loss,
                 "grad_norm": grad_norm,
-                "excess_kurtosis": excess_kurtosis,
                 "lr": curr_lr,
                 "tokens": curr_tokens,
             }
@@ -568,7 +554,6 @@ def main(config: TrainConfig):
                 write_note(
                     f"step: {curr_step}, loss: {train_loss:.4f}, "
                     f"grad_norm: {grad_norm:.4f}, "
-                    f"excess_kurtosis: {excess_kurtosis:.4f}, "
                     f"lr: {curr_lr:.4f}, tokens: {curr_tokens:.4f}"
                 )
 
