@@ -19,9 +19,9 @@ nohup python3 main_multihost.py \
     --attempt_to_load_checkpoint \
     --hellaswag_eval_interval=1000 \
     --checkpoint_interval=1000 \
-    --train_steps=200000 \
-    --batch_size=256 \
-    --optimizer.gradient_accumulation_steps=2 \
+    --train_steps=175000 \
+    --batch_size=192 \
+    --optimizer.gradient_accumulation_steps=3 \
     --compute_dtype=bfloat16 \
     --params_dtype=bfloat16 \
     --model.block_size=1024 \

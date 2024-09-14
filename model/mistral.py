@@ -13,45 +13,6 @@ from model.rotary_embedding import apply_rotary_embedding, sine_table
 initializer = nn.initializers.normal(0.02)
 
 
-class Embedder(nn.Module):
-    """Embedder module."""
-
-    vocab_size: int
-    embed_dim: int
-
-    def setup(self):
-        self.input_embedding_table = self.param(
-            "embedding", initializer, (self.vocab_size, self.embed_dim)
-        )
-
-    def encode(self, x: jax.Array) -> jax.Array:
-        x = self.input_embedding_table[(x,)]
-        x *= jnp.sqrt(self.embed_dim).astype(x.dtype)
-        return x
-
-    def decode(self, x: jax.Array) -> jax.Array:
-        return jnp.dot(x, self.input_embedding_table.T)
-
-
-class RMSNorm(nn.Module):
-    """RMSNorm layer.
-
-    Upcasts to float32 and back."""
-
-    @nn.compact
-    def __call__(self, x):
-        scale = self.param("scale", nn.initializers.zeros_init(), (x.shape[-1]))
-
-        var = jnp.mean(jnp.square(x.astype(jnp.float32)), axis=-1, keepdims=True)
-        normed_inputs = x * jax.lax.rsqrt(var + 1e-06)
-        normed_inputs = normed_inputs.astype(x.dtype)
-
-        scale = jnp.expand_dims(scale, axis=range(len(x.shape) - 1))
-        normed_inputs = normed_inputs * (1 + scale)
-
-        return normed_inputs
-
-
 class Attention(nn.Module):
     """Multi-head attention with RoPE and GQA.
 
@@ -147,9 +108,9 @@ class Block(nn.Module):
         )
         attn_mask = (sliding_mask * attn_mask).astype(jnp.bool)
 
-        attn_in = RMSNorm()(x)
+        attn_in = nn.RMSNorm(epsilon=1e-6)(x)
         x = x + attn_layer(attn_in, attn_mask)
-        mlp_in = RMSNorm()(x)
+        mlp_in = nn.RMSNorm(epsilon=1e-6)(x)
         x = x + MLP(self.hidden_dim)(mlp_in)
 
         return x
@@ -161,9 +122,11 @@ class Mistral(nn.Module):
     @nn.checkpoint
     @nn.compact
     def __call__(self, tokens):
-        wte = Embedder(self.config.vocab_size, self.config.num_embeds)
+        wte = nn.Embed(
+            self.config.vocab_size, self.config.num_embeds, embedding_init=initializer
+        )
 
-        x = wte.encode(tokens)  # [B, T, num_embeds]
+        x = wte(tokens)  # [B, T, num_embeds]
 
         if self.config.scan_layers:
             x = flax_scan(Block, self.config.num_layers, unroll=4)(
@@ -183,9 +146,9 @@ class Mistral(nn.Module):
                     self.config.hidden_dim,
                 )(x)
 
-        x = RMSNorm()(x)
+        x = nn.RMSNorm(epsilon=1e-6)(x)
 
-        logits = wte.decode(x)
+        logits = wte.attend(x)
 
         # gemma style soft cap
         soft_cap_scaler = jnp.array(30.0, dtype=logits.dtype)

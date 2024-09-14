@@ -265,8 +265,8 @@ def main(config: TrainConfig):
     )
 
     reshaped_params_shapes = jax.eval_shape(
-        partial(get_reshaped_params_shapes, scanning_layers=config.model.scan_layers), 
-        train_state.params
+        partial(get_reshaped_params_shapes, scanning_layers=config.model.scan_layers),
+        train_state.params,
     )
     reshaped_params_sharding, _ = infer_sharding(
         params=reshaped_params_shapes, mesh=mesh, op=op
@@ -371,9 +371,7 @@ def main(config: TrainConfig):
 
         before_dtypes = jax.tree.map(lambda x: x.dtype, state)
 
-        loss, grads = jax.value_and_grad(loss_fn)(
-            state.params
-        )
+        loss, grads = jax.value_and_grad(loss_fn)(state.params)
 
         if config.optimizer.gradient_accumulation_steps > 1:
             updates, new_opt_state = state.tx.update(
@@ -503,9 +501,7 @@ def main(config: TrainConfig):
 
             tokens = next(train_ds)
 
-        loss, train_state, g_norm, lr = train_step_jit(
-            train_state, tokens
-        )
+        loss, train_state, g_norm, lr = train_step_jit(train_state, tokens)
         train_losses.append(jax.device_get(loss).item())
         grad_norms.append(jax.device_get(g_norm).item())
 
