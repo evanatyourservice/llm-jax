@@ -15,6 +15,7 @@ from jaxlib import xla_client
 from jax.experimental import mesh_utils
 from jax.sharding import Mesh, PartitionSpec as P, NamedSharding
 import flax
+import flax.linen as nn
 from flax import struct
 from flax.training.train_state import TrainState as ts
 from flax.training import orbax_utils
@@ -81,7 +82,7 @@ def main(config: TrainConfig):
     with jax.transfer_guard("allow"):
         options = ocp.CheckpointManagerOptions(
             save_interval_steps=config.checkpoint_interval,
-            max_to_keep=2,
+            max_to_keep=1,
             keep_period=config.checkpoint_milestone,  # milestones
             create=True,
             cleanup_tmp_directories=True,
@@ -218,7 +219,12 @@ def main(config: TrainConfig):
 
     def init_train_state(key):
         """Initialize the train state."""
-        model = Mistral(config.model)
+        if config.remat:
+            nn.remat(
+                Mistral, policy=jax.checkpoint_policies.dots_with_no_batch_dims_saveable
+            )(config.model)
+        else:
+            model = Mistral(config.model)
 
         dummy_tokens = jnp.zeros((1, config.model.block_size), dtype=jnp.uint16)
 

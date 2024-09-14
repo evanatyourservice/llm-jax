@@ -119,7 +119,6 @@ class Block(nn.Module):
 class Mistral(nn.Module):
     config: ModelConfig
 
-    @nn.checkpoint
     @nn.compact
     def __call__(self, tokens):
         wte = nn.Embed(
@@ -129,7 +128,7 @@ class Mistral(nn.Module):
         x = wte(tokens)  # [B, T, num_embeds]
 
         if self.config.scan_layers:
-            x = flax_scan(Block, self.config.num_layers, unroll=4)(
+            x = flax_scan(Block, self.config.num_layers, unroll=self.config.scan_unroll)(
                 self.config.num_heads,
                 self.config.num_kv_heads,
                 self.config.head_dim,

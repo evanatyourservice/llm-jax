@@ -19,6 +19,7 @@ class ModelConfig:
     num_embeds: int = 576
     hidden_dim: int = 1536
     scan_layers: bool = False
+    scan_unroll: int = 4
 
 
 @dataclass(frozen=True)
@@ -108,7 +109,7 @@ class TrainConfig:
     hellaswag_eval_interval: int = 1000
     checkpoint_interval: int = 1000
     keep_checkpoints: int = 2
-    checkpoint_milestone: int = 10000
+    checkpoint_milestone: int = 25000
     batch_size: int = 128
     train_steps: int = 100000
     compute_dtype: str = "float32"
