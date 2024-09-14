@@ -125,7 +125,8 @@ class Mistral(nn.Module):
             self.config.vocab_size, self.config.num_embeds, embedding_init=initializer
         )
 
-        x = wte(tokens)  # [B, T, num_embeds]
+        x = wte(tokens)
+        x *= jnp.sqrt(self.config.num_embeds).astype(x.dtype)
 
         if self.config.scan_layers:
             x = flax_scan(Block, self.config.num_layers, unroll=self.config.scan_unroll)(
@@ -150,8 +151,7 @@ class Mistral(nn.Module):
         logits = wte.attend(x)
 
         # gemma style soft cap
-        soft_cap_scaler = jnp.array(30.0, dtype=logits.dtype)
-        logits = jnp.tanh(logits / soft_cap_scaler) * soft_cap_scaler
+        logits = jnp.tanh(logits / 30) * 30
 
         return logits
 
