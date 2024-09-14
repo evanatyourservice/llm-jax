@@ -6,6 +6,7 @@ import time
 from typing import Callable, Tuple
 from dataclasses import asdict
 import os
+import random
 import numpy as np
 import wandb
 
@@ -60,8 +61,8 @@ def main(config: TrainConfig):
     write_note(f"Number of JAX processes: {jax.process_count()}")
 
     # set seeds
-    # random.seed(config.seed)
-    # np.random.seed(config.seed)
+    random.seed(config.seed)
+    np.random.seed(config.seed)
 
     # wandb init
     if jax.process_index() == 0 and config.wandb.mode == "online":
