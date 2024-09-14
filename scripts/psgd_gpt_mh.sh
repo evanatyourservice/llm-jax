@@ -7,7 +7,7 @@ HF_TOKEN=$2
 EXPERIMENT=run_$(date +%Y-%m-%d_%H-%M-%S)
 echo $EXPERIMENT
 
-gcloud compute tpus tpu-vm ssh --zone "us-central2-b" "node-4" --project "distributedmuzerojax" \
+gcloud compute tpus tpu-vm ssh --zone "us-central2-b" "node-1" --project "distributedmuzerojax" \
 --worker=all --command "bash -c \"
 export WANDB_API_KEY=$WANDB_API_KEY 
 export HF_TOKEN=$HF_TOKEN
@@ -24,10 +24,10 @@ nohup python3 main_multihost.py \
     --optimizer.gradient_accumulation_steps=2 \
     --compute_dtype=bfloat16 \
     --params_dtype=float32 \
-    --model.block_size=1024 \
-    --model.sliding_window_size=512 \
+    --model.block_size=2048 \
+    --model.sliding_window_size=1024 \
     --optimizer.type=psgd_affine \
-    --optimizer.learning_rate=0.01 \
+    --optimizer.learning_rate=0.005 \
     --optimizer.warmup_steps=0 \
     --optimizer.weight_decay=0.01 \
     --optimizer.grad_clip=1.0 \

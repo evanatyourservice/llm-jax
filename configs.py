@@ -18,6 +18,7 @@ class ModelConfig:
     head_dim: int = 576 // 9
     num_embeds: int = 576
     hidden_dim: int = 1536
+    rope_theta: float = 100000.0
     scan_layers: bool = False
     scan_unroll: int = 4
 

@@ -21,6 +21,7 @@ class Attention(nn.Module):
     num_heads: int
     num_kv_heads: int
     head_dim: int
+    rope_theta: float
 
     @nn.compact
     def __call__(self, x, mask):
@@ -47,7 +48,7 @@ class Attention(nn.Module):
         k = jnp.einsum("bdm,mhk->bhdk", x, k_params)
         v = jnp.einsum("bdm,mhv->bhdv", x, v_params)
 
-        sin, cos = sine_table(self.head_dim, T, max_timescale=1000000.0)
+        sin, cos = sine_table(self.head_dim, T, max_timescale=self.rope_theta)
         q, k = apply_rotary_embedding(q, k, cos, sin)
 
         scale = jax.lax.rsqrt(jnp.array(self.head_dim, dtype=x.dtype))
@@ -95,10 +96,11 @@ class Block(nn.Module):
     head_dim: int
     sliding_window_size: int
     hidden_dim: int
+    rope_theta: float
 
     @nn.compact
     def __call__(self, x):
-        attn_layer = Attention(self.num_heads, self.num_kv_heads, self.head_dim)
+        attn_layer = Attention(self.num_heads, self.num_kv_heads, self.head_dim, self.rope_theta)
 
         attn_mask = nn.make_causal_mask(x[:1, :, 0], dtype=jnp.bool)
 
@@ -135,6 +137,7 @@ class Mistral(nn.Module):
                 self.config.head_dim,
                 self.config.sliding_window_size,
                 self.config.hidden_dim,
+                self.config.rope_theta,
             )(x)
         else:
             for _ in range(self.config.num_layers):
@@ -144,6 +147,7 @@ class Mistral(nn.Module):
                     self.config.head_dim,
                     self.config.sliding_window_size,
                     self.config.hidden_dim,
+                    self.config.rope_theta,
                 )(x)
 
         x = nn.RMSNorm(epsilon=1e-6)(x)
