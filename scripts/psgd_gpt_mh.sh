@@ -23,7 +23,7 @@ nohup python3 main_multihost.py \
     --batch_size=256 \
     --optimizer.gradient_accumulation_steps=2 \
     --compute_dtype=bfloat16 \
-    --params_dtype=float32 \
+    --params_dtype=bfloat16 \
     --model.block_size=1024 \
     --model.sliding_window_size=512 \
     --optimizer.type=affine \
@@ -36,7 +36,7 @@ nohup python3 main_multihost.py \
     --optimizer.max_skew_triangular=10 \
     --optimizer.precond_lr=0.5 \
     --optimizer.precond_init_scale=0.00000001 \
-    --optimizer.preconditioner_dtype=float32 > nohup.out 2>&1 & 
+    --optimizer.preconditioner_dtype=bfloat16 > nohup.out 2>&1 & 
 PID=\\\$!
 echo 'Background process started with PID '\\\$PID
 disown \\\$PID

@@ -10,8 +10,8 @@ export LLM_CONFIG=config/mistral.yaml  # base config
 python3 main.py \
     --out_dir=/Users/evanwalters/llm_testing/run_checkpointing_test \
     --attempt_to_load_checkpoint \
-    --compute_dtype=float32 \
-    --params_dtype=float32 \
+    --compute_dtype=bfloat16 \
+    --params_dtype=bfloat16 \
     --min_size_to_shard_mb=0 \
     --train_steps=500 \
     --hellaswag_eval_interval=100 \
@@ -23,7 +23,7 @@ python3 main.py \
     --optimizer.type=affine \
     --optimizer.learning_rate=0.001 \
     --optimizer.warmup_steps=20 \
-    --optimizer.preconditioner_dtype=float32 \
+    --optimizer.preconditioner_dtype=bfloat16 \
     --optimizer.preconditioner_update_probability=0.05 \
     --optimizer.precond_init_scale=0.01 \
     --optimizer.precond_lr=0.1 \

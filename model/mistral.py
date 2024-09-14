@@ -158,6 +158,7 @@ class Block(nn.Module):
 class Mistral(nn.Module):
     config: ModelConfig
 
+    @nn.checkpoint
     @nn.compact
     def __call__(self, tokens):
         wte = Embedder(self.config.vocab_size, self.config.num_embeds)
