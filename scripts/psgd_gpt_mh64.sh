@@ -34,9 +34,11 @@ nohup python3 main_multihost.py \
     --optimizer.preconditioner_update_probability=0.05 \
     --optimizer.max_size_triangular=10000 \
     --optimizer.max_skew_triangular=10 \
-    --optimizer.precond_lr=1.0 \
+    --optimizer.precond_lr=0.5 \
     --optimizer.precond_init_scale=0.00000001 \
-    --optimizer.preconditioner_dtype=float32 > nohup.out 2>&1 & 
+    --optimizer.preconditioner_dtype=float32 \
+    --optimizer.best_effort_scan \
+    > nohup.out 2>&1 & 
 PID=\\\$!
 echo 'Background process started with PID '\\\$PID
 disown \\\$PID

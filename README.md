@@ -36,5 +36,5 @@ like in `scripts/psgd_gpt_mh.sh`.
 
 create TPU with queued resources
 ```shell
-gcloud compute tpus queued-resources create node-2 --node-id node-2 --project distributedmuzerojax --zone us-central2-b --accelerator-type v4-32 --runtime-version tpu-ubuntu2204-base --scopes https://www.googleapis.com/auth/cloud-platform
+gcloud compute tpus queued-resources create node-1 --node-id node-1 --project distributedmuzerojax --zone us-central2-b --accelerator-type v4-64 --runtime-version tpu-ubuntu2204-base --scopes https://www.googleapis.com/auth/cloud-platform
 ```
