@@ -68,27 +68,26 @@ def prepare_hellaswag(
             seq_lengths_to_concat = []
             for ending in endings:
                 output = tokenizer(context + " " + ending)["input_ids"]
+                output_len = len(output)
 
                 # pad to block_size
-                if len(output) < block_size:
+                if output_len < block_size:
                     output = output + [tokenizer.eos_token_id] * (
-                        block_size - len(output)
+                        block_size - output_len
                     )
                 # max length is block_size
                 output = output[:block_size]
 
                 data_to_concat.append(output)
                 beginning_lengths_to_concat.append(beginning_length)
-                seq_lengths_to_concat.append(len(output))
+                seq_lengths_to_concat.append(output_len)
 
-            all_data.append(np.array(data_to_concat, dtype=np.uint16))  # (4, seq_len)
+            all_data.append(np.array(data_to_concat, dtype=np.uint16))
             all_beginning_lengths.append(
                 np.array(beginning_lengths_to_concat, dtype=np.int32)
-            )  # (4,)
-            all_seq_lengths.append(
-                np.array(seq_lengths_to_concat, dtype=np.int32)
-            )  # (4,)
-            all_labels.append(int(correct_end))  # []
+            )
+            all_seq_lengths.append(np.array(seq_lengths_to_concat, dtype=np.int32))
+            all_labels.append(int(correct_end))
 
     all_data = np.array(all_data, dtype=np.uint16)  # (10042, 4, seq_len)
     all_beginning_lengths = np.array(

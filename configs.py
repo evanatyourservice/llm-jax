@@ -47,6 +47,7 @@ class OptimizerConfig:
         precond_lr: Learning rate for the preconditioner.
         precond_init_scale: Initial scale for the preconditioner.
         preconditioner_dtype: Dtype of the preconditioner.
+        best_effort_scan: Whether to use best effort scan in PSGD.
     """
 
     type: str = "adamw"
@@ -64,6 +65,7 @@ class OptimizerConfig:
     precond_lr: float = 0.1
     precond_init_scale: Optional[float] = 1.0
     preconditioner_dtype: str = "float32"
+    best_effort_scan: bool = False
 
 
 @dataclass(frozen=True)

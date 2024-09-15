@@ -15,14 +15,14 @@ export LLM_CONFIG=config/mistral.yaml
 cd llm-jax
 nohup python3 main_multihost.py \
     --experiment_name=$EXPERIMENT \
-    --out_dir=gs://uscentral2stuff/llm-jax \
+    --out_dir=gs://optimizertesting/llm-jax \
     --attempt_to_load_checkpoint \
     --hellaswag_eval_interval=1000 \
     --checkpoint_interval=1000 \
     --train_steps=175000 \
     --batch_size=128 \
     --optimizer.gradient_accumulation_steps=4 \
-    --compute_dtype=bfloat16 \
+    --compute_dtype=floa \
     --params_dtype=float32 \
     --model.block_size=2048 \
     --model.sliding_window_size=1024 \

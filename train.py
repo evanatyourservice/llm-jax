@@ -174,7 +174,7 @@ def main(config: TrainConfig):
                     precond_dtype=config.optimizer.preconditioner_dtype,
                     precision="tensorfloat32",
                     reshaped_params_sharding=reshaped_params_sharding,
-                    best_effort_scan=True,
+                    best_effort_scan=config.optimizer.best_effort_scan,
                     split_scanned_layers=config.model.scan_layers,
                 )
             )
