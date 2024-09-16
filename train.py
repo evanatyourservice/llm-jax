@@ -101,24 +101,19 @@ def main(config: TrainConfig):
 
     # ====== optimizer ======
     write_note("Creating optimizer")
-    # lr schedule keeps flat for 10k steps after warmup, then linear decay
-    hold_constant_steps = 30000
+
     lr_schedule = optax.join_schedules(
         schedules=[
             optax.linear_schedule(
                 0.0, config.optimizer.learning_rate, config.optimizer.warmup_steps
             ),
-            optax.constant_schedule(config.optimizer.learning_rate),
             optax.linear_schedule(
                 config.optimizer.learning_rate,
                 config.optimizer.learning_rate * 0.05,
-                config.train_steps - config.optimizer.warmup_steps - hold_constant_steps,
+                config.train_steps - config.optimizer.warmup_steps,
             ),
         ],
-        boundaries=[
-            config.optimizer.warmup_steps,
-            config.optimizer.warmup_steps + hold_constant_steps,
-        ],
+        boundaries=[config.optimizer.warmup_steps],
     )
 
     def make_opt(reshaped_params_sharding=None):
