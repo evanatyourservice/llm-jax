@@ -27,7 +27,7 @@ nohup python3 main_multihost.py \
     --model.block_size=2048 \
     --model.sliding_window_size=1024 \
     --model.scan_layers \
-    --model.scan_unroll=2 \
+    --model.scan_unroll=1 \
     --optimizer.type=psgd_affine \
     --optimizer.learning_rate=0.003 \
     --optimizer.warmup_steps=1000 \
@@ -39,7 +39,6 @@ nohup python3 main_multihost.py \
     --optimizer.precond_lr=0.3 \
     --optimizer.precond_init_scale=0.0001 \
     --optimizer.preconditioner_dtype=float32 \
-    --optimizer.scan_layers \
     > nohup.out 2>&1 & 
 PID=\\\$!
 echo 'Background process started with PID '\\\$PID

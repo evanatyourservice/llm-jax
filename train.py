@@ -165,6 +165,7 @@ def main(config: TrainConfig):
                     precision="tensorfloat32",
                     reshaped_params_sharding=reshaped_params_sharding,
                     scanned_layers=scanned_layers,
+                    scan_unroll=config.model.scan_unroll,
                 )
             )
         elif config.optimizer.type in ["shampoo", "caspr"]:

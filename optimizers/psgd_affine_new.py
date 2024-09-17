@@ -25,6 +25,7 @@ def scale_by_affine(
     precision: str = "bfloat16",
     reshaped_params_sharding: Optional[base.Params] = None,
     scanned_layers: Optional[base.Params] = None,
+    scan_unroll: int = 1,
 ) -> base.GradientTransformationExtraArgs:
     """
     Implements Affine PSGD from https://github.com/lixilinx/psgd_torch.
@@ -46,6 +47,7 @@ def scale_by_affine(
         precision: str, precision for matmul, 'bfloat16', 'tensorfloat32', 'float32'.
         reshaped_params_sharding: optional base.Params, sharding spec for reshaped parameters.
         scanned_layers: optional base.Params, tree of bool indicating scanned layers.
+        scan_unroll: int, unroll factor for scan.
 
     Returns:
         optax.GradientTransformationExtraArgs
@@ -136,7 +138,13 @@ def scale_by_affine(
             for k, (Ql, Qr), g, s in zip(keys, Qs, gs, flat_scanned_layers):
                 if s:
                     subkeys = jax.random.split(k, g.shape[0])
-                    new_Qs.append(jax.vmap(update_precond_fn)(subkeys, Ql, Qr, g))
+                    new_Qs.append(
+                        jax.lax.map(
+                            lambda xs: update_precond_fn(*xs),
+                            (subkeys, Ql, Qr, g),
+                            batch_size=scan_unroll,
+                        )
+                    )
                 else:
                     new_Qs.append(update_precond_fn(k, Ql, Qr, g))
             new_Qs = otu.tree_cast(new_Qs, precond_dtype)
@@ -167,7 +175,13 @@ def scale_by_affine(
         precond_gs = []
         for (Ql, Qr), g, s in zip(Qs, gs, flat_scanned_layers):
             if s:
-                precond_gs.append(jax.vmap(_precond_grad_affine_math)(Ql, Qr, g))
+                precond_gs.append(
+                    jax.lax.map(
+                        lambda xs: _precond_grad_affine_math(*xs),
+                        (Ql, Qr, g),
+                        batch_size=scan_unroll,
+                    )
+                )
             else:
                 precond_gs.append(_precond_grad_affine_math(Ql, Qr, g))
 
@@ -208,6 +222,7 @@ def affine(
     precision: str = "bfloat16",
     reshaped_params_sharding: Optional[base.Params] = None,
     scanned_layers: Optional[base.Params] = None,
+    scan_unroll: int = 1,
 ) -> base.GradientTransformationExtraArgs:
     """
     Implements Affine PSGD from https://github.com/lixilinx/psgd_torch.
@@ -232,6 +247,7 @@ def affine(
         precision: str, precision for matmul, 'bfloat16', 'tensorfloat32', 'float32'.
         reshaped_params_sharding: optional base.Params, sharding spec for parameters.
         scanned_layers: optional base.Params, tree of bool indicating scanned layers.
+        scan_unroll: int, unroll factor for scan.
 
     Returns:
         optax.GradientTransformationExtraArgs
@@ -250,6 +266,7 @@ def affine(
             precision=precision,
             reshaped_params_sharding=reshaped_params_sharding,
             scanned_layers=scanned_layers,
+            scan_unroll=scan_unroll,
         )
     ]
     if weight_decay > 0:
