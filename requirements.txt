@@ -13,3 +13,4 @@ chex
 google-cloud-storage
 orbax-checkpoint
 sentencepiece
+torchinfo

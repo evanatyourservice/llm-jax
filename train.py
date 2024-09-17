@@ -272,9 +272,7 @@ def main(config: TrainConfig):
     optimizer = make_opt(scanned_layers=scanned_layers)
 
     opt_state_shapes = jax.eval_shape(optimizer.init, train_state.params)
-    opt_state_sharding, _ = infer_sharding(
-        params=opt_state_shapes, mesh=mesh, op=op
-    )
+    opt_state_sharding, _ = infer_sharding(params=opt_state_shapes, mesh=mesh, op=op)
 
     opt_state = jax.jit(optimizer.init, out_shardings=opt_state_sharding)(
         train_state.params

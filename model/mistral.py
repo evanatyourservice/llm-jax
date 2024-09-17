@@ -22,10 +22,12 @@ class Attention(nn.Module):
     num_kv_heads: int
     head_dim: int
     rope_theta: float
+    scan_attention: bool = False
 
     @nn.compact
     def __call__(self, x, mask):
-        B, T, C = x.shape
+        # TODO (evanatyourservice): option to scan some of this?
+        _, T, C = x.shape
 
         q_params = self.param(
             "q_kernel",
@@ -79,17 +81,6 @@ class MLP(nn.Module):
         return x
 
 
-def excess_kurtosis(emb):
-    mean = jnp.mean(emb, axis=-1, keepdims=True)
-    std = jnp.std(emb, axis=-1, keepdims=True)
-    centralized = emb - mean
-    fourth_moment = jnp.mean(centralized**4, axis=-1, keepdims=True)
-    kurtosis = jnp.squeeze(fourth_moment / (std**4 + 1e-6), axis=-1)
-    kurtosis = kurtosis.reshape(-1) - 3
-    kurtosis = jnp.maximum(kurtosis, 0.0)
-    return jnp.sum(kurtosis)
-
-
 class Block(nn.Module):
     num_heads: int
     num_kv_heads: int
@@ -97,11 +88,16 @@ class Block(nn.Module):
     sliding_window_size: int
     hidden_dim: int
     rope_theta: float
+    scan_attention: bool = False
 
     @nn.compact
     def __call__(self, x):
         attn_layer = Attention(
-            self.num_heads, self.num_kv_heads, self.head_dim, self.rope_theta
+            self.num_heads,
+            self.num_kv_heads,
+            self.head_dim,
+            self.rope_theta,
+            self.scan_attention,
         )
 
         attn_mask = nn.make_causal_mask(x[:1, :, 0], dtype=jnp.bool)
@@ -142,6 +138,7 @@ class Mistral(nn.Module):
                 self.config.sliding_window_size,
                 self.config.hidden_dim,
                 self.config.rope_theta,
+                self.config.scan_attention,
             )(
                 x
             )
@@ -154,6 +151,7 @@ class Mistral(nn.Module):
                     self.config.sliding_window_size,
                     self.config.hidden_dim,
                     self.config.rope_theta,
+                    self.config.scan_attention,
                 )(x)
 
         x = nn.RMSNorm(epsilon=1e-6)(x)

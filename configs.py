@@ -17,6 +17,8 @@ class ModelConfig:
     rope_theta: float = 1000000.0
     scan_layers: bool = False
     scan_unroll: int = 1
+    scan_attention: bool = False  # TODO
+    scan_mlp: bool = False  # TODO
 
 
 @dataclass(frozen=True)
