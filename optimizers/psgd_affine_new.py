@@ -190,8 +190,11 @@ def scale_by_affine(
 
         # trust region
         # global clipping
-        n_params = sum(p.size for p in jax.tree.leaves(precond_gs))
-        max_norm = jnp.sqrt(n_params)
+        max_norm = jnp.sqrt(
+            jnp.array(
+                [p.size for p in jax.tree.leaves(precond_gs)], dtype=jnp.float32
+            ).sum()
+        )
         precond_gs = _global_clip(precond_gs, max_norm)
         # element-wise clipping
         precond_gs = jax.tree.map(lambda x: jnp.clip(x, -1.0, 1.0), precond_gs)

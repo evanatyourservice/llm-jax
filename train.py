@@ -248,9 +248,6 @@ def main(config: TrainConfig):
 
     # sharding rule fns
     op = fsdp_sharding("fsdp", min_size_to_shard_mb=config.min_size_to_shard_mb)
-    reshaped_op = fsdp_sharding(
-        "fsdp", min_size_to_shard_mb=config.min_size_to_shard_mb, psgd_reshaped=True
-    ) if config.optimizer.type in ["psgd", "psgd_affine", "affine"] else op
 
     train_state_sharding, _ = infer_sharding(
         params=train_state_shapes, mesh=mesh, op=op
@@ -276,7 +273,7 @@ def main(config: TrainConfig):
 
     opt_state_shapes = jax.eval_shape(optimizer.init, train_state.params)
     opt_state_sharding, _ = infer_sharding(
-        params=opt_state_shapes, mesh=mesh, op=reshaped_op
+        params=opt_state_shapes, mesh=mesh, op=op
     )
 
     opt_state = jax.jit(optimizer.init, out_shardings=opt_state_sharding)(
@@ -286,6 +283,9 @@ def main(config: TrainConfig):
     reshaped_params_shapes = jax.eval_shape(
         partial(get_reshaped_params_shapes, scanned_layers=scanned_layers),
         train_state.params,
+    )
+    reshaped_op = fsdp_sharding(
+        "fsdp", min_size_to_shard_mb=config.min_size_to_shard_mb, psgd_reshaped=True
     )
     reshaped_params_sharding, _ = infer_sharding(
         params=reshaped_params_shapes, mesh=mesh, op=reshaped_op
