@@ -1,5 +1,6 @@
+from collections import defaultdict
 from functools import partial
-from typing import Any, Optional, Union, Callable, Tuple
+from typing import Any, Optional, Union, Callable, Tuple, List
 
 import jax
 from jax import numpy as jnp
@@ -24,8 +25,8 @@ def scale_by_affine(
     precond_dtype: Optional[Union[str, jnp.dtype]] = None,
     precision: str = "bfloat16",
     reshaped_params_sharding: Optional[base.Params] = None,
-    scanned_layers: Optional[base.Params] = None,
-    scan_unroll: int = 1,
+    best_effort_vmap: bool = False,
+    scanned_layers: Optional[base.Params] = None,  # TODO generalize to tuples of dims
 ) -> base.GradientTransformationExtraArgs:
     """
     Implements Affine PSGD from https://github.com/lixilinx/psgd_torch.
@@ -46,21 +47,26 @@ def scale_by_affine(
         precond_dtype: optional str or jnp.dtype, dtype of the preconditioner.
         precision: str, precision for matmul, 'bfloat16', 'tensorfloat32', 'float32'.
         reshaped_params_sharding: optional base.Params, sharding spec for reshaped parameters.
+        best_effort_vmap: bool, try to automatically stack same-shaped matrices
+            and use vmap to update them to save on compile time.
         scanned_layers: optional base.Params, tree of bool indicating scanned layers.
-        scan_unroll: int, unroll factor for scan.
 
     Returns:
         optax.GradientTransformationExtraArgs
     """
+    if best_effort_vmap and scanned_layers is not None:
+        raise ValueError("best_effort_scan and scanned_layers cannot be used together")
+
     mu_dtype = canonicalize_dtype(mu_dtype)
     precond_dtype = canonicalize_dtype(precond_dtype)
 
     def init_fn(params):
         key = jax.random.PRNGKey(36)
 
-        scanned_layers_ = scanned_layers
         if scanned_layers is None:
             scanned_layers_ = jax.tree.map(lambda _: False, params)
+        else:
+            scanned_layers_ = scanned_layers
 
         # momentum
         mu = None
@@ -89,9 +95,10 @@ def scale_by_affine(
         count_inc = safe_int32_increment(state["count"])
         key = state["key"]
 
-        scanned_layers_ = scanned_layers
         if scanned_layers is None:
             scanned_layers_ = jax.tree.map(lambda _: False, updates)
+        else:
+            scanned_layers_ = scanned_layers
 
         update_prob_in = preconditioner_update_probability
         if isinstance(preconditioner_update_probability, Callable):
@@ -122,6 +129,10 @@ def scale_by_affine(
         if reshaped_params_sharding is not None:
             gs = jax.lax.with_sharding_constraint(gs, flat_sharding)
 
+        # stack same-shaped matrices to scan over
+        if best_effort_vmap:
+            gs, Qs, revert_indices = _stack_matrices(gs, Qs)
+
         # update preconditioner
         key, subkey = jax.random.split(key)
         do_update = jax.random.uniform(subkey, dtype=jnp.float32) < update_prob_in
@@ -136,15 +147,9 @@ def scale_by_affine(
             keys = jax.random.split(key, len(Qs))
             new_Qs = []
             for k, (Ql, Qr), g, s in zip(keys, Qs, gs, flat_scanned_layers):
-                if s:
+                if s or best_effort_vmap:
                     subkeys = jax.random.split(k, g.shape[0])
-                    new_Qs.append(
-                        jax.lax.map(
-                            lambda xs: update_precond_fn(*xs),
-                            (subkeys, Ql, Qr, g),
-                            batch_size=scan_unroll,
-                        )
-                    )
+                    new_Qs.append(jax.vmap(update_precond_fn)(subkeys, Ql, Qr, g))
                 else:
                     new_Qs.append(update_precond_fn(k, Ql, Qr, g))
             new_Qs = otu.tree_cast(new_Qs, precond_dtype)
@@ -165,7 +170,11 @@ def scale_by_affine(
         Qs = _efficient_cond(
             jnp.logical_and(do_update, jax.random.uniform(subkey) < 0.01),
             lambda: [
-                list(jax.vmap(_balance)(Ql, Qr)) if s else list(_balance(Ql, Qr))
+                (
+                    list(jax.vmap(_balance)(Ql, Qr))
+                    if s or best_effort_vmap
+                    else list(_balance(Ql, Qr))
+                )
                 for (Ql, Qr), s in zip(Qs, flat_scanned_layers)
             ],
             Qs,
@@ -174,14 +183,8 @@ def scale_by_affine(
         # precondition gradients
         precond_gs = []
         for (Ql, Qr), g, s in zip(Qs, gs, flat_scanned_layers):
-            if s:
-                precond_gs.append(
-                    jax.lax.map(
-                        lambda xs: _precond_grad_affine_math(*xs),
-                        (Ql, Qr, g),
-                        batch_size=scan_unroll,
-                    )
-                )
+            if s or best_effort_vmap:
+                precond_gs.append(jax.vmap(_precond_grad_affine_math)(Ql, Qr, g))
             else:
                 precond_gs.append(_precond_grad_affine_math(Ql, Qr, g))
 
@@ -193,14 +196,22 @@ def scale_by_affine(
         # element-wise clipping
         precond_gs = jax.tree.map(lambda x: jnp.clip(x, -1.0, 1.0), precond_gs)
 
+        # unstack matrices
+        if best_effort_vmap:
+            precond_gs, Qs = _unstack_matrices(precond_gs, Qs, revert_indices)
+            if reshaped_params_sharding is not None:
+                precond_gs = jax.lax.with_sharding_constraint(precond_gs, flat_sharding)
+
         # reshape updates back to original shapes and unflatten pytrees
         updates = [r[1](u) for u, r in zip(precond_gs, affine_reshapers)]
         updates = grads_structure.unflatten(updates)
         Qs = grads_structure.unflatten(Qs)
 
+        # dtypes and new state
         mu = otu.tree_cast(mu, mu_dtype)
         Qs = otu.tree_cast(Qs, precond_dtype)
         state = dict(count=count_inc, key=key, mu=mu, Qs_preconditioners=Qs)
+
         return updates, state
 
     return base.GradientTransformationExtraArgs(init_fn, update_fn)
@@ -221,8 +232,8 @@ def affine(
     precond_dtype: Optional[Union[str, jnp.dtype]] = None,
     precision: str = "bfloat16",
     reshaped_params_sharding: Optional[base.Params] = None,
+    best_effort_vmap: bool = False,
     scanned_layers: Optional[base.Params] = None,
-    scan_unroll: int = 1,
 ) -> base.GradientTransformationExtraArgs:
     """
     Implements Affine PSGD from https://github.com/lixilinx/psgd_torch.
@@ -246,8 +257,9 @@ def affine(
         precond_dtype: optional str or jnp.dtype, dtype of the preconditioner.
         precision: str, precision for matmul, 'bfloat16', 'tensorfloat32', 'float32'.
         reshaped_params_sharding: optional base.Params, sharding spec for parameters.
+        best_effort_vmap: bool, try to automatically stack same-shaped matrices
+            and use vmap to update them to save on compile time.
         scanned_layers: optional base.Params, tree of bool indicating scanned layers.
-        scan_unroll: int, unroll factor for scan.
 
     Returns:
         optax.GradientTransformationExtraArgs
@@ -265,8 +277,8 @@ def affine(
             precond_dtype=precond_dtype,
             precision=precision,
             reshaped_params_sharding=reshaped_params_sharding,
+            best_effort_vmap=best_effort_vmap,
             scanned_layers=scanned_layers,
-            scan_unroll=scan_unroll,
         )
     ]
     if weight_decay > 0:
@@ -480,7 +492,7 @@ def _solve_triangular(a, b, upper, left=True):
     return jax.lax.linalg.triangular_solve(a, b, left_side=left, lower=not upper)
 
 
-def _update_precond_affine_math_(key, Ql, Qr, dX, dG, precond_lr, precision):
+def _update_precond_affine_math_(Ql, Qr, dX, dG, precond_lr, precision):
     step_normalizer = "2nd"
 
     with jax.default_matmul_precision(precision):
@@ -653,10 +665,7 @@ def _update_precond_affine_dropv_math(key, Ql, Qr, dG, precond_lr, precision):
             key, subkey = jax.random.split(key)
             # JAX does an ok job at sharding this so let's leave alone for now
             v = jax.random.normal(subkey, dG.shape, dtype=dG.dtype)
-            key, subkey = jax.random.split(key)
-            return _update_precond_affine_math_(
-                subkey, Ql, Qr, v, dG, precond_lr, precision
-            )
+            return _update_precond_affine_math_(Ql, Qr, v, dG, precond_lr, precision)
 
         return [Ql, Qr]
 
@@ -676,8 +685,83 @@ def _precond_grad_affine_math(Ql, Qr, grad):
             return (Ql * Ql.conj())[:, None] * grad * (Qr * Qr.conj())
 
 
+def _sort_and_group_matrices(matrix_shapes: List[Tuple[int, ...]]):
+    """Sorts and groups matrices by shape."""
+    indexed_list = list(enumerate(matrix_shapes))
+    sorted_indexed = sorted(indexed_list, key=lambda x: x[1])
+
+    sorted_shapes = [shape for _, shape in sorted_indexed]
+    change_indices = [original_index for original_index, _ in sorted_indexed]
+    revert_indices = [0] * len(matrix_shapes)
+    for new_pos, (original_index, _) in enumerate(sorted_indexed):
+        revert_indices[original_index] = new_pos
+
+    shape_groups = defaultdict(list)
+    for i, shape in enumerate(sorted_shapes):
+        shape_groups[shape].append(i)
+
+    unique_sorted_shapes = list(shape_groups.keys())
+
+    return unique_sorted_shapes, dict(shape_groups), change_indices, revert_indices
+
+
+def _stack_matrices(gs: List[jnp.ndarray], Qs: List[Tuple[jnp.ndarray, jnp.ndarray]]):
+    """Sorts and stacks grads and preconditioners for scan."""
+    shapes = [g.shape for g in gs]
+
+    unique_shapes, shape_groups, change_indices, revert_indices = (
+        _sort_and_group_matrices(shapes)
+    )
+
+    sorted_gs = [gs[i] for i in change_indices]
+    sorted_Qs = [Qs[i] for i in change_indices]
+
+    stacked_gs = []
+    stacked_Qs = []
+
+    for shape in unique_shapes:
+        indices = shape_groups[shape]
+        stacked_g = jnp.stack([sorted_gs[i] for i in indices])
+        stacked_gs.append(stacked_g)
+        stacked_Q = [
+            jnp.stack([sorted_Qs[i][0] for i in indices]),
+            jnp.stack([sorted_Qs[i][1] for i in indices]),
+        ]
+        stacked_Qs.append(stacked_Q)
+
+    return stacked_gs, stacked_Qs, revert_indices
+
+
+def _unstack_matrices(
+    stacked_gs: List[jnp.ndarray],
+    stacked_Qs: List[Tuple[jnp.ndarray, jnp.ndarray]],
+    revert_indices: List[int],
+):
+    """Unstacks and reverts matrices to their original order."""
+    unstacked_gs = []
+    unstacked_Qs = []
+
+    for g, Q in zip(stacked_gs, stacked_Qs):
+        unstacked_gs.extend(jnp.split(g, g.shape[0]))
+        unstacked_Qs.extend(
+            zip(jnp.split(Q[0], Q[0].shape[0]), jnp.split(Q[1], Q[1].shape[0]))
+        )
+
+    gs = [jnp.squeeze(unstacked_gs[i], axis=0) for i in revert_indices]
+    Qs = [
+        [jnp.squeeze(q[0], axis=0), jnp.squeeze(q[1], axis=0)]
+        for q in [unstacked_Qs[i] for i in revert_indices]
+    ]
+
+    return gs, Qs
+
+
 def _efficient_cond(
-    predicate: bool, compute_fn: Callable, init_state: Any, *args, **kwargs
+    predicate: Union[bool, jax.Array],
+    compute_fn: Callable,
+    init_state: Any,
+    *args,
+    **kwargs,
 ):
     """Avoids wasteful buffer allocation with XLA.
 

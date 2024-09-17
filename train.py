@@ -41,7 +41,6 @@ builtins.bfloat16 = xla_client.bfloat16
 
 wandb.require("core")
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
-os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".95"
 jax.config.update("jax_transfer_guard", "disallow")
 jax.config.update("jax_threefry_partitionable", True)
 
@@ -164,8 +163,8 @@ def main(config: TrainConfig):
                     precond_dtype=config.optimizer.preconditioner_dtype,
                     precision="tensorfloat32",
                     reshaped_params_sharding=reshaped_params_sharding,
+                    best_effort_vmap=config.optimizer.best_effort_vmap,
                     scanned_layers=scanned_layers,
-                    scan_unroll=config.model.scan_unroll,
                 )
             )
         elif config.optimizer.type in ["shampoo", "caspr"]:
@@ -251,7 +250,7 @@ def main(config: TrainConfig):
     op = fsdp_sharding("fsdp", min_size_to_shard_mb=config.min_size_to_shard_mb)
     reshaped_op = fsdp_sharding(
         "fsdp", min_size_to_shard_mb=config.min_size_to_shard_mb, psgd_reshaped=True
-    )
+    ) if config.optimizer.type in ["psgd", "psgd_affine", "affine"] else op
 
     train_state_sharding, _ = infer_sharding(
         params=train_state_shapes, mesh=mesh, op=op
@@ -264,10 +263,13 @@ def main(config: TrainConfig):
     )
 
     # which layers are scanned
-    all_false = jax.tree.map(lambda _: False, train_state.params)
-    scanned_layers = flax.traverse_util.ModelParamTraversal(
-        lambda p, _: "scan" in p
-    ).update(lambda _: True, all_false)
+    if config.model.scan_layers:
+        all_false = jax.tree.map(lambda _: False, train_state.params)
+        scanned_layers = flax.traverse_util.ModelParamTraversal(
+            lambda p, _: "scan" in p
+        ).update(lambda _: True, all_false)
+    else:
+        scanned_layers = None
 
     # make optimizer and get its shardings, init psgd with scanned arrays
     optimizer = make_opt(scanned_layers=scanned_layers)

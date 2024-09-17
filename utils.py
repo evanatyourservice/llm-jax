@@ -217,3 +217,28 @@ def count_params(params) -> int:
 
 def get_step(state) -> int:
     return jax.device_get(state.step).item()
+
+
+def unstack_scanned_layers(params):
+    """Split scanned layers along first axis into a tuple of arrays.
+
+    Identifies scanned layers by checking for "scan" in the path. This is
+    somewhat specific to our model and may not generalize."""
+    return flax.traverse_util.ModelParamTraversal(
+        lambda path, _: "scan" in path
+    ).update(lambda x: tuple([a[0] for a in jnp.split(x, x.shape[0], axis=0)]), params)
+
+
+def stack_scanned_layers(params):
+    """Searches for tuples of arrays and stacks them along the first axis.
+
+    Meant to be used with `unstack_scanned_layers`, which splits scanned
+    layers into a tuple of arrays.
+    """
+    return jax.tree.map(
+        lambda x: jnp.stack(x) if isinstance(x, tuple) else x,
+        params,
+        is_leaf=lambda x: isinstance(
+            x, (tuple, jax.Array, nn.Partitioned, jax.ShapeDtypeStruct)
+        ),
+    )

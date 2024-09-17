@@ -1,24 +1,14 @@
 from collections import defaultdict
-from typing import Any, Optional, Union, Callable, NamedTuple, List, Tuple
+from typing import Any, Optional, Union, Callable, List, Tuple
 
 import jax
-from jax import numpy as jnp, numpy
-from jax.random import PRNGKey
+from jax import numpy as jnp
 from optax import tree_utils as otu
 from optax._src import base, transform
 from optax._src.linear_algebra import global_norm
 from optax._src.numerics import safe_int32_increment
 from optax._src.utils import canonicalize_dtype
 from optax._src.combine import chain
-import flax
-import flax.linen as nn
-
-
-class PSGDAffineState(NamedTuple):
-    count: jax.Array
-    key: PRNGKey
-    mu: Optional[base.Updates]
-    Qs_preconditioners: base.Updates
 
 
 def scale_by_affine(
@@ -34,7 +24,6 @@ def scale_by_affine(
     precision: str = "bfloat16",
     reshaped_params_sharding: Any = None,
     best_effort_scan: bool = True,
-    split_scanned_layers: bool = False,
 ) -> base.GradientTransformationExtraArgs:
     """
     Implements Affine PSGD from https://github.com/lixilinx/psgd_torch.
@@ -57,7 +46,6 @@ def scale_by_affine(
         reshaped_params_sharding: optional Any, sharding spec for reshaped parameters.
         best_effort_scan: bool, try to automatically stack same-shaped matrices
             and use lax.map to update them to save on compile time and memory.
-        split_scanned_layers: bool, whether to split scanned layers into a tuple of arrays.
 
     Returns:
         optax.GradientTransformationExtraArgs
@@ -67,9 +55,6 @@ def scale_by_affine(
 
     def init_fn(params):
         key = jax.random.PRNGKey(36)
-
-        if split_scanned_layers:
-            params = unstack_scanned_layers(params)
 
         # momentum
         mu = None
@@ -86,16 +71,14 @@ def scale_by_affine(
         Qs = jax.tree.map(lambda q: jnp.sqrt(precond_init_scale) * q, Qs)
 
         # initial state
-        return PSGDAffineState(
+        return dict(
             count=jnp.zeros([], jnp.int32), key=key, mu=mu, Qs_preconditioners=Qs
         )
 
-    def update_fn(
-        updates: base.Updates, state: PSGDAffineState, params: base.Params = None
-    ):
+    def update_fn(updates: base.Updates, state: dict, params: base.Params = None):
         del params
-        count_inc = safe_int32_increment(state.count)
-        key = state.key
+        count_inc = safe_int32_increment(state["count"])
+        key = state["key"]
 
         update_prob_in = preconditioner_update_probability
         if isinstance(preconditioner_update_probability, Callable):
@@ -105,20 +88,17 @@ def scale_by_affine(
         if isinstance(precond_lr, Callable):
             precond_lr_in = precond_lr(count_inc)
 
-        if split_scanned_layers:
-            updates = unstack_scanned_layers(updates)
-
         # momentum
         mu = None
-        if state.mu is not None:
-            updates, mu = _apply_momentum(updates, state.mu, count_inc, b1, nesterov)
+        if state["mu"] is not None:
+            updates, mu = _apply_momentum(updates, state["mu"], count_inc, b1, nesterov)
 
         # get reshapers
         affine_reshapers = jax.tree.map(_shape_as_matrix, updates)
 
         # flatten pytrees
         updates, grads_structure = jax.tree.flatten(updates)
-        Qs = grads_structure.flatten_up_to(state.Qs_preconditioners)
+        Qs = grads_structure.flatten_up_to(state["Qs_preconditioners"])
         affine_reshapers = grads_structure.flatten_up_to(affine_reshapers)
         if reshaped_params_sharding is not None:
             flat_sharding = grads_structure.flatten_up_to(reshaped_params_sharding)
@@ -196,12 +176,9 @@ def scale_by_affine(
         updates = grads_structure.unflatten(updates)
         Qs = grads_structure.unflatten(Qs)
 
-        if split_scanned_layers:
-            updates = stack_scanned_layers(updates)
-
         mu = otu.tree_cast(mu, mu_dtype)
         Qs = otu.tree_cast(Qs, precond_dtype)
-        state = PSGDAffineState(count=count_inc, key=key, mu=mu, Qs_preconditioners=Qs)
+        state = dict(count=count_inc, key=key, mu=mu, Qs_preconditioners=Qs)
         return updates, state
 
     return base.GradientTransformationExtraArgs(init_fn, update_fn)
@@ -223,7 +200,6 @@ def affine(
     precision: str = "bfloat16",
     reshaped_params_sharding: Any = None,
     best_effort_scan: bool = True,
-    split_scanned_layers: bool = False,
 ) -> base.GradientTransformationExtraArgs:
     """
     Implements Affine PSGD from https://github.com/lixilinx/psgd_torch.
@@ -249,7 +225,6 @@ def affine(
         reshaped_params_sharding: optional Any, sharding spec for parameters.
         best_effort_scan: bool, try to automatically stack same-shaped matrices
             and use lax.map to update them to save on compile time and memory.
-        split_scanned_layers: bool, whether to split scanned layers into a tuple of arrays.
 
     Returns:
         optax.GradientTransformationExtraArgs
@@ -268,7 +243,6 @@ def affine(
             precision=precision,
             reshaped_params_sharding=reshaped_params_sharding,
             best_effort_scan=best_effort_scan,
-            split_scanned_layers=split_scanned_layers,
         )
     ]
     if weight_decay > 0:
@@ -758,44 +732,7 @@ def _efficient_cond(
     return results[1]
 
 
-def unstack_scanned_layers(params):
-    """Split scanned layers along first axis into a tuple of arrays.
-
-    Identifies scanned layers by checking for "scan" in the path. This is
-    somewhat specific to our model and may not generalize."""
-    return flax.traverse_util.ModelParamTraversal(
-        lambda path, _: "scan" in path
-    ).update(lambda x: tuple([a[0] for a in jnp.split(x, x.shape[0], axis=0)]), params)
-
-
-def stack_scanned_layers(params):
-    """Searches for tuples of arrays and stacks them along the first axis.
-
-    Meant to be used with `unstack_scanned_layers`, which splits scanned
-    layers into a tuple of arrays.
-    """
-    return jax.tree.map(
-        lambda x: jnp.stack(x) if isinstance(x, tuple) else x,
-        params,
-        is_leaf=lambda x: isinstance(
-            x, (tuple, jax.Array, nn.Partitioned, jax.ShapeDtypeStruct)
-        ),
-    )
-
-
-def get_reshaped_params_shapes(params, scanning_layers: bool):
-    """Get the internal shapes of params in PSGD.
-
-    PSGD reshapes params to matrices, and optionally unstacks scanned layers.
-    This function returns the shapes of the resulting matrices so we can
-    make sharding rules for them and pass these rules into PSGD for internal
-    sharding constraints.
-
-    This isn't necessary if you want JAX to automatically handle intermediate
-    sharding."""
-    if scanning_layers:
-        params = unstack_scanned_layers(params)
-
+def get_reshaped_params_shapes(params):
     affine_reshapers = jax.tree.map(
         _shape_as_matrix, params
     )  # returns tuples of (reshape_fn, unreshape_fn, shape)

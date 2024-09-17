@@ -26,6 +26,7 @@ python3 main.py \
     --optimizer.preconditioner_update_probability=0.05 \
     --optimizer.precond_init_scale=0.01 \
     --optimizer.precond_lr=0.1 \
+    --optimizer.best_effort_vmap \
     --model.block_size=64 \
     --model.sliding_window_size=32 \
     --model.num_layers=2 \
@@ -33,5 +34,4 @@ python3 main.py \
     --model.num_embeds=8 \
     --model.head_dim=4 \
     --model.hidden_dim=8 \
-    --model.num_kv_heads=2 \
-    --model.scan_layers
+    --model.num_kv_heads=2

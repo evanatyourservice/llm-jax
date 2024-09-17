@@ -68,7 +68,8 @@ def fsdp_sharding(axis, min_size_to_shard_mb=1, psgd_reshaped: bool = False):
         axis_size = np.prod([mesh.shape[a] for a in axis_tuple])
         shape = x.shape
 
-        # Partitioning rules, backwards from last dim for scan friendliness
+        # Partitioning rules
+        # indexed backwards from last dim for scan leading dims friendliness
         if (
             np.prod(shape) * x.dtype.itemsize >= min_size_to_shard_mb * (2**20)
             and len(shape) > 1
