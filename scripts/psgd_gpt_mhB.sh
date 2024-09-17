@@ -21,21 +21,29 @@ nohup python3 main_multihost.py \
     --train_steps=175000 \
     --batch_size=128 \
     --optimizer.gradient_accumulation_steps=4 \
-    --compute_dtype=floa \
+    --compute_dtype=bfloat16 \
     --params_dtype=float32 \
     --model.block_size=2048 \
     --model.sliding_window_size=1024 \
+    --model.num_layers=30 \
+    --model.num_heads=9 \
+    --model.num_kv_heads=3 \
+    --model.head_dim=576 \
+    --model.num_embeds=576 \
+    --model.hidden_dim=1536 \
+    --model.rope_theta=1000000.0 \
     --optimizer.type=psgd_affine \
     --optimizer.learning_rate=0.005 \
-    --optimizer.warmup_steps=0 \
-    --optimizer.weight_decay=0.01 \
+    --optimizer.warmup_steps=1000 \
+    --optimizer.weight_decay=0.1 \
     --optimizer.grad_clip=1.0 \
     --optimizer.preconditioner_update_probability=0.05 \
     --optimizer.max_size_triangular=10000 \
     --optimizer.max_skew_triangular=10 \
-    --optimizer.precond_lr=0.5 \
-    --optimizer.precond_init_scale=0.000000000001 \
-    --optimizer.preconditioner_dtype=float32 > nohup.out 2>&1 & 
+    --optimizer.precond_lr=1.0 \
+    --optimizer.precond_init_scale=0.00000001 \
+    --optimizer.preconditioner_dtype=float32 \
+    --optimizer.no_best_effort_scan > nohup.out 2>&1 & 
 PID=\\\$!
 echo 'Background process started with PID '\\\$PID
 disown \\\$PID

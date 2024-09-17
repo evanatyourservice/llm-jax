@@ -48,7 +48,7 @@ def infer_sharding(params, mesh, op):
     return sharding, specs
 
 
-def fsdp_sharding(axis, min_size_to_shard_mb=1):
+def fsdp_sharding(axis, min_size_to_shard_mb=1, psgd_reshaped: bool = False):
     """FSDP sharding rule.
 
     Shards the largest dimension that is not sharded already and is divisible
@@ -68,17 +68,70 @@ def fsdp_sharding(axis, min_size_to_shard_mb=1):
         axis_size = np.prod([mesh.shape[a] for a in axis_tuple])
         shape = x.shape
 
-        if "embedding" in name and len(x.shape) > 1:
-            return (None,) * (len(x.shape) - 1) + (axis,)
-
-        # Partition along largest axis that is divisible and not taken starting
-        # from last dimension.
-        if np.prod(shape) * x.dtype.itemsize >= min_size_to_shard_mb * (2**20):
-            idx = np.argsort(shape)[::-1]
-            for i in idx:
-                if shape[i] % axis_size == 0:
-                    if cur_spec[i] is None:
-                        return cur_spec[:i] + (axis,) + cur_spec[i + 1 :]
+        # Partitioning rules, backwards from last dim for scan friendliness
+        if (
+            np.prod(shape) * x.dtype.itemsize >= min_size_to_shard_mb * (2**20)
+            and len(shape) > 1
+        ):
+            new_sharding = [None for _ in shape]
+            if "scale" in name:
+                pass
+            elif any(
+                s in name
+                for s in [
+                    "preconditioner",
+                    "out_kernel",
+                    "Dense_0",
+                    "Dense_1",
+                    "embedding",
+                ]
+            ):
+                # shard these on last dim, including PSGD preconditioners so expanding
+                # axes stay sharded while applying preconditioner
+                if shape[-1] % axis_size == 0:
+                    new_sharding[-1] = axis
+                    print(f"sharding {name}:{shape} to {new_sharding}")
+                    return tuple(new_sharding)
+            elif "Dense_2" in name:
+                # shard Dense_2 on first dim (-2)
+                if shape[-2] % axis_size == 0:
+                    new_sharding[-2] = axis
+                    print(f"sharding {name}:{shape} to {new_sharding}")
+                    return tuple(new_sharding)
+            elif "k_kernel" in name or "v_kernel" in name:
+                # shard k_kernel and v_kernel on first dim (-3)
+                if psgd_reshaped:  # matrix
+                    if shape[-2] % axis_size == 0:
+                        new_sharding[-2] = axis
+                        print(f"sharding {name}:{shape} to {new_sharding}")
+                        return tuple(new_sharding)
+                else:
+                    if shape[-3] % axis_size == 0:
+                        new_sharding[-3] = axis
+                        print(f"sharding {name}:{shape} to {new_sharding}")
+                        return tuple(new_sharding)
+            elif "q_kernel" in name:
+                # shard q_kernel on first dim (-4)
+                if psgd_reshaped:  # matrix
+                    if shape[-2] % axis_size == 0:
+                        new_sharding[-2] = axis
+                        print(f"sharding {name}:{shape} to {new_sharding}")
+                        return tuple(new_sharding)
+                else:
+                    if shape[-4] % axis_size == 0:
+                        new_sharding[-4] = axis
+                        print(f"sharding {name}:{shape} to {new_sharding}")
+                        return tuple(new_sharding)
+            else:
+                # Partition along largest axis that is divisible and not taken starting
+                # from last dimension.
+                idx = np.argsort(shape)[::-1]
+                for i in idx:
+                    if shape[i] % axis_size == 0:
+                        if cur_spec[i] is None:
+                            new_sharding[i] = axis
+                            print(f"sharding {name}:{shape} to {new_sharding}")
+                            return tuple(new_sharding)
 
         write_note(
             f"Parameter {name}:{shape} not sharded because did not meet rules "

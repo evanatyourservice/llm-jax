@@ -18,7 +18,7 @@ class PSGDAffineState(NamedTuple):
     count: jax.Array
     key: PRNGKey
     mu: Optional[base.Updates]
-    Qs: base.Updates
+    Qs_preconditioners: base.Updates
 
 
 def scale_by_affine(
@@ -86,7 +86,9 @@ def scale_by_affine(
         Qs = jax.tree.map(lambda q: jnp.sqrt(precond_init_scale) * q, Qs)
 
         # initial state
-        return PSGDAffineState(count=jnp.zeros([], jnp.int32), key=key, mu=mu, Qs=Qs)
+        return PSGDAffineState(
+            count=jnp.zeros([], jnp.int32), key=key, mu=mu, Qs_preconditioners=Qs
+        )
 
     def update_fn(
         updates: base.Updates, state: PSGDAffineState, params: base.Params = None
@@ -116,7 +118,7 @@ def scale_by_affine(
 
         # flatten pytrees
         updates, grads_structure = jax.tree.flatten(updates)
-        Qs = grads_structure.flatten_up_to(state.Qs)
+        Qs = grads_structure.flatten_up_to(state.Qs_preconditioners)
         affine_reshapers = grads_structure.flatten_up_to(affine_reshapers)
         if reshaped_params_sharding is not None:
             flat_sharding = grads_structure.flatten_up_to(reshaped_params_sharding)
@@ -199,7 +201,7 @@ def scale_by_affine(
 
         mu = otu.tree_cast(mu, mu_dtype)
         Qs = otu.tree_cast(Qs, precond_dtype)
-        state = PSGDAffineState(count=count_inc, key=key, mu=mu, Qs=Qs)
+        state = PSGDAffineState(count=count_inc, key=key, mu=mu, Qs_preconditioners=Qs)
         return updates, state
 
     return base.GradientTransformationExtraArgs(init_fn, update_fn)

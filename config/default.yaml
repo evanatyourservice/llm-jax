@@ -1,4 +1,7 @@
-# tyro YAML.
+# Example tyro YAML
+# Unused but can be loaded with default=tyro.from_yaml(TrainConfig, yaml_filepath) in main.py
+# or by adding filepath logic to get_default_config in configs.py
+# for example you could add logic to get_default_config to grab a yaml path from an env variable
 !dataclass:TrainConfig
 hellaswag_eval_interval: 500
 checkpoint_interval: 1000
@@ -23,5 +26,4 @@ optimizer: !dataclass:OptimizerConfig
     precond_init_scale: 1.0
     preconditioner_dtype: float32
 wandb: !dataclass:WandbConfig
-    entity: evanatyourservice
     mode: online

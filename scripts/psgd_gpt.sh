@@ -3,8 +3,6 @@
 EXPERIMENT=run_$(date +%Y-%m-%d_%H-%M-%S)
 echo $EXPERIMENT
 
-export LLM_CONFIG=config/mistral.yaml  # base config
-
 python3 main.py \
     --experiment_name=$EXPERIMENT \
     --out_dir=gs://uscentral2stuff/llm-jax \

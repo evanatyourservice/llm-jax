@@ -1,22 +1,15 @@
-from collections import defaultdict
-from typing import Any, Optional, Union, Callable, NamedTuple, List, Tuple
+from functools import partial
+from typing import Any, Optional, Union, Callable, Tuple
 
 import jax
 from jax import numpy as jnp
-from jax.random import PRNGKey
+import numpy as np
 from optax import tree_utils as otu
 from optax._src import base, transform
 from optax._src.linear_algebra import global_norm
 from optax._src.numerics import safe_int32_increment
 from optax._src.utils import canonicalize_dtype
 from optax._src.combine import chain
-
-
-class PSGDAffineState(NamedTuple):
-    count: jax.Array
-    key: PRNGKey
-    mu: Optional[base.Updates]
-    Qs: base.Updates
 
 
 def scale_by_affine(
@@ -30,8 +23,8 @@ def scale_by_affine(
     mu_dtype: Optional[Union[str, jnp.dtype]] = None,
     precond_dtype: Optional[Union[str, jnp.dtype]] = None,
     precision: str = "bfloat16",
-    reshaped_params_sharding: Any = None,
-    best_effort_scan: bool = True,
+    reshaped_params_sharding: Optional[base.Params] = None,
+    scanned_layers: Optional[base.Params] = None,
 ) -> base.GradientTransformationExtraArgs:
     """
     Implements Affine PSGD from https://github.com/lixilinx/psgd_torch.
@@ -51,9 +44,8 @@ def scale_by_affine(
             Defaults to the same dtype as the parameters.
         precond_dtype: optional str or jnp.dtype, dtype of the preconditioner.
         precision: str, precision for matmul, 'bfloat16', 'tensorfloat32', 'float32'.
-        reshaped_params_sharding: optional Any, sharding spec for reshaped parameters.
-        best_effort_scan: bool, try to automatically stack same-shaped matrices
-            and use lax.map to update them to save on compile time and memory.
+        reshaped_params_sharding: optional base.Params, sharding spec for reshaped parameters.
+        scanned_layers: optional base.Params, tree of bool indicating scanned layers.
 
     Returns:
         optax.GradientTransformationExtraArgs
@@ -64,13 +56,20 @@ def scale_by_affine(
     def init_fn(params):
         key = jax.random.PRNGKey(36)
 
+        scanned_layers_ = scanned_layers
+        if scanned_layers is None:
+            scanned_layers_ = jax.tree.map(lambda _: False, params)
+
         # momentum
         mu = None
         if b1 > 0:
             mu = otu.tree_zeros_like(params, mu_dtype)
 
         # preconditioners
-        affine_reshapers = [_shape_as_matrix(x) for x in jax.tree.leaves(params)]
+        affine_reshapers = [
+            _shape_as_matrix(x, s)
+            for (x, s) in zip(jax.tree.leaves(params), jax.tree.leaves(scanned_layers_))
+        ]
         Qs = [
             _initQ(s[2], max_size_triangular, max_skew_triangular, precond_dtype)
             for s in affine_reshapers
@@ -79,14 +78,18 @@ def scale_by_affine(
         Qs = jax.tree.map(lambda q: jnp.sqrt(precond_init_scale) * q, Qs)
 
         # initial state
-        return PSGDAffineState(count=jnp.zeros([], jnp.int32), key=key, mu=mu, Qs=Qs)
+        return dict(
+            count=jnp.zeros([], jnp.int32), key=key, mu=mu, Qs_preconditioners=Qs
+        )
 
-    def update_fn(
-        updates: base.Updates, state: PSGDAffineState, params: base.Params = None
-    ):
+    def update_fn(updates: base.Updates, state: dict, params: base.Params = None):
         del params
-        count_inc = safe_int32_increment(state.count)
-        key = state.key
+        count_inc = safe_int32_increment(state["count"])
+        key = state["key"]
+
+        scanned_layers_ = scanned_layers
+        if scanned_layers is None:
+            scanned_layers_ = jax.tree.map(lambda _: False, updates)
 
         update_prob_in = preconditioner_update_probability
         if isinstance(preconditioner_update_probability, Callable):
@@ -98,99 +101,92 @@ def scale_by_affine(
 
         # momentum
         mu = None
-        if state.mu is not None:
-            updates, mu = _apply_momentum(updates, state.mu, count_inc, b1, nesterov)
+        if state["mu"] is not None:
+            updates, mu = _apply_momentum(updates, state["mu"], count_inc, b1, nesterov)
 
         # get reshapers
-        affine_reshapers = jax.tree.map(_shape_as_matrix, updates)
+        affine_reshapers = jax.tree.map(_shape_as_matrix, updates, scanned_layers_)
 
         # flatten pytrees
         updates, grads_structure = jax.tree.flatten(updates)
-        Qs = grads_structure.flatten_up_to(state.Qs)
+        Qs = grads_structure.flatten_up_to(state["Qs_preconditioners"])
         affine_reshapers = grads_structure.flatten_up_to(affine_reshapers)
-        flat_sharding = grads_structure.flatten_up_to(reshaped_params_sharding)
+        if reshaped_params_sharding is not None:
+            flat_sharding = grads_structure.flatten_up_to(reshaped_params_sharding)
+        flat_scanned_layers = grads_structure.flatten_up_to(scanned_layers_)
 
         # reshape updates using affine reshapers
         gs = [r[0](x) for x, r in zip(updates, affine_reshapers)]
-        if flat_sharding is not None:
+        if reshaped_params_sharding is not None:
             gs = jax.lax.with_sharding_constraint(gs, flat_sharding)
-
-        # stack same-shaped matrices to scan over
-        if best_effort_scan:
-            gs, Qs, revert_indices = _stack_matrices(gs, Qs)
-
-        map_batch_size = 1  # interpolates between scan and vmap, 1 being scan unroll=1
 
         # update preconditioner
         key, subkey = jax.random.split(key)
         do_update = jax.random.uniform(subkey, dtype=jnp.float32) < update_prob_in
 
+        update_precond_fn = partial(
+            _update_precond_affine_dropv_math,
+            precond_lr=precond_lr_in,
+            precision=precision,
+        )
+
         def update_preconditioner():
-            ukey = key
-            if best_effort_scan:
-                key_list = []
-                for g in gs:
-                    n_keys = jax.random.split(ukey, g.shape[0] + 1)
-                    ukey, keys = n_keys[0], n_keys[1:]
-                    key_list.append(keys)
-
-                new_Qs = [
-                    jax.lax.map(
-                        lambda xs: _update_precond_affine_dropv_math(
-                            *xs, precond_lr_in, precision
-                        ),
-                        (k, Ql, Qr, g),
-                        batch_size=map_batch_size,
-                    )
-                    for (k, (Ql, Qr), g) in zip(key_list, Qs, gs)
-                ]
-            else:
-                keys = jax.random.split(ukey, len(Qs))
-                new_Qs = [
-                    _update_precond_affine_dropv_math(
-                        k, Ql, Qr, g, precond_lr_in, precision
-                    )
-                    for (k, (Ql, Qr), g) in zip(keys, Qs, gs)
-                ]
-
+            keys = jax.random.split(key, len(Qs))
+            new_Qs = []
+            for k, (Ql, Qr), g, s in zip(keys, Qs, gs, flat_scanned_layers):
+                if s:
+                    subkeys = jax.random.split(k, g.shape[0])
+                    new_Qs.append(jax.vmap(update_precond_fn)(subkeys, Ql, Qr, g))
+                else:
+                    new_Qs.append(update_precond_fn(k, Ql, Qr, g))
             new_Qs = otu.tree_cast(new_Qs, precond_dtype)
             return new_Qs
 
         Qs = _efficient_cond(do_update, update_preconditioner, Qs)
 
-        # precondition grads
-        if best_effort_scan:
-            precond_grad_fn = lambda l, r, g: jax.lax.map(
-                lambda xs: _precond_grad_affine_math(*xs),
-                (l, r, g),
-                batch_size=map_batch_size,
-            )
-        else:
-            precond_grad_fn = _precond_grad_affine_math
+        # balance preconditioners about every 100 updates
+        def _balance(Ql, Qr):
+            max_l = jnp.max(jnp.abs(Ql))
+            max_r = jnp.max(jnp.abs(Qr))
 
-        gs = [precond_grad_fn(Ql, Qr, g) for ((Ql, Qr), g) in zip(Qs, gs)]
+            rho = jnp.sqrt(max_l / max_r)
+            new_Ql = Ql / rho
+            new_Qr = Qr * rho
+            return new_Ql, new_Qr
 
-        # unstack matrices
-        if best_effort_scan:
-            gs, Qs = _unstack_matrices(gs, Qs, revert_indices)
-            if flat_sharding is not None:
-                gs = jax.lax.with_sharding_constraint(gs, flat_sharding)
+        Qs = _efficient_cond(
+            jnp.logical_and(do_update, jax.random.uniform(subkey) < 0.01),
+            lambda: [
+                list(jax.vmap(_balance)(Ql, Qr)) if s else list(_balance(Ql, Qr))
+                for (Ql, Qr), s in zip(Qs, flat_scanned_layers)
+            ],
+            Qs,
+        )
 
+        # precondition gradients
+        precond_gs = []
+        for (Ql, Qr), g, s in zip(Qs, gs, flat_scanned_layers):
+            if s:
+                precond_gs.append(jax.vmap(_precond_grad_affine_math)(Ql, Qr, g))
+            else:
+                precond_gs.append(_precond_grad_affine_math(Ql, Qr, g))
+
+        # trust region
         # global clipping
-        n_params = sum(p.size for p in jax.tree.leaves(gs))
+        n_params = sum(p.size for p in jax.tree.leaves(precond_gs))
         max_norm = jnp.sqrt(n_params)
-        gs = _global_clip(gs, max_norm)
+        precond_gs = _global_clip(precond_gs, max_norm)
         # element-wise clipping
-        gs = jax.tree.map(lambda x: jnp.clip(x, -1.0, 1.0), gs)
+        precond_gs = jax.tree.map(lambda x: jnp.clip(x, -1.0, 1.0), precond_gs)
 
         # reshape updates back to original shapes and unflatten pytrees
-        updates = [r[1](u) for u, r in zip(gs, affine_reshapers)]
+        updates = [r[1](u) for u, r in zip(precond_gs, affine_reshapers)]
         updates = grads_structure.unflatten(updates)
         Qs = grads_structure.unflatten(Qs)
 
         mu = otu.tree_cast(mu, mu_dtype)
         Qs = otu.tree_cast(Qs, precond_dtype)
-        state = PSGDAffineState(count=count_inc, key=key, mu=mu, Qs=Qs)
+        state = dict(count=count_inc, key=key, mu=mu, Qs_preconditioners=Qs)
         return updates, state
 
     return base.GradientTransformationExtraArgs(init_fn, update_fn)
@@ -210,8 +206,8 @@ def affine(
     mu_dtype: Optional[Union[str, jnp.dtype]] = None,
     precond_dtype: Optional[Union[str, jnp.dtype]] = None,
     precision: str = "bfloat16",
-    reshaped_params_sharding: Any = None,
-    best_effort_scan: bool = True,
+    reshaped_params_sharding: Optional[base.Params] = None,
+    scanned_layers: Optional[base.Params] = None,
 ) -> base.GradientTransformationExtraArgs:
     """
     Implements Affine PSGD from https://github.com/lixilinx/psgd_torch.
@@ -234,9 +230,8 @@ def affine(
             Defaults to the same dtype as the parameters.
         precond_dtype: optional str or jnp.dtype, dtype of the preconditioner.
         precision: str, precision for matmul, 'bfloat16', 'tensorfloat32', 'float32'.
-        reshaped_params_sharding: optional Any, sharding spec for parameters.
-        best_effort_scan: bool, try to automatically stack same-shaped matrices
-            and use lax.map to update them to save on compile time and memory.
+        reshaped_params_sharding: optional base.Params, sharding spec for parameters.
+        scanned_layers: optional base.Params, tree of bool indicating scanned layers.
 
     Returns:
         optax.GradientTransformationExtraArgs
@@ -254,7 +249,7 @@ def affine(
             precond_dtype=precond_dtype,
             precision=precision,
             reshaped_params_sharding=reshaped_params_sharding,
-            best_effort_scan=best_effort_scan,
+            scanned_layers=scanned_layers,
         )
     ]
     if weight_decay > 0:
@@ -284,7 +279,7 @@ def _apply_momentum(
 
 
 def _add_eps(x):
-    return jnp.clip(x, 1e-25, None)
+    return jnp.clip(x, 1e-30, None)
 
 
 def _global_clip(updates, max_norm):
@@ -327,27 +322,43 @@ def _norm_lower_bound(A: jax.Array):
             x = A @ x.conj()
             return max_abs * jnp.linalg.norm(A.conj().T @ (x / jnp.linalg.norm(x)))
 
+        # these lax.cond fall back to lax.select inside vmap but we'll keep them anyway
         return jax.lax.cond(value0 > value1, gt_branch, le_branch)
 
-    def pass_calc(A):
+    def no_calc(_):
         return max_abs
 
-    return jax.lax.cond(max_abs > 0, calc, pass_calc, A)
+    return jax.lax.cond(max_abs > 0, calc, no_calc, A)
 
 
-def _shape_as_matrix(arr: jax.Array) -> tuple:
+def _shape_as_matrix(arr: jax.Array, scanning_array: bool) -> tuple:
     """Reshapes tensor x to a matrix with conditions to improve efficiency.
 
     From original pytorch version.
 
     Args:
         arr: jax.Array, tensor to be reshaped.
+        scanning_array: bool, whether the array is being scanned over.
 
     Returns:
         tuple where first element is function that convert x to matrix, second
             element is function that converts matrix back to x, and third element
             is the shape of x as a matrix.
     """
+    if scanning_array:
+        arr_ndim = len(arr.shape) - 1
+        arr_shape = arr.shape[1:]
+        arr_size = np.prod(arr_shape)
+
+        reshape = jax.vmap(jnp.reshape, in_axes=(0, None))
+        transpose = jax.vmap(jnp.transpose, in_axes=(0, None))
+    else:
+        arr_ndim = len(arr.shape)
+        arr_shape = arr.shape
+        arr_size = np.prod(arr_shape)
+
+        reshape = jnp.reshape
+        transpose = jnp.transpose
 
     def prod(arr):
         # prod = lambda arr: 1 if len(arr)==0 else arr[0]*prod(arr[1:])
@@ -366,17 +377,23 @@ def _shape_as_matrix(arr: jax.Array) -> tuple:
                     yield p0[i], *q
 
     # here begins the processing
-    if arr.ndim == 2:  # t already is a matrix, do nothing
-        return lambda u: u, lambda v: v, arr.shape
-    elif arr.ndim < 2:  # scalar or vector, simple reshape to matrix
-        mtx_shape = (1, arr.size)
+    if arr_ndim == 2:  # t already is a matrix, do nothing
+        full_mtx_shape = arr_shape
+        if scanning_array:
+            full_mtx_shape = arr.shape[:1] + full_mtx_shape
+        return lambda u: u, lambda v: v, full_mtx_shape
+    elif arr_ndim < 2:  # scalar or vector, simple reshape to matrix
+        mtx_shape = (1, arr_size)
+        full_mtx_shape = mtx_shape
+        if scanning_array:
+            full_mtx_shape = arr.shape[:1] + full_mtx_shape
         return (
-            lambda u, shape=mtx_shape: u.reshape(shape),
-            lambda v, shape=arr.shape: v.reshape(shape),
-            mtx_shape,
+            lambda u, shape=mtx_shape: reshape(u, shape),
+            lambda v, shape=arr_shape: reshape(v, shape),
+            full_mtx_shape,
         )
     else:  # higher order tensor, a little complicated
-        p0, s0 = tuple(range(arr.ndim)), arr.shape  # original permutation and shape
+        p0, s0 = tuple(range(arr_ndim)), arr_shape  # original permutation and shape
         min_precond_size, opt_p, opt_s, opt_i = float("inf"), None, None, None
         for p in permutations(p0):
             s = tuple(s0[j] for j in p)
@@ -387,22 +404,28 @@ def _shape_as_matrix(arr: jax.Array) -> tuple:
 
         if opt_p == p0:  # no permutation is needed, just reshaping
             mtx_shape = (prod(s0[:opt_i]), prod(s0[opt_i:]))
+            full_mtx_shape = mtx_shape
+            if scanning_array:
+                full_mtx_shape = arr.shape[:1] + full_mtx_shape
             return (
-                lambda u, shape=mtx_shape: u.reshape(shape),
-                lambda v, shape=s0: v.reshape(shape),
-                mtx_shape,
+                lambda u, shape=mtx_shape: reshape(u, shape),
+                lambda v, shape=s0: reshape(v, shape),
+                full_mtx_shape,
             )
         else:  # need both permutation and reshaping
             mtx_shape = (prod(opt_s[:opt_i]), prod(opt_s[opt_i:]))
+            full_mtx_shape = mtx_shape
+            if scanning_array:
+                full_mtx_shape = arr.shape[:1] + full_mtx_shape
             q = tuple(
                 pair[1] for pair in sorted([(k, i) for (i, k) in enumerate(opt_p)])
             )
             return (
-                lambda u, permute=opt_p, shape=mtx_shape: u.transpose(permute).reshape(
-                    shape
+                lambda u, permute=opt_p, shape=mtx_shape: reshape(
+                    transpose(u, permute), shape
                 ),
-                lambda v, permute=q, shape=opt_s: v.reshape(shape).transpose(permute),
-                mtx_shape,
+                lambda v, permute=q, shape=opt_s: transpose(reshape(v, shape), permute),
+                full_mtx_shape,
             )
 
 
@@ -412,8 +435,8 @@ def _initQ(shape, max_size, max_skew, dtype=None):
     where Q1 and Q2 can reduce to diagonal matrices to save memory if
     max_size or max_skew are set to small numbers.
     """
-    assert len(shape) == 2, "preconditioned param shape must be 2D"
-    s1, s2 = shape
+    s1, s2 = shape[-2:]
+
     if s1 < 2 or s1 > max_size or s1 > max_skew * s2:
         Q1 = jnp.ones(s1, dtype=dtype)
     else:
@@ -423,6 +446,12 @@ def _initQ(shape, max_size, max_skew, dtype=None):
         Q2 = jnp.ones(s2, dtype=dtype)
     else:
         Q2 = jnp.eye(s2, dtype=dtype)
+
+    if len(shape) > 2:
+        Q1 = jnp.expand_dims(Q1, axis=0)
+        Q2 = jnp.expand_dims(Q2, axis=0)
+        Q1 = jnp.repeat(Q1, shape[0], axis=0)
+        Q2 = jnp.repeat(Q2, shape[0], axis=0)
 
     return [Q1, Q2]
 
@@ -527,18 +556,6 @@ def _update_precond_affine_math_(key, Ql, Qr, dX, dG, precond_lr, precision):
                 Ql -= step1 * grad1 * Ql
                 Qr -= step2 * grad2 * Qr
 
-        def _balance():
-            max_l = jnp.max(jnp.abs(Ql))
-            max_r = jnp.max(jnp.abs(Qr))
-
-            rho = jnp.sqrt(max_l / max_r)
-            new_Ql = Ql / rho
-            new_Qr = Qr * rho
-            return new_Ql, new_Qr
-
-        key, subkey = jax.random.split(key)
-        Ql, Qr = _efficient_cond(jax.random.uniform(subkey) < 0.01, _balance, (Ql, Qr))
-
         return [Ql, Qr]
 
 
@@ -624,18 +641,6 @@ def _update_precond_affine_dropv_math(key, Ql, Qr, dG, precond_lr, precision):
                 subkey, Ql, Qr, v, dG, precond_lr, precision
             )
 
-        def _balance():
-            max_l = jnp.max(jnp.abs(Ql))
-            max_r = jnp.max(jnp.abs(Qr))
-
-            rho = jnp.sqrt(max_l / max_r)
-            new_Ql = Ql / rho
-            new_Qr = Qr * rho
-            return new_Ql, new_Qr
-
-        key, subkey = jax.random.split(key)
-        Ql, Qr = _efficient_cond(jax.random.uniform(subkey) < 0.01, _balance, (Ql, Qr))
-
         return [Ql, Qr]
 
 
@@ -652,77 +657,6 @@ def _precond_grad_affine_math(Ql, Qr, grad):
             )
         else:  # Ql.ndim=1 and Qr.ndim=1:
             return (Ql * Ql.conj())[:, None] * grad * (Qr * Qr.conj())
-
-
-def _sort_and_group_matrices(matrix_shapes: List[Tuple[int, ...]]):
-    """Sorts and groups matrices by shape."""
-    indexed_list = list(enumerate(matrix_shapes))
-    sorted_indexed = sorted(indexed_list, key=lambda x: x[1])
-
-    sorted_shapes = [shape for _, shape in sorted_indexed]
-    change_indices = [original_index for original_index, _ in sorted_indexed]
-    revert_indices = [0] * len(matrix_shapes)
-    for new_pos, (original_index, _) in enumerate(sorted_indexed):
-        revert_indices[original_index] = new_pos
-
-    shape_groups = defaultdict(list)
-    for i, shape in enumerate(sorted_shapes):
-        shape_groups[shape].append(i)
-
-    unique_sorted_shapes = list(shape_groups.keys())
-
-    return unique_sorted_shapes, dict(shape_groups), change_indices, revert_indices
-
-
-def _stack_matrices(gs: List[jnp.ndarray], Qs: List[Tuple[jnp.ndarray, jnp.ndarray]]):
-    """Sorts and stacks grads and preconditioners for scan."""
-    shapes = [g.shape for g in gs]
-
-    unique_shapes, shape_groups, change_indices, revert_indices = (
-        _sort_and_group_matrices(shapes)
-    )
-
-    sorted_gs = [gs[i] for i in change_indices]
-    sorted_Qs = [Qs[i] for i in change_indices]
-
-    stacked_gs = []
-    stacked_Qs = []
-
-    for shape in unique_shapes:
-        indices = shape_groups[shape]
-        stacked_g = jnp.stack([sorted_gs[i] for i in indices])
-        stacked_gs.append(stacked_g)
-        stacked_Q = [
-            jnp.stack([sorted_Qs[i][0] for i in indices]),
-            jnp.stack([sorted_Qs[i][1] for i in indices]),
-        ]
-        stacked_Qs.append(stacked_Q)
-
-    return stacked_gs, stacked_Qs, revert_indices
-
-
-def _unstack_matrices(
-    stacked_gs: List[jnp.ndarray],
-    stacked_Qs: List[Tuple[jnp.ndarray, jnp.ndarray]],
-    revert_indices: List[int],
-):
-    """Unstacks and reverts matrices to their original order."""
-    unstacked_gs = []
-    unstacked_Qs = []
-
-    for g, Q in zip(stacked_gs, stacked_Qs):
-        unstacked_gs.extend(jnp.split(g, g.shape[0]))
-        unstacked_Qs.extend(
-            zip(jnp.split(Q[0], Q[0].shape[0]), jnp.split(Q[1], Q[1].shape[0]))
-        )
-
-    gs = [jnp.squeeze(unstacked_gs[i], axis=0) for i in revert_indices]
-    Qs = [
-        [jnp.squeeze(q[0], axis=0), jnp.squeeze(q[1], axis=0)]
-        for q in [unstacked_Qs[i] for i in revert_indices]
-    ]
-
-    return gs, Qs
 
 
 def _efficient_cond(
@@ -742,3 +676,33 @@ def _efficient_cond(
     results = jax.lax.while_loop(_iter_condition, _iter_body, (predicate, init_state))
 
     return results[1]
+
+
+def get_reshaped_params_shapes(
+    params: base.Params, scanned_layers: Optional[base.Params] = None
+):
+    """Get the internal shapes of params in PSGD.
+
+    PSGD reshapes params to matrices. This function returns the shapes of the
+    resulting matrices so we can make sharding rules for them and pass these
+    rules into PSGD for internal sharding constraints.
+
+    This isn't necessary if you want JAX to automatically handle intermediate
+    sharding.
+
+    Args:
+        params: the parameters to be reshaped
+        scanned_layers: tree of bool, whether the array is scanned in the network
+    """
+    if scanned_layers is None:
+        scanned_layers = jax.tree.map(lambda _: False, params)
+
+    affine_reshapers = jax.tree.map(
+        _shape_as_matrix, params, scanned_layers
+    )  # returns tuples of (reshape_fn, unreshape_fn, shape)
+
+    p_struct = jax.tree.structure(params)
+    affine_reshapers = p_struct.flatten_up_to(affine_reshapers)
+    matrix_shapes = [jax.ShapeDtypeStruct(r[2], jnp.float32) for r in affine_reshapers]
+    matrix_shapes = p_struct.unflatten(matrix_shapes)
+    return matrix_shapes

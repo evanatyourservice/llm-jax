@@ -66,9 +66,7 @@ def prepare_hellaswag(
             all_beginning_lengths.append(
                 np.array(beginning_lengths_to_concat, dtype=np.int32)
             )
-            all_seq_lengths.append(
-                np.array(seq_lengths_to_concat, dtype=np.int32)
-            )
+            all_seq_lengths.append(np.array(seq_lengths_to_concat, dtype=np.int32))
             all_labels.append(int(correct_end))
 
     all_data = np.array(all_data, dtype=np.uint16)  # (10042, 4, seq_len)

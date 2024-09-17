@@ -27,7 +27,7 @@ import orbax.checkpoint as ocp
 
 from dataset import prepare_hellaswag, fineweb_edu_dataset, _fw_shard_names
 from configs import TrainConfig
-from optimizers.psgd_affine_old import affine, get_reshaped_params_shapes
+from optimizers.psgd_affine_new import affine, get_reshaped_params_shapes
 from optimizers.tearfree import optimizer as tearfree_opt
 from optimizers.tearfree import shampoo, second_order
 from optimizers.adam import adamw
@@ -42,13 +42,7 @@ builtins.bfloat16 = xla_client.bfloat16
 wandb.require("core")
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = ".95"
-# os.environ["JAX_TRACEBACK_FILTERING"] = "off"
-# Transfer guard will fail the program whenever that data between a host and
-# a device is transferred implicitly. This often catches subtle bugs that
-# cause slowdowns and memory fragmentation. Explicit transfers are done
-# with jax.device_put and jax.device_get.
 jax.config.update("jax_transfer_guard", "disallow")
-# Fixes design flaw in jax.random that may cause unnecessary d2d comms.
 jax.config.update("jax_threefry_partitionable", True)
 
 
@@ -116,7 +110,7 @@ def main(config: TrainConfig):
         boundaries=[config.optimizer.warmup_steps],
     )
 
-    def make_opt(reshaped_params_sharding=None):
+    def make_opt(reshaped_params_sharding=None, scanned_layers=None):
         write_note(f"Using {config.optimizer.type} optimizer")
 
         def param_decay_mask(params):
@@ -170,8 +164,7 @@ def main(config: TrainConfig):
                     precond_dtype=config.optimizer.preconditioner_dtype,
                     precision="tensorfloat32",
                     reshaped_params_sharding=reshaped_params_sharding,
-                    best_effort_scan=config.optimizer.best_effort_scan,
-                    split_scanned_layers=config.model.scan_layers,
+                    scanned_layers=scanned_layers,
                 )
             )
         elif config.optimizer.type in ["shampoo", "caspr"]:
@@ -228,7 +221,9 @@ def main(config: TrainConfig):
         else:
             model = Mistral(config.model)
 
-        dummy_tokens = jnp.zeros((1, config.model.block_size), dtype=jnp.uint16)
+        dummy_tokens = jnp.zeros(
+            (config.batch_size, config.model.block_size), dtype=jnp.uint16
+        )
 
         params = model.init(key, dummy_tokens)
         params = otu.tree_cast(params, config.params_dtype)
@@ -251,7 +246,12 @@ def main(config: TrainConfig):
     # get train state shapes and shardings
     train_state_shapes = jax.eval_shape(init_train_state, rng)
 
+    # sharding rule fns
     op = fsdp_sharding("fsdp", min_size_to_shard_mb=config.min_size_to_shard_mb)
+    reshaped_op = fsdp_sharding(
+        "fsdp", min_size_to_shard_mb=config.min_size_to_shard_mb, psgd_reshaped=True
+    )
+
     train_state_sharding, _ = infer_sharding(
         params=train_state_shapes, mesh=mesh, op=op
     )
@@ -262,26 +262,36 @@ def main(config: TrainConfig):
         rng_init
     )
 
+    # which layers are scanned
+    all_false = jax.tree.map(lambda _: False, train_state.params)
+    scanned_layers = flax.traverse_util.ModelParamTraversal(
+        lambda p, _: "scan" in p
+    ).update(lambda _: True, all_false)
+
     # make optimizer and get its shardings, init psgd with scanned arrays
-    optimizer = make_opt()
+    optimizer = make_opt(scanned_layers=scanned_layers)
 
     opt_state_shapes = jax.eval_shape(optimizer.init, train_state.params)
-    opt_state_sharding, _ = infer_sharding(params=opt_state_shapes, mesh=mesh, op=op)
+    opt_state_sharding, _ = infer_sharding(
+        params=opt_state_shapes, mesh=mesh, op=reshaped_op
+    )
 
     opt_state = jax.jit(optimizer.init, out_shardings=opt_state_sharding)(
         train_state.params
     )
 
     reshaped_params_shapes = jax.eval_shape(
-        partial(get_reshaped_params_shapes, scanning_layers=config.model.scan_layers),
+        partial(get_reshaped_params_shapes, scanned_layers=scanned_layers),
         train_state.params,
     )
     reshaped_params_sharding, _ = infer_sharding(
-        params=reshaped_params_shapes, mesh=mesh, op=op
+        params=reshaped_params_shapes, mesh=mesh, op=reshaped_op
     )
 
     # remake optimizer with reshaped params sharding and scanned layers passed in
-    optimizer = make_opt(reshaped_params_sharding=reshaped_params_sharding)
+    optimizer = make_opt(
+        reshaped_params_sharding=reshaped_params_sharding, scanned_layers=scanned_layers
+    )
 
     # finish making train state (pass in optimizer and opt_state)
     train_state = train_state.replace(tx=optimizer, opt_state=opt_state)
