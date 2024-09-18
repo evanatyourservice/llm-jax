@@ -20,7 +20,7 @@ nohup python3 main_multihost.py \
     --hellaswag_eval_interval=1000 \
     --checkpoint_interval=1000 \
     --train_steps=150000 \
-    --batch_size=128 \
+    --batch_size=256 \
     --optimizer.gradient_accumulation_steps=4 \
     --compute_dtype=bfloat16 \
     --params_dtype=bfloat16 \
@@ -33,6 +33,7 @@ nohup python3 main_multihost.py \
     --model.head_dim=64 \
     --model.num_embeds=2048 \
     --model.hidden_dim=8192 \
+    --model.scan_attention \
     --optimizer.type=psgd_affine \
     --optimizer.learning_rate=0.001 \
     --optimizer.warmup_steps=1000 \
@@ -40,7 +41,7 @@ nohup python3 main_multihost.py \
     --optimizer.grad_clip=1.0 \
     --optimizer.preconditioner_update_probability=0.04 \
     --optimizer.max_size_triangular=10000 \
-    --optimizer.max_skew_triangular=7 \
+    --optimizer.max_skew_triangular=10 \
     --optimizer.precond_lr=0.3 \
     --optimizer.precond_init_scale=0.01 \
     --optimizer.preconditioner_dtype=bfloat16 \

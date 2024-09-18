@@ -13,6 +13,43 @@ from model.rotary_embedding import apply_rotary_embedding, sine_table
 initializer = nn.initializers.normal(0.02)
 
 
+class Embedder(nn.Module):
+    """Embedder module."""
+    vocab_size: int
+    embed_dim: int
+
+    def setup(self):
+        self.embedding_table = self.param(
+            "embedding", initializer, (self.vocab_size, self.embed_dim)
+        )
+
+    def encode(self, x: jax.Array) -> jax.Array:
+        x = self.embedding_table[(x,)]
+        x *= jnp.sqrt(self.embed_dim).astype(x.dtype)
+        return x
+
+    def decode(self, x: jax.Array) -> jax.Array:
+        return jnp.dot(x, self.embedding_table.T)
+
+
+class RMSNorm(nn.Module):
+    """RMSNorm layer.
+
+    Upcasts to float32 and back."""
+
+    @nn.compact
+    def __call__(self, x):
+        scale = self.param("scale", nn.initializers.zeros_init(), (x.shape[-1]))
+        var = jnp.mean(jnp.square(x.astype(jnp.float32)), axis=-1, keepdims=True)
+
+        normed_inputs = x * jax.lax.rsqrt(var + 1e-06)
+        normed_inputs = normed_inputs.astype(x.dtype)
+
+        scale = jnp.expand_dims(scale, axis=range(len(x.shape) - 1))
+        normed_inputs = normed_inputs * (1 + scale)
+        return normed_inputs
+
+
 class Attention(nn.Module):
     """Multi-head attention with RoPE and GQA.
 
@@ -26,7 +63,6 @@ class Attention(nn.Module):
 
     @nn.compact
     def __call__(self, x, mask):
-        # TODO (evanatyourservice): option to scan some of this?
         _, T, C = x.shape
 
         q_params = self.param(
@@ -92,6 +128,8 @@ class MLP(nn.Module):
 
 
 class Block(nn.Module):
+    """Transformer block."""
+
     num_heads: int
     num_kv_heads: int
     head_dim: int
@@ -111,32 +149,29 @@ class Block(nn.Module):
         )
 
         attn_mask = nn.make_causal_mask(x[:1, :, 0], dtype=jnp.bool)
-
         all_ones = jnp.ones_like(attn_mask, dtype=jnp.bool)
         sliding_mask = jnp.triu(all_ones, -1 * self.sliding_window_size + 1) * jnp.tril(
             all_ones, self.sliding_window_size - 1
         )
         attn_mask = (sliding_mask * attn_mask).astype(jnp.bool)
 
-        attn_in = nn.RMSNorm(epsilon=1e-6)(x)
+        attn_in = RMSNorm()(x)
         x = x + attn_layer(attn_in, attn_mask)
-        mlp_in = nn.RMSNorm(epsilon=1e-6)(x)
+        mlp_in = RMSNorm()(x)
         x = x + MLP(self.hidden_dim)(mlp_in)
 
         return x
 
 
 class Mistral(nn.Module):
+    """Mistral model."""
     config: ModelConfig
 
     @nn.compact
     def __call__(self, tokens):
-        wte = nn.Embed(
-            self.config.vocab_size, self.config.num_embeds, embedding_init=initializer
-        )
+        embedder = Embedder(self.config.vocab_size, self.config.num_embeds)
 
-        x = wte(tokens)
-        x *= jnp.sqrt(self.config.num_embeds).astype(x.dtype)
+        x = embedder.encode(tokens)
 
         if self.config.scan_layers:
             x = flax_scan(
@@ -164,9 +199,9 @@ class Mistral(nn.Module):
                     self.config.scan_attention,
                 )(x)
 
-        x = nn.RMSNorm(epsilon=1e-6)(x)
+        x = RMSNorm()(x)
 
-        logits = wte.attend(x)
+        logits = embedder.decode(x)
 
         # gemma style soft cap
         logits = jnp.tanh(logits / 30) * 30
