@@ -17,11 +17,7 @@ class State:
     apply_fn: Callable = struct.field(pytree_node=False)
 
 
-def prepare_hellaswag(
-    batch_size: int,
-    block_size: int,
-    tf_prefetch: int = 2,
-):
+def prepare_hellaswag(batch_size: int, block_size: int, tf_prefetch: int = 2):
     """Read file and tokenize the hellaswag dataset."""
 
     tokenizer = AutoTokenizer.from_pretrained(
@@ -94,10 +90,7 @@ def prepare_hellaswag(
 
 
 def hs_eval_step_unreduced(
-    state,
-    tokens: jnp.ndarray,
-    begin_lens: jnp.ndarray,
-    seq_lens: jnp.ndarray,
+    state, tokens: jnp.ndarray, begin_lens: jnp.ndarray, seq_lens: jnp.ndarray
 ) -> jnp.ndarray:
     logits = state.apply_fn(tokens[:, :-1], params=state.params, train=False)["logits"]
 

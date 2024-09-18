@@ -82,8 +82,8 @@ def fsdp_sharding(axis, min_size_to_shard_mb=1, psgd_reshaped: bool = False):
                 for s in [
                     "preconditioner",
                     "out_kernel",
-                    "Dense_0",
-                    "Dense_1",
+                    "up_kernel",
+                    "gate_kernel",
                     "embedding",
                 ]
             ):
@@ -93,8 +93,8 @@ def fsdp_sharding(axis, min_size_to_shard_mb=1, psgd_reshaped: bool = False):
                     new_sharding[-1] = axis
                     print(f"sharding {name}:{shape} to {new_sharding}")
                     return tuple(new_sharding)
-            elif "Dense_2" in name:
-                # shard Dense_2 on first dim (-2)
+            elif "down_kernel" in name:
+                # shard mlp down_kernel on first dim (-2)
                 if shape[-2] % axis_size == 0:
                     new_sharding[-2] = axis
                     print(f"sharding {name}:{shape} to {new_sharding}")

@@ -29,15 +29,11 @@ def _make_invalid_cases() -> Sequence[dict[str, ...]]:
     return [
         {
             "testcase_name": "smallblock",
-            "invalid_options": reshaper.Options(
-                block_size=1,
-            ),
+            "invalid_options": reshaper.Options(block_size=1),
         },
         {
             "testcase_name": "smallmerge",
-            "invalid_options": reshaper.Options(
-                merge_dims=0,
-            ),
+            "invalid_options": reshaper.Options(merge_dims=0),
         },
     ]
 
@@ -54,12 +50,7 @@ def _make_expected_shape_cases() -> Sequence[dict[str, ...]]:
         {"in_shape": [1], "merge": 2, "block": 2, "out_shape": []},
         {"in_shape": [1, 1, 1], "merge": 2, "block": 2, "out_shape": []},
         {"in_shape": [1, 1, 1], "merge": 2, "block": 2, "out_shape": []},
-        {
-            "in_shape": [3, 1, 5, 2, 2],
-            "merge": 4,
-            "block": 10,
-            "out_shape": [3, 5, 4],
-        },
+        {"in_shape": [3, 1, 5, 2, 2], "merge": 4, "block": 10, "out_shape": [3, 5, 4]},
         {"in_shape": [2, 3, 2], "merge": 6, "block": 10, "out_shape": [6, 2]},
     ]
     for case in cases[:]:
@@ -98,14 +89,7 @@ class ReshaperTest(parameterized.TestCase):
         np.testing.assert_array_equal(init, recover)
 
     def test_tree(self):
-        shapes = {
-            "w": [[{"b": (3, 2)}]],
-            "z": (
-                1,
-                2,
-                1,
-            ),
-        }
+        shapes = {"w": [[{"b": (3, 2)}]], "z": (1, 2, 1)}
         init = jax.tree.map(jnp.zeros, shapes, is_leaf=lambda x: isinstance(x, tuple))
         options = reshaper.Options(merge_dims=2, block_size=2)
         init_fn, update_fn = reshaper.merge(options)

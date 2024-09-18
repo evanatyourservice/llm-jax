@@ -212,9 +212,7 @@ def create_redist_dict(
         group_resource -= group_size
         total_score = sum(score_dict[key] for key in group)
         sorted_scores = sorted(
-            [(key, score_dict[key]) for key in group],
-            key=lambda x: x[1],
-            reverse=True,
+            [(key, score_dict[key]) for key in group], key=lambda x: x[1], reverse=True
         )
         realloc = {}
         for pair in sorted_scores:
@@ -248,26 +246,18 @@ def create_redist_dict(
     return redist_dict
 
 
-_DIR = flags.DEFINE_string(
-    "dir",
-    "",
-    "directory with checkpoints, must be set",
-)
+_DIR = flags.DEFINE_string("dir", "", "directory with checkpoints, must be set")
 
 _IDX = flags.DEFINE_multi_integer(
     "idx", -1, "indices of checkpoints to anlayze, default last checkpoint"
 )
 
 _RULE = flags.DEFINE_string(
-    "rule",
-    "sketch_trace",
-    "statistics to reallocate based on, default sketch trace",
+    "rule", "sketch_trace", "statistics to reallocate based on, default sketch trace"
 )
 
 _AVG = flags.DEFINE_bool(
-    "avg",
-    False,
-    "whether to use running average of the statistics, default False",
+    "avg", False, "whether to use running average of the statistics, default False"
 )
 
 

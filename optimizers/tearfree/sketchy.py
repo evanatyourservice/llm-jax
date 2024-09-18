@@ -223,8 +223,7 @@ def _pspec(
     )
 
     def _tensor_pspec(
-        path: ...,
-        param: praxis_shim.WeightHParams,
+        path: ..., param: praxis_shim.WeightHParams
     ) -> praxis_shim.NestedHParams:
 
         total_dim_prod = jnp.prod(jnp.array(param.shape))
@@ -343,10 +342,7 @@ def _update_sketches(
 
 
 def _precondition(
-    options: Options,
-    path: ...,
-    update: jax.Array,
-    sketches: _TensorState,
+    options: Options, path: ..., update: jax.Array, sketches: _TensorState
 ) -> jax.Array:
     """Precondition gradients."""
     g = update

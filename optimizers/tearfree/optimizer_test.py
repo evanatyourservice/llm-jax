@@ -120,9 +120,7 @@ class OptimizerTest(parameterized.TestCase):
     ) -> praxis_shim.ShardedGradientTransformation:
         id_tx = optax.identity()
         id_tx_shard = praxis_shim.ShardedGradientTransformation(
-            id_tx.init,
-            id_tx.update,
-            lambda _: optax.EmptyState(),
+            id_tx.init, id_tx.update, lambda _: optax.EmptyState()
         )
         return grafting.graft(grafting_options, id_tx_shard)
 
@@ -162,9 +160,7 @@ class OptimizerTest(parameterized.TestCase):
         )
 
     @parameterized.parameters(
-        dict(shape=(1, 1, 1)),
-        dict(shape=(1,)),
-        dict(shape=tuple()),
+        dict(shape=(1, 1, 1)), dict(shape=(1,)), dict(shape=tuple())
     )
     def test_scalar_is_grafting(self, shape):
         nsteps = 4

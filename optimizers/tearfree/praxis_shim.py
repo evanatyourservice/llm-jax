@@ -43,7 +43,7 @@ class WeightHParams(NamedTuple):
 
 
 def sharded_chain(
-    *args: Union[optax.GradientTransformation, ShardedGradientTransformation],
+    *args: Union[optax.GradientTransformation, ShardedGradientTransformation]
 ) -> ShardedGradientTransformation:
     """Chain as in praxis.optimizers.sharded_chain."""
 

@@ -121,9 +121,7 @@ def scale_by_affine(
 
         # get reshapers
         affine_reshapers = jax.tree.map(
-            lambda x, n: _shape_as_matrix(x, n),
-            updates,
-            inner_scanned_arrays,
+            lambda x, n: _shape_as_matrix(x, n), updates, inner_scanned_arrays
         )
 
         # flatten pytrees
@@ -342,10 +340,7 @@ def _maybe_map(fn: Callable, n: int):
     return nested_map(n)
 
 
-def _shape_as_matrix(
-    arr: jax.Array,
-    ignore_n_leading_dims: int = 0,
-) -> tuple:
+def _shape_as_matrix(arr: jax.Array, ignore_n_leading_dims: int = 0) -> tuple:
     """Reshapes tensor x to a matrix with conditions to improve efficiency.
 
     From original pytorch version.

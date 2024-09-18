@@ -59,8 +59,7 @@ class TearfreeOptions:
 
 
 def tearfree(
-    learning_rate: Union[chex.Numeric, optax.Schedule],
-    options: TearfreeOptions,
+    learning_rate: Union[chex.Numeric, optax.Schedule], options: TearfreeOptions
 ) -> praxis_shim.ShardedGradientTransformation:
     """Tearfree optimizer, supports pjit and jit.
 
@@ -92,8 +91,4 @@ def tearfree(
         lr_tx = optax.scale_by_schedule(lambda x: -1.0 * learning_rate(x))
     else:
         lr_tx = optax.scale(-1.0 * learning_rate)
-    return praxis_shim.sharded_chain(
-        graft_tx,
-        momentum_tx,
-        lr_tx,
-    )
+    return praxis_shim.sharded_chain(graft_tx, momentum_tx, lr_tx)

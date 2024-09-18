@@ -32,9 +32,7 @@ def _minustwo() -> praxis_shim.ShardedGradientTransformation:
     """Generate a direction-reversing gradient transformation."""
     update = functools.partial(jax.tree.map, lambda x: -2 * x)
     return praxis_shim.ShardedGradientTransformation(
-        lambda _: optax.EmptyState,
-        lambda u, s, _: (update(u), s),
-        optax.EmptyState,
+        lambda _: optax.EmptyState, lambda u, s, _: (update(u), s), optax.EmptyState
     )
 
 
@@ -156,13 +154,7 @@ class GraftingTest(parameterized.TestCase):
         self._check_equal(_minustwo(), grafted, nsteps)
 
     def _check_norm_direction(
-        self,
-        norm_tx,
-        direction_tx,
-        actual_tx,
-        nsteps,
-        start_precond_step,
-        shape=(3,),
+        self, norm_tx, direction_tx, actual_tx, nsteps, start_precond_step, shape=(3,)
     ):
         rng = jax.random.PRNGKey(0)
         rng, key = jax.random.split(rng)

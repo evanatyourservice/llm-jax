@@ -34,4 +34,5 @@ python3 main.py \
     --model.num_embeds=8 \
     --model.head_dim=4 \
     --model.hidden_dim=8 \
-    --model.num_kv_heads=2
+    --model.num_kv_heads=2 \
+    --model.scan_attention

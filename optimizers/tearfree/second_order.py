@@ -68,9 +68,7 @@ def apply(options: Options) -> praxis_shim.ShardedGradientTransformation:
     )
 
     return praxis_shim.sharded_chain(
-        merge_tx,
-        wrapped_precond_tx,
-        reshaper.unmerge(reshaper_options),
+        merge_tx, wrapped_precond_tx, reshaper.unmerge(reshaper_options)
     )
 
 

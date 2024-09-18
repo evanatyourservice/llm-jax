@@ -31,39 +31,27 @@ def _make_invalid_cases() -> Sequence[dict[str, ...]]:
     return [
         {
             "testcase_name": "block_size0",
-            "invalid_options": shampoo.Options(
-                block_size=0,
-            ),
+            "invalid_options": shampoo.Options(block_size=0),
         },
         {
             "testcase_name": "precond0",
-            "invalid_options": shampoo.Options(
-                update_preconditioners_freq=0,
-            ),
+            "invalid_options": shampoo.Options(update_preconditioners_freq=0),
         },
         {
             "testcase_name": "stats0",
-            "invalid_options": shampoo.Options(
-                update_statistics_freq=0,
-            ),
+            "invalid_options": shampoo.Options(update_statistics_freq=0),
         },
         {
             "testcase_name": "decay_neg",
-            "invalid_options": shampoo.Options(
-                second_moment_decay=-0.1,
-            ),
+            "invalid_options": shampoo.Options(second_moment_decay=-0.1),
         },
         {
             "testcase_name": "decay_large",
-            "invalid_options": shampoo.Options(
-                second_moment_decay=1.1,
-            ),
+            "invalid_options": shampoo.Options(second_moment_decay=1.1),
         },
         {
             "testcase_name": "block_size1",
-            "invalid_options": shampoo.Options(
-                block_size=1,
-            ),
+            "invalid_options": shampoo.Options(block_size=1),
         },
     ]
 
@@ -87,13 +75,7 @@ def _make_blockify_deblockify_cases() -> Sequence[dict[str, ...]]:
 
     cases = []
     for shape, block_size, name in shapes_blocks:
-        cases.append(
-            dict(
-                shape=shape,
-                block_size=block_size,
-                testcase_name=name,
-            )
-        )
+        cases.append(dict(shape=shape, block_size=block_size, testcase_name=name))
     return cases
 
 

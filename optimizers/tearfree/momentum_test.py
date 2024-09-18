@@ -33,13 +33,7 @@ def _make_no_state_cases() -> Sequence[dict[str, ...]]:
         bools, bools, [0.0, 0.9], bools
     ):
         momentum_decay = 0.0
-        options = momentum.Options(
-            ema,
-            nesterov,
-            momentum_decay,
-            wd,
-            wd_after,
-        )
+        options = momentum.Options(ema, nesterov, momentum_decay, wd, wd_after)
         cases.append({"options": options})
     return cases
 
@@ -49,21 +43,15 @@ def _make_invalid_cases() -> Sequence[dict[str, ...]]:
     return [
         {
             "testcase_name": "momentum_neg",
-            "invalid_options": momentum.Options(
-                momentum_decay=-1.0,
-            ),
+            "invalid_options": momentum.Options(momentum_decay=-1.0),
         },
         {
             "testcase_name": "wd_neg",
-            "invalid_options": momentum.Options(
-                weight_decay=-0.1,
-            ),
+            "invalid_options": momentum.Options(weight_decay=-0.1),
         },
         {
             "testcase_name": "momentum_large",
-            "invalid_options": momentum.Options(
-                momentum_decay=1.1,
-            ),
+            "invalid_options": momentum.Options(momentum_decay=1.1),
         },
     ]
 
@@ -110,10 +98,7 @@ class MomentumTest(parameterized.TestCase):
     @parameterized.parameters(itertools.product([False, True], repeat=2))
     def test_wd_before_momentum(self, ema, nesterov):
         options = momentum.Options(
-            ema=ema,
-            nesterov=nesterov,
-            momentum_decay=0.9,
-            weight_decay=0.0,
+            ema=ema, nesterov=nesterov, momentum_decay=0.9, weight_decay=0.0
         )
         nsteps = 4
         tx = momentum.apply(options)

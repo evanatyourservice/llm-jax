@@ -22,7 +22,7 @@ class Attention(nn.Module):
     num_kv_heads: int
     head_dim: int
     rope_theta: float
-    scan_attention: bool = False
+    scan_attention: bool
 
     @nn.compact
     def __call__(self, x, mask):
@@ -46,9 +46,21 @@ class Attention(nn.Module):
             (self.num_heads // self.num_kv_heads, self.num_kv_heads, self.head_dim, C),
         )
 
-        q = jnp.einsum("bsm,mrhk->brhsk", x, q_params)
-        k = jnp.einsum("bdm,mhk->bhdk", x, k_params)
-        v = jnp.einsum("bdm,mhv->bhdv", x, v_params)
+        if self.scan_attention:
+            # first scan kv repeats, then scan heads
+            @partial(jax.vmap, in_axes=(None, 1, None, None), out_axes=(1, None, None))
+            @partial(jax.vmap, in_axes=(None, 1, 1, 1), out_axes=(1, 1, 1))
+            def map_fn(x, qp, kp, vp):
+                q = jnp.einsum("bsm,mk->bsk", x, qp)
+                k = jnp.einsum("bdm,mk->bdk", x, kp)
+                v = jnp.einsum("bdm,mv->bdv", x, vp)
+                return q, k, v
+
+            q, k, v = map_fn(x, q_params, k_params, v_params)
+        else:
+            q = jnp.einsum("bsm,mrhk->brhsk", x, q_params)
+            k = jnp.einsum("bdm,mhk->bhdk", x, k_params)
+            v = jnp.einsum("bdm,mhv->bhdv", x, v_params)
 
         sin, cos = sine_table(self.head_dim, T, max_timescale=self.rope_theta)
         q, k = apply_rotary_embedding(q, k, cos, sin)
@@ -71,14 +83,12 @@ class MLP(nn.Module):
     @nn.compact
     def __call__(self, x):
         C = x.shape[-1]
-        gate = nn.Dense(self.hidden_dim, use_bias=False, kernel_init=initializer)(x)
-        gate = nn.silu(gate)
 
-        x = nn.Dense(self.hidden_dim, use_bias=False, kernel_init=initializer)(x)
-        x = x * gate
+        up_kernel = self.param("up_kernel", initializer, (2, C, self.hidden_dim))
+        down_kernel = self.param("down_kernel", initializer, (self.hidden_dim, C))
 
-        x = nn.Dense(C, use_bias=False, kernel_init=initializer)(x)
-        return x
+        x = jax.vmap(jnp.dot, in_axes=(None, 0))(x, up_kernel)
+        return jnp.dot(x[0] * nn.silu(x[1]), down_kernel)
 
 
 class Block(nn.Module):
@@ -88,7 +98,7 @@ class Block(nn.Module):
     sliding_window_size: int
     hidden_dim: int
     rope_theta: float
-    scan_attention: bool = False
+    scan_attention: bool
 
     @nn.compact
     def __call__(self, x):

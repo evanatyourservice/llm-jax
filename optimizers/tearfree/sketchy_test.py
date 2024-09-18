@@ -29,23 +29,14 @@ from optimizers.tearfree import sketchy
 def _make_invalid_cases() -> Sequence[dict[str, ...]]:
     """Generate invalid cases which should throw."""
     return [
-        {
-            "testcase_name": "freq0",
-            "invalid_options": sketchy.Options(
-                update_freq=0,
-            ),
-        },
+        {"testcase_name": "freq0", "invalid_options": sketchy.Options(update_freq=0)},
         {
             "testcase_name": "decay_neg",
-            "invalid_options": sketchy.Options(
-                second_moment_decay=-0.1,
-            ),
+            "invalid_options": sketchy.Options(second_moment_decay=-0.1),
         },
         {
             "testcase_name": "decay_large",
-            "invalid_options": sketchy.Options(
-                second_moment_decay=1.1,
-            ),
+            "invalid_options": sketchy.Options(second_moment_decay=1.1),
         },
     ]
 
@@ -142,11 +133,7 @@ class SketchyTest(parameterized.TestCase):
     def test_realloc(self):
         """Test the memory reallocation functions properly."""
         dim, nsteps = 8, 3
-        memory_dict = {
-            "a": [2],
-            "b": [[6], [8]],
-            "c": {"d": [4], "e": [8]},
-        }
+        memory_dict = {"a": [2], "b": [[6], [8]], "c": {"d": [4], "e": [8]}}
         tx = sketchy.apply(sketchy.Options(memory_alloc=memory_dict))
         shape = jax.tree.map(
             lambda x: (dim,),
@@ -230,11 +217,7 @@ class SketchyTest(parameterized.TestCase):
             assert init == "rand", init
             prev = self._make_rand_state(d, eigs, tail, ndim)
 
-        options = sketchy.Options(
-            second_moment_decay=decay,
-            rank=k,
-            epsilon=0.0,
-        )
+        options = sketchy.Options(second_moment_decay=decay, rank=k, epsilon=0.0)
         dim = ndim - 1 if last_axis else 0
         updated = sketchy._update_axis(options, dim, "", grad, prev)
 
