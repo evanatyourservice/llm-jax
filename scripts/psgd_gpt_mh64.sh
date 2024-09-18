@@ -27,7 +27,7 @@ nohup python3 main_multihost.py \
     --model.block_size=2048 \
     --model.sliding_window_size=1024 \
     --model.scan_layers \
-    --model.scan_unroll=2 \
+    --model.scan_unroll=5 \
     --optimizer.type=psgd_affine \
     --optimizer.learning_rate=0.003 \
     --optimizer.warmup_steps=1000 \

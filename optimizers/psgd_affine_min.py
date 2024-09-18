@@ -132,13 +132,7 @@ def scale_by_affine(
             for k, (Ql, Qr), g, s in zip(keys, Qs, gs, flat_scanned_layers):
                 if s:
                     subkeys = jax.random.split(k, g.shape[0])
-                    new_Qs.append(
-                        jax.lax.map(
-                            lambda xs: update_precond_fn(*xs),
-                            (subkeys, Ql, Qr, g),
-                            batch_size=2,
-                        )
-                    )
+                    new_Qs.append(map_fn(update_precond_fn, subkeys, Ql, Qr, g))
                 else:
                     new_Qs.append(update_precond_fn(k, Ql, Qr, g))
             new_Qs = otu.tree_cast(new_Qs, precond_dtype)
@@ -159,11 +153,7 @@ def scale_by_affine(
         Qs = jax.lax.cond(
             jnp.logical_and(do_update, jax.random.uniform(subkey) < 0.01),
             lambda: [
-                (
-                    list(jax.lax.map(lambda xs: _balance(*xs), (Ql, Qr), batch_size=2))
-                    if s
-                    else list(_balance(Ql, Qr))
-                )
+                (list(map_fn(_balance, Ql, Qr)) if s else list(_balance(Ql, Qr)))
                 for (Ql, Qr), s in zip(Qs, flat_scanned_layers)
             ],
             lambda: Qs,
@@ -173,13 +163,7 @@ def scale_by_affine(
         precond_gs = []
         for (Ql, Qr), g, s in zip(Qs, gs, flat_scanned_layers):
             if s:
-                precond_gs.append(
-                    jax.lax.map(
-                        lambda xs: _precond_grad_affine_math(*xs),
-                        (Ql, Qr, g),
-                        batch_size=2,
-                    )
-                )
+                precond_gs.append(map_fn(_precond_grad_affine_math, Ql, Qr, g))
             else:
                 precond_gs.append(_precond_grad_affine_math(Ql, Qr, g))
 
@@ -672,3 +656,7 @@ def _precond_grad_affine_math(Ql, Qr, grad):
             )
         else:  # Ql.ndim=1 and Qr.ndim=1:
             return (Ql * Ql.conj())[:, None] * grad * (Qr * Qr.conj())
+
+
+def map_fn(fn: Callable, *inputs):
+    return jax.vmap(fn)(*inputs)

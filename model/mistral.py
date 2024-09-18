@@ -1,3 +1,4 @@
+from functools import partial
 import jax
 import jax.numpy as jnp
 from jax.sharding import NamedSharding as NS, Mesh, PartitionSpec as P
@@ -19,6 +20,7 @@ class Embedder(nn.Module):
     vocab_size: int
     embed_dim: int
     mesh: Mesh
+
     def setup(self):
         self.embedding_table = self.param(
             "embedding", initializer, (self.vocab_size, self.embed_dim)
@@ -199,13 +201,15 @@ class Mistral(nn.Module):
 
     @nn.compact
     def __call__(self, tokens):
-        embedder = nn.remat(Embedder)(
+        remat_fn = partial(nn.remat, policy=jax.checkpoint_policies.checkpoint_dots)
+
+        embedder = remat_fn(Embedder)(
             self.config.vocab_size, self.config.num_embeds, self.mesh
         )
 
         x = embedder.encode(tokens)
 
-        RemattedBlock = nn.remat(Block, prevent_cse=not self.config.scan_layers)
+        RemattedBlock = remat_fn(Block, prevent_cse=not self.config.scan_layers)
 
         if self.config.scan_layers:
             x, _ = nn.scan(
