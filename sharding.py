@@ -94,13 +94,7 @@ def fsdp_sharding(axis, min_size_to_shard_mb=1, psgd_reshaped: bool = False):
                     print(f"sharding {name}:{shape} to {new_sharding}")
                     return tuple(new_sharding)
             elif any(
-                s in name
-                for s in [
-                    "down_kernel",
-                    "k_kernel",
-                    "v_kernel",
-                    "q_kernel",
-                ]
+                s in name for s in ["down_kernel", "k_kernel", "v_kernel", "q_kernel"]
             ):
                 # shard these on first dim (-2)
                 if shape[-2] % axis_size == 0:

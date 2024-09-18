@@ -27,7 +27,7 @@ import orbax.checkpoint as ocp
 
 from dataset import prepare_hellaswag, fineweb_edu_dataset, _fw_shard_names
 from configs import TrainConfig
-from optimizers.psgd_affine_new import affine, get_reshaped_params_shapes
+from optimizers.psgd_affine_min import affine
 from optimizers.tearfree import optimizer as tearfree_opt
 from optimizers.tearfree import shampoo, second_order
 from optimizers.adam import adamw
@@ -162,7 +162,6 @@ def main(config: TrainConfig):
                     mu_dtype=jnp.bfloat16,
                     precond_dtype=config.optimizer.preconditioner_dtype,
                     precision="tensorfloat32",
-                    best_effort_vmap=config.optimizer.best_effort_vmap,
                     scanned_layers=scanned_layers,
                 )
             )
@@ -213,23 +212,16 @@ def main(config: TrainConfig):
 
     def init_train_state(key):
         """Initialize the train state."""
-        if config.remat:
-            model = nn.remat(
-                Mistral, policy=jax.checkpoint_policies.dots_with_no_batch_dims_saveable
-            )(config.model)
-        else:
-            model = Mistral(config.model)
+        model = Mistral(config.model, mesh)
 
-        dummy_tokens = jnp.zeros(
-            (config.batch_size, config.model.block_size), dtype=jnp.uint16
-        )
+        dummy_tokens = jnp.zeros((1, config.model.block_size), dtype=jnp.uint16)
 
         params = model.init(key, dummy_tokens)
         params = otu.tree_cast(params, config.params_dtype)
 
         # which layers are scanned
         if config.model.scan_layers:
-            all_false = jax.tree.map(lambda _: False, train_state.params)
+            all_false = jax.tree.map(lambda _: False, params)
             scanned_layers = flax.traverse_util.ModelParamTraversal(
                 lambda p, _: "scan" in p
             ).update(lambda _: True, all_false)
@@ -257,7 +249,7 @@ def main(config: TrainConfig):
 
     # sharding rule fn
     op = fsdp_sharding("fsdp", min_size_to_shard_mb=config.min_size_to_shard_mb)
-    
+
     train_state_sharding, _ = infer_sharding(
         params=train_state_shapes, mesh=mesh, op=op
     )
@@ -361,6 +353,7 @@ def main(config: TrainConfig):
         before_dtypes = jax.tree.map(lambda x: x.dtype, state)
 
         loss, grads = jax.value_and_grad(loss_fn)(state.params)
+        grads = jax.lax.with_sharding_constraint(grads, train_state_sharding.params)
 
         if config.optimizer.gradient_accumulation_steps > 1:
             updates, new_opt_state = state.tx.update(

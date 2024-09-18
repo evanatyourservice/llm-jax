@@ -8,7 +8,7 @@ export XLA_FLAGS="--xla_force_host_platform_device_count=2"
 
 python3 main.py \
     --out_dir=/Users/evanwalters/llm_testing/run_checkpointing_test \
-    --attempt_to_load_checkpoint \
+    --no_attempt_to_load_checkpoint \
     --compute_dtype=float32 \
     --params_dtype=float32 \
     --min_size_to_shard_mb=0 \
@@ -16,7 +16,6 @@ python3 main.py \
     --hellaswag_eval_interval=100 \
     --checkpoint_interval=100 \
     --batch_size=2 \
-    --remat \
     --wandb.mode=offline \
     --optimizer.gradient_accumulation_steps=2 \
     --optimizer.type=affine \
@@ -26,7 +25,6 @@ python3 main.py \
     --optimizer.preconditioner_update_probability=0.05 \
     --optimizer.precond_init_scale=0.01 \
     --optimizer.precond_lr=0.1 \
-    --optimizer.best_effort_vmap \
     --model.block_size=64 \
     --model.sliding_window_size=32 \
     --model.num_layers=2 \
@@ -35,4 +33,5 @@ python3 main.py \
     --model.head_dim=4 \
     --model.hidden_dim=8 \
     --model.num_kv_heads=2 \
-    --model.scan_attention
+    --model.scan_layers \
+    --model.scan_unroll=1

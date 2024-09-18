@@ -17,7 +17,6 @@ class ModelConfig:
     rope_theta: float = 1000000.0
     scan_layers: bool = False
     scan_unroll: int = 1
-    scan_attention: bool = False
 
 
 @dataclass(frozen=True)
@@ -62,7 +61,7 @@ class OptimizerConfig:
     precond_lr: float = 0.1
     precond_init_scale: Optional[float] = 0.0001
     preconditioner_dtype: str = "float32"
-    best_effort_vmap: bool = True
+    best_effort_vmap: bool = False
 
 
 @dataclass(frozen=True)
@@ -114,7 +113,6 @@ class TrainConfig:
     train_steps: int = 150000
     compute_dtype: str = "float32"
     params_dtype: str = "float32"
-    remat: bool = True
     optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
     wandb: WandbConfig = field(default_factory=WandbConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
