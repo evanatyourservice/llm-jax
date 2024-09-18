@@ -11,7 +11,6 @@ gcloud compute tpus tpu-vm ssh --zone "us-central2-b" "node-1" --project "distri
 --worker=all --command "bash -c \"
 export WANDB_API_KEY=$WANDB_API_KEY 
 export HF_TOKEN=$HF_TOKEN
-export LIBTPU_INIT_ARGS="--xla_enable_async_all_gather=true"
 cd llm-jax
 nohup python3 main_multihost.py \
     --experiment_name=$EXPERIMENT \
@@ -20,11 +19,10 @@ nohup python3 main_multihost.py \
     --hellaswag_eval_interval=1000 \
     --checkpoint_interval=1000 \
     --train_steps=150000 \
-    --batch_size=256 \
-    --optimizer.gradient_accumulation_steps=2 \
+    --batch_size=128 \
+    --optimizer.gradient_accumulation_steps=4 \
     --compute_dtype=bfloat16 \
     --params_dtype=bfloat16 \
-    --remat \
     --model.block_size=2048 \
     --model.sliding_window_size=1024 \
     --model.num_layers=32 \
@@ -32,7 +30,7 @@ nohup python3 main_multihost.py \
     --model.num_kv_heads=8 \
     --model.head_dim=64 \
     --model.num_embeds=2048 \
-    --model.hidden_dim=8192 \
+    --model.hidden_dim=7168 \
     --model.scan_attention \
     --optimizer.type=psgd_affine \
     --optimizer.learning_rate=0.001 \

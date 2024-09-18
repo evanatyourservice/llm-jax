@@ -155,7 +155,7 @@ def scale_by_affine(
             new_Qs = otu.tree_cast(new_Qs, precond_dtype)
             return new_Qs
 
-        Qs = _efficient_cond(do_update, update_preconditioner, Qs)
+        Qs = jax.lax.cond(do_update, update_preconditioner, lambda: Qs)
 
         # balance preconditioners about every 100 updates
         def _balance(Ql, Qr):
@@ -167,7 +167,7 @@ def scale_by_affine(
             new_Qr = Qr * rho
             return new_Ql, new_Qr
 
-        Qs = _efficient_cond(
+        Qs = jax.lax.cond(
             jnp.logical_and(do_update, jax.random.uniform(subkey) < 0.01),
             lambda: [
                 (
@@ -177,7 +177,7 @@ def scale_by_affine(
                 )
                 for (Ql, Qr), s in zip(Qs, flat_scanned_layers)
             ],
-            Qs,
+            lambda: Qs,
         )
 
         # precondition gradients
