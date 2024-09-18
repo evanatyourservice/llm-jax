@@ -452,6 +452,7 @@ def _shape_as_matrix(arr: jax.Array, scanning_array: bool) -> tuple:
             q = tuple(
                 pair[1] for pair in sorted([(k, i) for (i, k) in enumerate(opt_p)])
             )
+            print(f"Permuting {arr.shape} to {opt_p} and reshaping to {opt_s}")
             return (
                 lambda u, permute=opt_p, shape=mtx_shape: reshape(
                     transpose(u, permute), shape

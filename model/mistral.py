@@ -68,19 +68,24 @@ class Attention(nn.Module):
         q_params = self.param(
             "q_kernel",
             initializer,
-            (C, self.num_heads // self.num_kv_heads, self.num_kv_heads, self.head_dim),
+            (C, self.num_heads * self.head_dim),
         )
         k_params = self.param(
-            "k_kernel", initializer, (C, self.num_kv_heads, self.head_dim)
+            "k_kernel", initializer, (C, self.num_kv_heads * self.head_dim)
         )
         v_params = self.param(
-            "v_kernel", initializer, (C, self.num_kv_heads, self.head_dim)
+            "v_kernel", initializer, (C, self.num_kv_heads * self.head_dim)
         )
         out_params = self.param(
             "out_kernel",
             initializer,
-            (self.num_heads // self.num_kv_heads, self.num_kv_heads, self.head_dim, C),
+            (self.num_heads * self.head_dim, C),
         )
+
+        q_params = jnp.reshape(q_params, (C, self.num_heads // self.num_kv_heads, self.num_kv_heads, self.head_dim))
+        k_params = jnp.reshape(k_params, (C, self.num_kv_heads, self.head_dim))
+        v_params = jnp.reshape(v_params, (C, self.num_kv_heads, self.head_dim))
+        out_params = jnp.reshape(out_params, (self.num_heads // self.num_kv_heads, self.num_kv_heads, self.head_dim, C))
 
         if self.scan_attention:
             # first scan kv repeats, then scan heads
@@ -120,10 +125,11 @@ class MLP(nn.Module):
     def __call__(self, x):
         C = x.shape[-1]
 
-        up_kernel = self.param("up_kernel", initializer, (2, C, self.hidden_dim))
+        gate_kernel = self.param("gate_kernel", initializer, (C, self.hidden_dim))
+        up_kernel = self.param("up_kernel", initializer, (C, self.hidden_dim))
         down_kernel = self.param("down_kernel", initializer, (self.hidden_dim, C))
 
-        x = jax.vmap(jnp.dot, in_axes=(None, 0))(x, up_kernel)
+        x = jax.vmap(jnp.dot, in_axes=(None, 0))(x, jnp.stack([up_kernel, gate_kernel]))
         return jnp.dot(x[0] * nn.silu(x[1]), down_kernel)
 
 

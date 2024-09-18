@@ -21,7 +21,7 @@ nohup python3 main_multihost.py \
     --checkpoint_interval=1000 \
     --train_steps=150000 \
     --batch_size=256 \
-    --optimizer.gradient_accumulation_steps=4 \
+    --optimizer.gradient_accumulation_steps=2 \
     --compute_dtype=bfloat16 \
     --params_dtype=bfloat16 \
     --remat \
@@ -37,13 +37,13 @@ nohup python3 main_multihost.py \
     --optimizer.type=psgd_affine \
     --optimizer.learning_rate=0.001 \
     --optimizer.warmup_steps=1000 \
-    --optimizer.weight_decay=0.1 \
+    --optimizer.weight_decay=0.05 \
     --optimizer.grad_clip=1.0 \
     --optimizer.preconditioner_update_probability=0.04 \
     --optimizer.max_size_triangular=10000 \
     --optimizer.max_skew_triangular=10 \
-    --optimizer.precond_lr=0.3 \
-    --optimizer.precond_init_scale=0.01 \
+    --optimizer.precond_lr=0.2 \
+    --optimizer.precond_init_scale=0.1 \
     --optimizer.preconditioner_dtype=bfloat16 \
     --optimizer.best_effort_vmap \
     > nohup.out 2>&1 & 

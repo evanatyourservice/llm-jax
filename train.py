@@ -109,7 +109,7 @@ def main(config: TrainConfig):
         boundaries=[config.optimizer.warmup_steps],
     )
 
-    def make_opt(reshaped_params_sharding=None, scanned_layers=None):
+    def make_opt(scanned_layers=None):
         write_note(f"Using {config.optimizer.type} optimizer")
 
         def param_decay_mask(params):
@@ -162,7 +162,6 @@ def main(config: TrainConfig):
                     mu_dtype=jnp.bfloat16,
                     precond_dtype=config.optimizer.preconditioner_dtype,
                     precision="tensorfloat32",
-                    reshaped_params_sharding=reshaped_params_sharding,
                     best_effort_vmap=config.optimizer.best_effort_vmap,
                     scanned_layers=scanned_layers,
                 )
@@ -228,13 +227,23 @@ def main(config: TrainConfig):
         params = model.init(key, dummy_tokens)
         params = otu.tree_cast(params, config.params_dtype)
 
-        # delay optimizer creation to pass in preconditioner sharding
+        # which layers are scanned
+        if config.model.scan_layers:
+            all_false = jax.tree.map(lambda _: False, train_state.params)
+            scanned_layers = flax.traverse_util.ModelParamTraversal(
+                lambda p, _: "scan" in p
+            ).update(lambda _: True, all_false)
+        else:
+            scanned_layers = None
+
+        optimizer = make_opt(scanned_layers=scanned_layers)
+
         train_state = TrainState(
             step=0,
             apply_fn=model.apply,
             params=params,
-            tx=None,
-            opt_state=None,
+            tx=optimizer,
+            opt_state=optimizer.init(params),
             lr_fn=lr_schedule,
         )
         return train_state
@@ -246,9 +255,9 @@ def main(config: TrainConfig):
     # get train state shapes and shardings
     train_state_shapes = jax.eval_shape(init_train_state, rng)
 
-    # sharding rule fns
+    # sharding rule fn
     op = fsdp_sharding("fsdp", min_size_to_shard_mb=config.min_size_to_shard_mb)
-
+    
     train_state_sharding, _ = infer_sharding(
         params=train_state_shapes, mesh=mesh, op=op
     )
@@ -257,47 +266,6 @@ def main(config: TrainConfig):
     rng_init = reshard(rng, repl_sharding)
     train_state = jax.jit(init_train_state, out_shardings=train_state_sharding)(
         rng_init
-    )
-
-    # which layers are scanned
-    if config.model.scan_layers:
-        all_false = jax.tree.map(lambda _: False, train_state.params)
-        scanned_layers = flax.traverse_util.ModelParamTraversal(
-            lambda p, _: "scan" in p
-        ).update(lambda _: True, all_false)
-    else:
-        scanned_layers = None
-
-    # make optimizer and get its shardings, init psgd with scanned arrays
-    optimizer = make_opt(scanned_layers=scanned_layers)
-
-    opt_state_shapes = jax.eval_shape(optimizer.init, train_state.params)
-    opt_state_sharding, _ = infer_sharding(params=opt_state_shapes, mesh=mesh, op=op)
-
-    opt_state = jax.jit(optimizer.init, out_shardings=opt_state_sharding)(
-        train_state.params
-    )
-
-    reshaped_params_shapes = jax.eval_shape(
-        partial(get_reshaped_params_shapes, scanned_layers=scanned_layers),
-        train_state.params,
-    )
-    reshaped_op = fsdp_sharding(
-        "fsdp", min_size_to_shard_mb=config.min_size_to_shard_mb, psgd_reshaped=True
-    )
-    reshaped_params_sharding, _ = infer_sharding(
-        params=reshaped_params_shapes, mesh=mesh, op=reshaped_op
-    )
-
-    # remake optimizer with reshaped params sharding and scanned layers passed in
-    optimizer = make_opt(
-        reshaped_params_sharding=reshaped_params_sharding, scanned_layers=scanned_layers
-    )
-
-    # finish making train state (pass in optimizer and opt_state)
-    train_state = train_state.replace(tx=optimizer, opt_state=opt_state)
-    train_state_sharding = train_state_sharding.replace(
-        tx=optimizer, opt_state=opt_state_sharding
     )
 
     # load checkpoint

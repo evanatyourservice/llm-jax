@@ -82,8 +82,8 @@ def fsdp_sharding(axis, min_size_to_shard_mb=1, psgd_reshaped: bool = False):
                 for s in [
                     "preconditioner",
                     "out_kernel",
-                    "up_kernel",
                     "gate_kernel",
+                    "up_kernel",
                     "embedding",
                 ]
             ):
@@ -93,36 +93,20 @@ def fsdp_sharding(axis, min_size_to_shard_mb=1, psgd_reshaped: bool = False):
                     new_sharding[-1] = axis
                     print(f"sharding {name}:{shape} to {new_sharding}")
                     return tuple(new_sharding)
-            elif "down_kernel" in name:
-                # shard mlp down_kernel on first dim (-2)
+            elif any(
+                s in name
+                for s in [
+                    "down_kernel",
+                    "k_kernel",
+                    "v_kernel",
+                    "q_kernel",
+                ]
+            ):
+                # shard these on first dim (-2)
                 if shape[-2] % axis_size == 0:
                     new_sharding[-2] = axis
                     print(f"sharding {name}:{shape} to {new_sharding}")
                     return tuple(new_sharding)
-            elif "k_kernel" in name or "v_kernel" in name:
-                # shard k_kernel and v_kernel on first dim (-3)
-                if psgd_reshaped:  # matrix
-                    if shape[-2] % axis_size == 0:
-                        new_sharding[-2] = axis
-                        print(f"sharding {name}:{shape} to {new_sharding}")
-                        return tuple(new_sharding)
-                else:
-                    if shape[-3] % axis_size == 0:
-                        new_sharding[-3] = axis
-                        print(f"sharding {name}:{shape} to {new_sharding}")
-                        return tuple(new_sharding)
-            elif "q_kernel" in name:
-                # shard q_kernel on first dim (-4)
-                if psgd_reshaped:  # matrix
-                    if shape[-2] % axis_size == 0:
-                        new_sharding[-2] = axis
-                        print(f"sharding {name}:{shape} to {new_sharding}")
-                        return tuple(new_sharding)
-                else:
-                    if shape[-4] % axis_size == 0:
-                        new_sharding[-4] = axis
-                        print(f"sharding {name}:{shape} to {new_sharding}")
-                        return tuple(new_sharding)
             else:
                 # Partition along largest axis that is divisible and not taken starting
                 # from last dimension.
