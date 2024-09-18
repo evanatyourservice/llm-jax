@@ -223,7 +223,7 @@ def main(config: TrainConfig):
         if config.model.scan_layers:
             all_false = jax.tree.map(lambda _: False, params)
             scanned_layers = flax.traverse_util.ModelParamTraversal(
-                lambda p, _: "scan" in p
+                lambda p, _: "scan" in p or "Scan" in p
             ).update(lambda _: True, all_false)
         else:
             scanned_layers = None

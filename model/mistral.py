@@ -1,12 +1,7 @@
-from functools import partial
-
-import flax
-import flax.linen
 import jax
 import jax.numpy as jnp
 from jax.sharding import NamedSharding as NS, Mesh, PartitionSpec as P
 import flax.linen as nn
-import flax.linen.partitioning as nnp
 
 from configs import ModelConfig
 from model.rotary_embedding import apply_rotary_embedding, sine_table
@@ -166,6 +161,7 @@ class Block(nn.Module):
     hidden_dim: int
     rope_theta: float
     mesh: Mesh
+    use_scan: bool = False
 
     @nn.compact
     def __call__(self, x):
@@ -189,6 +185,9 @@ class Block(nn.Module):
         x = x + mlp_out
 
         x = constrain(x, self.mesh, P("fsdp"))
+
+        if self.use_scan:
+            return (x, None)
         return x
 
 
@@ -200,15 +199,21 @@ class Mistral(nn.Module):
 
     @nn.compact
     def __call__(self, tokens):
-        embedder = nnp.remat(Embedder)(
+        embedder = nn.remat(Embedder)(
             self.config.vocab_size, self.config.num_embeds, self.mesh
         )
 
         x = embedder.encode(tokens)
 
+        RemattedBlock = nn.remat(Block, prevent_cse=not self.config.scan_layers)
+
         if self.config.scan_layers:
-            x = flax_scan(
-                nnp.remat(Block), self.config.num_layers, unroll=self.config.scan_unroll
+            x, _ = nn.scan(
+                RemattedBlock,
+                variable_axes={True: 0},
+                split_rngs={"params": True},
+                length=self.config.num_layers,
+                unroll=self.config.scan_unroll,
             )(
                 self.config.num_heads,
                 self.config.num_kv_heads,
@@ -217,12 +222,13 @@ class Mistral(nn.Module):
                 self.config.hidden_dim,
                 self.config.rope_theta,
                 self.mesh,
+                use_scan=True,
             )(
                 x
             )
         else:
             for _ in range(self.config.num_layers):
-                x = nnp.remat(Block)(
+                x = RemattedBlock(
                     self.config.num_heads,
                     self.config.num_kv_heads,
                     self.config.head_dim,
@@ -240,50 +246,3 @@ class Mistral(nn.Module):
         logits = jnp.tanh(logits / 30) * 30
 
         return logits
-
-
-def _flax_scan(
-    body_fn,
-    length: int,
-    variable_broadcast=False,
-    variable_carry=False,
-    variable_axes={True: 0},
-    split_rngs={True: True},
-    unroll: int = 1,
-):
-    scan_fn = partial(
-        flax.core.lift.scan,
-        variable_broadcast=variable_broadcast,
-        variable_carry=variable_carry,
-        variable_axes=variable_axes,
-        split_rngs=split_rngs,
-        unroll=unroll,
-    )
-
-    def wrapper(scope, carry):
-        return body_fn(scope, carry), None
-
-    fn = lambda scope, c: scan_fn(wrapper, length=length)(scope, c)[0]
-
-    return fn
-
-
-def flax_scan(
-    target,
-    length: int,
-    variable_broadcast=False,
-    variable_carry=False,
-    variable_axes={True: 0},
-    split_rngs={True: True},
-    unroll: int = 1,
-):
-    return nn.transforms.lift_transform(
-        _flax_scan,
-        target,
-        length=length,
-        variable_broadcast=variable_broadcast,
-        variable_carry=variable_carry,
-        variable_axes=variable_axes,
-        split_rngs=split_rngs,
-        unroll=unroll,
-    )
