@@ -127,8 +127,8 @@ def main(config: TrainConfig):
 
         def update_prob_schedule(n):
             """Exponentially anneal PSGD update probability at beginning of training."""
-            decay = 0.001  # 0.001 decays to min_prob at around 5000 steps
-            flat_start = 200
+            decay = 0.001  # 0.001 decays to min_prob in about 5000 steps
+            flat_start = 200  # hold at 1.0 for this many steps
             min_prob = config.optimizer.preconditioner_update_probability
             max_prob = 1.0
             return jnp.minimum(
@@ -163,6 +163,7 @@ def main(config: TrainConfig):
                     precond_dtype=config.optimizer.preconditioner_dtype,
                     precision="tensorfloat32",
                     scanned_layers=scanned_layers,
+                    scan_unroll=config.model.scan_unroll,
                 )
             )
         elif config.optimizer.type in ["shampoo", "caspr"]:
