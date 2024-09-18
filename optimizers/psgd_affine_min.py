@@ -146,7 +146,7 @@ def scale_by_affine(
             new_Qs = otu.tree_cast(new_Qs, precond_dtype)
             return new_Qs
 
-        Qs = jax.lax.cond(do_update, update_preconditioner, lambda: Qs)
+        new_Qs = jax.lax.cond(do_update, update_preconditioner, lambda: Qs)
 
         # balance preconditioners about every 100 updates
         def _balance(Ql, Qr):
@@ -158,13 +158,13 @@ def scale_by_affine(
             new_Qr = Qr * rho
             return new_Ql, new_Qr
 
-        Qs = jax.lax.cond(
+        new_Qs = jax.lax.cond(
             jnp.logical_and(do_update, jax.random.uniform(subkey) < 0.01),
             lambda: [
                 (list(map_fn(_balance, Ql, Qr)) if s else list(_balance(Ql, Qr)))
-                for (Ql, Qr), s in zip(Qs, flat_scanned_layers)
+                for (Ql, Qr), s in zip(new_Qs, flat_scanned_layers)
             ],
-            lambda: Qs,
+            lambda: new_Qs,
         )
 
         # precondition gradients
@@ -189,12 +189,12 @@ def scale_by_affine(
         # reshape updates back to original shapes and unflatten pytrees
         updates = [r[1](u) for u, r in zip(precond_gs, affine_reshapers)]
         updates = grads_structure.unflatten(updates)
-        Qs = grads_structure.unflatten(Qs)
+        new_Qs = grads_structure.unflatten(new_Qs)
 
         # dtypes and new state
         mu = otu.tree_cast(mu, mu_dtype)
-        Qs = otu.tree_cast(Qs, precond_dtype)
-        state = dict(count=count_inc, key=key, mu=mu, Qs_preconditioners=Qs)
+        new_Qs = otu.tree_cast(new_Qs, precond_dtype)
+        state = dict(count=count_inc, key=key, mu=mu, Qs_preconditioners=new_Qs)
 
         return updates, state
 
