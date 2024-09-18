@@ -201,15 +201,13 @@ class Mistral(nn.Module):
 
     @nn.compact
     def __call__(self, tokens):
-        remat_fn = partial(nn.remat, policy=jax.checkpoint_policies.checkpoint_dots)
-
-        embedder = remat_fn(Embedder)(
+        embedder = nn.remat(Embedder)(
             self.config.vocab_size, self.config.num_embeds, self.mesh
         )
 
         x = embedder.encode(tokens)
 
-        RemattedBlock = remat_fn(Block, prevent_cse=not self.config.scan_layers)
+        RemattedBlock = nn.remat(Block, prevent_cse=not self.config.scan_layers)
 
         if self.config.scan_layers:
             x, _ = nn.scan(
