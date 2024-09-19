@@ -210,7 +210,9 @@ class Mistral(nn.Module):
 
     @nn.compact
     def __call__(self, tokens):
-        embedder = Embedder(self.config.vocab_size, self.config.num_embeds, self.mesh)
+        embedder = nn.remat(Embedder)(
+            self.config.vocab_size, self.config.num_embeds, self.mesh
+        )
 
         x = embedder.encode(tokens)
 

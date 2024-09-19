@@ -80,12 +80,7 @@ def fsdp_sharding(axis, min_size_to_shard_mb=1, psgd_reshaped: bool = False):
                 pass
             elif any(
                 s in name
-                for s in [
-                    "preconditioner",
-                    "embedding",
-                    "out_kernel",
-                    "down_kernel",
-                ]
+                for s in ["preconditioner", "embedding", "out_kernel", "down_kernel"]
             ):
                 # shard these on last dim, including PSGD preconditioners so expanding
                 # axes stay sharded while applying preconditioner
