@@ -14,30 +14,6 @@ initializer = nn.initializers.normal(0.02)
 constrain = lambda x, mesh, spec: jax.lax.with_sharding_constraint(x, NS(mesh, spec))
 
 
-class Embedder(nn.Module):
-    """Embedder module."""
-
-    vocab_size: int
-    embed_dim: int
-    mesh: Mesh
-
-    def setup(self):
-        self.embedding_table = self.param(
-            "embedding", initializer, (self.vocab_size, self.embed_dim)
-        )
-
-    def encode(self, x: jax.Array) -> jax.Array:
-        x = self.embedding_table[(x,)]
-        x = constrain(x, self.mesh, P("fsdp"))
-        x *= jnp.sqrt(self.embed_dim).astype(x.dtype)
-        return x
-
-    def decode(self, x: jax.Array) -> jax.Array:
-        x = jnp.dot(x, self.embedding_table.T)
-        x = constrain(x, self.mesh, P("fsdp"))
-        return x
-
-
 class RMSNorm(nn.Module):
     """RMSNorm layer.
 
@@ -53,6 +29,39 @@ class RMSNorm(nn.Module):
         scale = jnp.expand_dims(scale, axis=range(len(x.shape) - 1))
         normed_inputs = normed_inputs * (1 + scale)
         return normed_inputs
+
+
+class Embedder(nn.Module):
+    """Embedder module."""
+
+    vocab_size: int
+    embed_dim: int
+    mesh: Mesh
+
+    def setup(self):
+        self.embedding_table = self.param(
+            "embedding", initializer, (self.vocab_size, self.embed_dim)
+        )
+        self.final_norm = RMSNorm()
+
+    def encode(self, x: jax.Array) -> jax.Array:
+        x = self.embedding_table[(x,)]
+        x = constrain(x, self.mesh, P("fsdp"))
+
+        x *= jnp.sqrt(self.embed_dim).astype(x.dtype)
+
+        return x
+
+    def decode(self, x: jax.Array) -> jax.Array:
+        x = self.final_norm(x)
+
+        x = jnp.dot(x, self.embedding_table.T)
+        x = constrain(x, self.mesh, P("fsdp"))
+
+        # gemma style soft cap
+        x = jnp.tanh(x / 30) * 30
+
+        return x
 
 
 class Attention(nn.Module):
@@ -201,9 +210,7 @@ class Mistral(nn.Module):
 
     @nn.compact
     def __call__(self, tokens):
-        embedder = nn.remat(Embedder)(
-            self.config.vocab_size, self.config.num_embeds, self.mesh
-        )
+        embedder = Embedder(self.config.vocab_size, self.config.num_embeds, self.mesh)
 
         x = embedder.encode(tokens)
 
@@ -240,11 +247,6 @@ class Mistral(nn.Module):
                     self.mesh,
                 )(x)
 
-        x = RMSNorm()(x)
-
         logits = embedder.decode(x)
-
-        # gemma style soft cap
-        logits = jnp.tanh(logits / 30) * 30
 
         return logits

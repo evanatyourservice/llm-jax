@@ -161,7 +161,7 @@ def main(config: TrainConfig):
                     precond_init_scale=config.optimizer.precond_init_scale,
                     mu_dtype=jnp.bfloat16,
                     precond_dtype=config.optimizer.preconditioner_dtype,
-                    precision="tensorfloat32",
+                    precision="bfloat16",
                     scanned_layers=scanned_layers,
                     scan_unroll=config.model.scan_unroll,
                 )
@@ -460,40 +460,41 @@ def main(config: TrainConfig):
     grad_norms = []
     start_time = None  # skip first loop for compile
     while curr_step < config.train_steps:
-        try:
-            tokens = next(train_ds)
-        except StopIteration:
-            print(
-                f"Current dataset subshard exhausted on process "
-                f"{jax.process_index()}, loading next subshard"
-            )
-            del train_ds
+        with jax.profiler.StepTraceAnnotation("train", step_num=curr_step):
+            try:
+                tokens = next(train_ds)
+            except StopIteration:
+                print(
+                    f"Current dataset subshard exhausted on process "
+                    f"{jax.process_index()}, loading next subshard"
+                )
+                del train_ds
 
-            # delete huggingface datasets cache to save space
-            if platform == "tpu":
-                hf_cache_dir = "/dev/shm/huggingface_cache"
-            else:
-                hf_cache_dir = os.path.expanduser("~/.cache/huggingface/datasets")
-            if os.path.exists(hf_cache_dir):
-                print(f"Removing {hf_cache_dir} to save space")
-                try:
-                    shutil.rmtree(hf_cache_dir)
-                except Exception as e:
-                    print(f"Error removing {hf_cache_dir}: {e}")
+                # delete huggingface datasets cache to save space
+                if platform == "tpu":
+                    hf_cache_dir = "/dev/shm/huggingface_cache"
+                else:
+                    hf_cache_dir = os.path.expanduser("~/.cache/huggingface/datasets")
+                if os.path.exists(hf_cache_dir):
+                    print(f"Removing {hf_cache_dir} to save space")
+                    try:
+                        shutil.rmtree(hf_cache_dir)
+                    except Exception as e:
+                        print(f"Error removing {hf_cache_dir}: {e}")
 
-            # start next subshard or restart whole dataset
-            shard_idx += 1
-            if jax.process_count() == 1:
-                ds_name = None
-            else:
-                ds_name = process_shard[shard_idx % len(process_shard)]
-            train_ds = make_train_ds(fineweb_edu_name=ds_name)
+                # start next subshard or restart whole dataset
+                shard_idx += 1
+                if jax.process_count() == 1:
+                    ds_name = None
+                else:
+                    ds_name = process_shard[shard_idx % len(process_shard)]
+                train_ds = make_train_ds(fineweb_edu_name=ds_name)
 
-            tokens = next(train_ds)
+                tokens = next(train_ds)
 
-        loss, train_state, g_norm, lr = train_step_jit(train_state, tokens)
-        train_losses.append(jax.device_get(loss).item())
-        grad_norms.append(jax.device_get(g_norm).item())
+            loss, train_state, g_norm, lr = train_step_jit(train_state, tokens)
+            train_losses.append(jax.device_get(loss).item())
+            grad_norms.append(jax.device_get(g_norm).item())
 
         curr_step = get_step(train_state)
         with jax.transfer_guard("allow"):
@@ -505,6 +506,15 @@ def main(config: TrainConfig):
             # save checkpoint
             if curr_step > 0 and advanced_step:
                 async_checkpoint_manager.save(curr_step, train_state)
+
+        if config.profile and curr_step == 10 and advanced_step:
+            jax.profiler.start_trace(config.out_dir + "/profile")
+        if (
+            config.profile
+            and curr_step == 10 + config.n_profile_steps
+            and advanced_step
+        ):
+            jax.profiler.stop_trace()
 
         # logging
         if curr_step % 10 == 0 and curr_step > 0 and advanced_step:

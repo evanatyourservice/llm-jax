@@ -94,6 +94,8 @@ class TrainConfig:
         train_steps: Total number of training iterations.
         compute_dtype: Compute dtype.
         params_dtype: Params dtype.
+        profile: Whether to profile the training.
+        n_profile_steps: Number of steps to profile.
         optimizer: Optimizer config.
         wandb: Wandb logging config.
         model: Model config.
@@ -113,6 +115,8 @@ class TrainConfig:
     train_steps: int = 150000
     compute_dtype: str = "float32"
     params_dtype: str = "float32"
+    profile: bool = False
+    n_profile_steps: int = 5
     optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
     wandb: WandbConfig = field(default_factory=WandbConfig)
     model: ModelConfig = field(default_factory=ModelConfig)

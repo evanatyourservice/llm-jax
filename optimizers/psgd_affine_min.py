@@ -53,11 +53,15 @@ def scale_by_affine(
     mu_dtype = canonicalize_dtype(mu_dtype)
     precond_dtype = canonicalize_dtype(precond_dtype)
 
-    # def map_fn(fn: Callable, *inputs):
-    #     scan_body = lambda _, x: (None, fn(*x))
-    #     return jax.lax.scan(scan_body, None, inputs, unroll=scan_unroll)[1]
     def map_fn(fn: Callable, *inputs):
-        return jax.vmap(fn)(*inputs)
+        style = "vmap"
+        if style == "scan":
+            scan_body = lambda _, x: (None, fn(*x))
+            return jax.lax.scan(scan_body, None, inputs, unroll=scan_unroll)[1]
+        elif style == "map":
+            return jax.lax.map(lambda xs: fn(*xs), inputs, batch_size=8)
+        elif style == "vmap":
+            return jax.vmap(fn)(*inputs)
 
     def init_fn(params):
         key = jax.random.PRNGKey(36)

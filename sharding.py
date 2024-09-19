@@ -76,6 +76,7 @@ def fsdp_sharding(axis, min_size_to_shard_mb=1, psgd_reshaped: bool = False):
         ):
             new_sharding = [None for _ in shape]
             if "scale" in name:
+                # norm layers
                 pass
             elif any(
                 s in name

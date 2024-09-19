@@ -17,6 +17,8 @@ python3 main.py \
     --checkpoint_interval=100 \
     --batch_size=2 \
     --wandb.mode=offline \
+    --profile \
+    --n_profile_steps=5 \
     --optimizer.gradient_accumulation_steps=2 \
     --optimizer.type=affine \
     --optimizer.learning_rate=0.001 \

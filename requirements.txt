@@ -14,3 +14,4 @@ google-cloud-storage
 orbax-checkpoint
 sentencepiece
 torchinfo
+tensorboard-plugin-profile

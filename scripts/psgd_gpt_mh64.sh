@@ -24,6 +24,8 @@ nohup python3 main_multihost.py \
     --optimizer.gradient_accumulation_steps=1 \
     --compute_dtype=bfloat16 \
     --params_dtype=bfloat16 \
+    --profile \
+    --n_profile_steps=5 \
     --model.block_size=2048 \
     --model.sliding_window_size=1024 \
     --model.scan_layers \
