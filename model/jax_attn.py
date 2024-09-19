@@ -1,4 +1,6 @@
-"""Copied from jax for now."""
+"""Copied from jax for now.
+
+Seems pretty well optimized based on profiling."""
 
 import numpy as np
 

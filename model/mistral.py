@@ -74,7 +74,7 @@ class Attention(nn.Module):
     mesh: Mesh
 
     @nn.compact
-    def __call__(self, x, mask):
+    def __call__(self, x):
         B, T, C = x.shape
 
         q_params = self.param(
@@ -158,15 +158,8 @@ class Block(nn.Module):
             self.mesh,
         )
 
-        attn_mask = nn.make_causal_mask(x[:1, :, 0], dtype=jnp.bool)
-        all_ones = jnp.ones_like(attn_mask, dtype=jnp.bool)
-        sliding_mask = jnp.triu(all_ones, -1 * self.sliding_window_size + 1) * jnp.tril(
-            all_ones, self.sliding_window_size - 1
-        )
-        attn_mask = (sliding_mask * attn_mask).astype(jnp.bool)
-
         attn_in = RMSNorm()(x)
-        attn_out = attn_layer(attn_in, attn_mask)
+        attn_out = attn_layer(attn_in)
         x = x + attn_out
 
         mlp_in = RMSNorm()(x)
