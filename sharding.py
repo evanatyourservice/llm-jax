@@ -82,10 +82,9 @@ def fsdp_sharding(axis, min_size_to_shard_mb=1, psgd_reshaped: bool = False):
                 s in name
                 for s in [
                     "preconditioner",
-                    "out_kernel",
-                    "gate_kernel",
-                    "up_kernel",
                     "embedding",
+                    "out_kernel",
+                    "down_kernel",
                 ]
             ):
                 # shard these on last dim, including PSGD preconditioners so expanding
@@ -94,14 +93,31 @@ def fsdp_sharding(axis, min_size_to_shard_mb=1, psgd_reshaped: bool = False):
                     new_sharding[-1] = axis
                     print(f"sharding {name}:{shape} to {new_sharding}")
                     return tuple(new_sharding)
+                else:
+                    print(
+                        f"WARNING: Parameter {name}:{shape} is not sharded because the "
+                        f"last dimension is not divisible by the axis size {axis_size}"
+                    )
             elif any(
-                s in name for s in ["down_kernel", "k_kernel", "v_kernel", "q_kernel"]
+                s in name
+                for s in [
+                    "q_kernel",
+                    "k_kernel",
+                    "v_kernel",
+                    "gate_kernel",
+                    "up_kernel",
+                ]
             ):
                 # shard these on first dim (-2)
                 if shape[-2] % axis_size == 0:
                     new_sharding[-2] = axis
                     print(f"sharding {name}:{shape} to {new_sharding}")
                     return tuple(new_sharding)
+                else:
+                    print(
+                        f"WARNING: Parameter {name}:{shape} is not sharded because the "
+                        f"first dimension is not divisible by the axis size {axis_size}"
+                    )
             else:
                 # Partition along largest axis that is divisible and not taken starting
                 # from last dimension.

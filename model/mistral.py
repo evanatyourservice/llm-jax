@@ -1,4 +1,3 @@
-from functools import partial
 import jax
 import jax.numpy as jnp
 from jax.sharding import NamedSharding as NS, Mesh, PartitionSpec as P
@@ -39,13 +38,13 @@ class Embedder(nn.Module):
     mesh: Mesh
 
     def setup(self):
-        self.embedding_table = self.param(
+        self.embedding = self.param(
             "embedding", initializer, (self.vocab_size, self.embed_dim)
         )
         self.final_norm = RMSNorm()
 
     def encode(self, x: jax.Array) -> jax.Array:
-        x = self.embedding_table[(x,)]
+        x = jnp.take(self.embedding, x, axis=0)
         x = constrain(x, self.mesh, P("fsdp"))
 
         x *= jnp.sqrt(self.embed_dim).astype(x.dtype)
@@ -55,7 +54,7 @@ class Embedder(nn.Module):
     def decode(self, x: jax.Array) -> jax.Array:
         x = self.final_norm(x)
 
-        x = jnp.dot(x, self.embedding_table.T)
+        x = jnp.dot(x, self.embedding.T)
         x = constrain(x, self.mesh, P("fsdp"))
 
         # gemma style soft cap
@@ -77,7 +76,7 @@ class Attention(nn.Module):
 
     @nn.compact
     def __call__(self, x, mask):
-        _, T, C = x.shape
+        B, T, C = x.shape
 
         q_params = self.param(
             "q_kernel", initializer, (C, self.num_heads * self.head_dim)
@@ -92,24 +91,19 @@ class Attention(nn.Module):
             "out_kernel", initializer, (self.num_heads * self.head_dim, C)
         )
 
-        q_params = jnp.reshape(
-            q_params,
-            (C, self.num_heads // self.num_kv_heads, self.num_kv_heads, self.head_dim),
-        )
-        k_params = jnp.reshape(k_params, (C, self.num_kv_heads, self.head_dim))
-        v_params = jnp.reshape(v_params, (C, self.num_kv_heads, self.head_dim))
-        out_params = jnp.reshape(
-            out_params,
-            (self.num_heads // self.num_kv_heads, self.num_kv_heads, self.head_dim, C),
-        )
-        q_params = constrain(q_params, self.mesh, P("fsdp"))
-        k_params = constrain(k_params, self.mesh, P("fsdp"))
-        v_params = constrain(v_params, self.mesh, P("fsdp"))
-        out_params = constrain(out_params, self.mesh, P(None, None, None, "fsdp"))
+        q = jnp.einsum("bsm,mq->bsq", x, q_params)
+        k = jnp.einsum("bdm,mk->bdk", x, k_params)
+        v = jnp.einsum("bdm,mv->bdv", x, v_params)
+        q = constrain(q, self.mesh, P("fsdp"))
+        k = constrain(k, self.mesh, P("fsdp"))
+        v = constrain(v, self.mesh, P("fsdp"))
 
-        q = jnp.einsum("bsm,mrhk->brhsk", x, q_params)
-        k = jnp.einsum("bdm,mhk->bhdk", x, k_params)
-        v = jnp.einsum("bdm,mhv->bhdv", x, v_params)
+        q = jnp.reshape(
+            q,
+            (B, self.num_heads // self.num_kv_heads, self.num_kv_heads, T, self.head_dim),
+        )
+        k = jnp.reshape(k, (B, self.num_kv_heads, T, self.head_dim))
+        v = jnp.reshape(v, (B, self.num_kv_heads, T, self.head_dim))
         q = constrain(q, self.mesh, P("fsdp"))
         k = constrain(k, self.mesh, P("fsdp"))
         v = constrain(v, self.mesh, P("fsdp"))
@@ -132,7 +126,13 @@ class Attention(nn.Module):
         qkv = jnp.einsum("brhsd,bhdv->brhsv", qk, v)
         qkv = constrain(qkv, self.mesh, P("fsdp"))
 
-        out = jnp.einsum("brhsv,rhvm->bsm", qkv, out_params)
+        qkv = jnp.reshape(qkv, (B, self.num_heads, T, self.head_dim))  # brhsv->bhsv
+        qkv = constrain(qkv, self.mesh, P("fsdp"))
+
+        out_params = jnp.reshape(out_params, (self.num_heads, self.head_dim, C))
+        out_params = constrain(out_params, self.mesh, P("fsdp"))
+
+        out = jnp.einsum("bhsv,hvm->bsm", qkv, out_params)
         out = constrain(out, self.mesh, P("fsdp"))
         return out
 
@@ -147,6 +147,7 @@ class MLP(nn.Module):
 
         gate_kernel = self.param("gate_kernel", initializer, (C, self.hidden_dim))
         up_kernel = self.param("up_kernel", initializer, (C, self.hidden_dim))
+
         down_kernel = self.param("down_kernel", initializer, (self.hidden_dim, C))
 
         gate = jnp.dot(x, gate_kernel)
