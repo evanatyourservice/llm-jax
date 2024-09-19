@@ -3,11 +3,6 @@
 Started with [this repo, credit to @jenkspt](https://github.com/jenkspt/gpt-jax). 
 Also pulled some tools from [big_vision](https://github.com/google-research/big_vision) to add simple FSDP.
 
-TODO:
-- scan model layers for psgd affine
-- checkpointing huggingface dataset
-- add sharding and more models from EasyDeL
-
 
 ## Install
 

@@ -571,7 +571,7 @@ def _update_precond_affine_math_(Ql, Qr, dX, dG, precond_lr, precision):
         return [Ql, Qr]
 
 
-"""def _update_precond_affine_dropv_math(key, Ql, Qr, dG, precond_lr, precision):
+def _update_precond_affine_dropv_math(key, Ql, Qr, dG, precond_lr, precision):
     step_normalizer = "2nd"
 
     with jax.default_matmul_precision(precision):
@@ -650,13 +650,7 @@ def _update_precond_affine_math_(Ql, Qr, dX, dG, precond_lr, precision):
             v = jax.random.normal(subkey, dG.shape, dtype=dG.dtype)
             return _update_precond_affine_math_(Ql, Qr, v, dG, precond_lr, precision)
 
-        return [Ql, Qr]"""
-
-
-def _update_precond_affine_dropv_math(key, Ql, Qr, dG, precond_lr, precision):
-    key, subkey = jax.random.split(key)
-    v = jax.random.normal(subkey, dG.shape, dtype=dG.dtype)
-    return _update_precond_affine_math_(Ql, Qr, v, dG, precond_lr, precision)
+        return [Ql, Qr]
 
 
 def _precond_grad_affine_math(Ql, Qr, grad):

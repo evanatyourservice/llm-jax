@@ -23,17 +23,34 @@ def rotate_half(x):
     return x
 
 
-def apply_rotary_embedding(q, k, cos, sin):
-    """Helper function to apply Rotary Embeddings."""
-    batch, rep, qheads, qlen, d = q.shape
-    kbatch, kheads, klen, kd = k.shape
+def apply_rotary_embedding(q, k, cos, sin, seq_first=True):
+    """Helper function to apply Rotary Embeddings.
+
+    Inputs are (batch, seq, heads, head_dim) if seq_first is True (default),
+    else (batch, heads, seq, head_dim).
+    """
+    assert q.ndim == 4
+    assert k.ndim == 4
+    if seq_first:
+        qlen = q.shape[-3]
+        klen = k.shape[-3]
+    else:
+        qlen = q.shape[-2]
+        klen = k.shape[-2]
 
     qcos = jnp.expand_dims(cos[:qlen, :], range(len(q.shape) - 2))
     qsin = jnp.expand_dims(sin[:qlen, :], range(len(q.shape) - 2))
-    out_q = q * qcos + rotate_half(q) * qsin
 
     kcos = jnp.expand_dims(cos[:klen, :], range(len(k.shape) - 2))
     ksin = jnp.expand_dims(sin[:klen, :], range(len(k.shape) - 2))
+
+    if seq_first:
+        qcos = jnp.swapaxes(qcos, -2, -3)
+        qsin = jnp.swapaxes(qsin, -2, -3)
+        kcos = jnp.swapaxes(kcos, -2, -3)
+        ksin = jnp.swapaxes(ksin, -2, -3)
+
+    out_q = q * qcos + rotate_half(q) * qsin
     out_k = k * kcos + rotate_half(k) * ksin
 
     return out_q.astype(q.dtype), out_k.astype(k.dtype)

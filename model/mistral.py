@@ -5,6 +5,7 @@ import flax.linen as nn
 
 from configs import ModelConfig
 from model.rotary_embedding import apply_rotary_embedding, sine_table
+from model.jax_attn import dot_product_attention
 
 
 initializer = nn.initializers.normal(0.02)
@@ -57,9 +58,6 @@ class Embedder(nn.Module):
         x = jnp.dot(x, self.embedding.T)
         x = constrain(x, self.mesh, P("fsdp"))
 
-        # gemma style soft cap
-        x = jnp.tanh(x / 30) * 30
-
         return x
 
 
@@ -72,6 +70,7 @@ class Attention(nn.Module):
     num_kv_heads: int
     head_dim: int
     rope_theta: float
+    sliding_window_size: int
     mesh: Mesh
 
     @nn.compact
@@ -91,47 +90,23 @@ class Attention(nn.Module):
             "out_kernel", initializer, (self.num_heads * self.head_dim, C)
         )
 
-        q_params = jnp.reshape(
-            q_params,
-            (C, self.num_heads // self.num_kv_heads, self.num_kv_heads, self.head_dim),
-        )
-        k_params = jnp.reshape(k_params, (C, self.num_kv_heads, self.head_dim))
-        v_params = jnp.reshape(v_params, (C, self.num_kv_heads, self.head_dim))
-        out_params = jnp.reshape(
-            out_params,
-            (self.num_heads // self.num_kv_heads, self.num_kv_heads, self.head_dim, C),
-        )
-        q_params = constrain(q_params, self.mesh, P("fsdp"))
-        k_params = constrain(k_params, self.mesh, P("fsdp"))
-        v_params = constrain(v_params, self.mesh, P("fsdp"))
-        out_params = constrain(out_params, self.mesh, P(None, None, None, "fsdp"))
-
-        q = jnp.einsum("bsm,mrhk->brhsk", x, q_params)
-        k = jnp.einsum("bdm,mhk->bhdk", x, k_params)
-        v = jnp.einsum("bdm,mhv->bhdv", x, v_params)
-        q = constrain(q, self.mesh, P("fsdp"))
-        k = constrain(k, self.mesh, P("fsdp"))
-        v = constrain(v, self.mesh, P("fsdp"))
+        q = jnp.dot(x, q_params)
+        k = jnp.dot(x, k_params)
+        v = jnp.dot(x, v_params)
+        q = jnp.reshape(q, (B, T, self.num_heads, self.head_dim))
+        k = jnp.reshape(k, (B, T, self.num_kv_heads, self.head_dim))
+        v = jnp.reshape(v, (B, T, self.num_kv_heads, self.head_dim))
 
         sin, cos = sine_table(self.head_dim, T, max_timescale=self.rope_theta)
-        q, k = apply_rotary_embedding(q, k, cos, sin)
-        q = constrain(q, self.mesh, P("fsdp"))
-        k = constrain(k, self.mesh, P("fsdp"))
+        q, k = apply_rotary_embedding(q, k, cos, sin, seq_first=True)
 
-        scale = jax.lax.rsqrt(jnp.array(self.head_dim, dtype=x.dtype))
-        qk = jnp.einsum("brhsk,bhdk->brhsd", q, k) * scale
-        qk = constrain(qk, self.mesh, P("fsdp"))
+        qkv = dot_product_attention(
+            q, k, v, is_causal=True, local_window_size=(self.sliding_window_size, 0)
+        )
 
-        qk = jnp.tanh(qk / 50) * 50  # gemma style soft cap
+        qkv = jnp.reshape(qkv, (B, T, self.num_heads * self.head_dim))
 
-        mask = jnp.expand_dims(mask, axis=1)
-        qk = jax.nn.softmax(qk.astype(jnp.float32), where=mask).astype(x.dtype)
-        qk = constrain(qk, self.mesh, P("fsdp"))
-
-        qkv = jnp.einsum("brhsd,bhdv->brhsv", qk, v)
-        qkv = constrain(qkv, self.mesh, P("fsdp"))
-
-        out = jnp.einsum("brhsv,rhvm->bsm", qkv, out_params)
+        out = jnp.dot(qkv, out_params)
         out = constrain(out, self.mesh, P("fsdp"))
         return out
 
@@ -150,11 +125,9 @@ class MLP(nn.Module):
         down_kernel = self.param("down_kernel", initializer, (self.hidden_dim, C))
 
         gate = jnp.dot(x, gate_kernel)
-        gate = constrain(gate, self.mesh, P("fsdp"))
         gate = nn.silu(gate)
 
         up = jnp.dot(x, up_kernel)
-        up = constrain(up, self.mesh, P("fsdp"))
         x = gate * up
 
         down = jnp.dot(x, down_kernel)
@@ -177,7 +150,12 @@ class Block(nn.Module):
     @nn.compact
     def __call__(self, x):
         attn_layer = Attention(
-            self.num_heads, self.num_kv_heads, self.head_dim, self.rope_theta, self.mesh
+            self.num_heads,
+            self.num_kv_heads,
+            self.head_dim,
+            self.rope_theta,
+            self.sliding_window_size,
+            self.mesh,
         )
 
         attn_mask = nn.make_causal_mask(x[:1, :, 0], dtype=jnp.bool)
@@ -194,8 +172,6 @@ class Block(nn.Module):
         mlp_in = RMSNorm()(x)
         mlp_out = MLP(self.hidden_dim, self.mesh)(mlp_in)
         x = x + mlp_out
-
-        x = constrain(x, self.mesh, P("fsdp"))
 
         if self.use_scan:
             return (x, None)
