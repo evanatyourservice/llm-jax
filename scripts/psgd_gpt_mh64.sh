@@ -25,7 +25,7 @@ nohup python3 main_multihost.py \
     --compute_dtype=bfloat16 \
     --params_dtype=bfloat16 \
     --profile \
-    --n_profile_steps=5 \
+    --n_profile_steps=6 \
     --model.block_size=2048 \
     --model.sliding_window_size=1024 \
     --model.num_layers=32 \
@@ -37,14 +37,14 @@ nohup python3 main_multihost.py \
     --model.scan_layers \
     --model.scan_unroll=4 \
     --optimizer.type=psgd_affine \
-    --optimizer.learning_rate=0.003 \
+    --optimizer.learning_rate=0.001 \
     --optimizer.warmup_steps=1000 \
-    --optimizer.weight_decay=0.01 \
+    --optimizer.weight_decay=0.05 \
     --optimizer.grad_clip=1.0 \
     --optimizer.preconditioner_update_probability=0.04 \
     --optimizer.max_size_triangular=8192 \
     --optimizer.max_skew_triangular=10 \
-    --optimizer.precond_lr=0.3 \
+    --optimizer.precond_lr=0.2 \
     --optimizer.precond_init_scale=0.1 \
     --optimizer.preconditioner_dtype=bfloat16 \
     > nohup.out 2>&1 & 
