@@ -91,19 +91,24 @@ class Attention(nn.Module):
             "out_kernel", initializer, (self.num_heads * self.head_dim, C)
         )
 
-        q = jnp.einsum("bsm,mq->bsq", x, q_params)
-        k = jnp.einsum("bdm,mk->bdk", x, k_params)
-        v = jnp.einsum("bdm,mv->bdv", x, v_params)
-        q = constrain(q, self.mesh, P("fsdp"))
-        k = constrain(k, self.mesh, P("fsdp"))
-        v = constrain(v, self.mesh, P("fsdp"))
-
-        q = jnp.reshape(
-            q,
-            (B, self.num_heads // self.num_kv_heads, self.num_kv_heads, T, self.head_dim),
+        q_params = jnp.reshape(
+            q_params,
+            (C, self.num_heads // self.num_kv_heads, self.num_kv_heads, self.head_dim),
         )
-        k = jnp.reshape(k, (B, self.num_kv_heads, T, self.head_dim))
-        v = jnp.reshape(v, (B, self.num_kv_heads, T, self.head_dim))
+        k_params = jnp.reshape(k_params, (C, self.num_kv_heads, self.head_dim))
+        v_params = jnp.reshape(v_params, (C, self.num_kv_heads, self.head_dim))
+        out_params = jnp.reshape(
+            out_params,
+            (self.num_heads // self.num_kv_heads, self.num_kv_heads, self.head_dim, C),
+        )
+        q_params = constrain(q_params, self.mesh, P("fsdp"))
+        k_params = constrain(k_params, self.mesh, P("fsdp"))
+        v_params = constrain(v_params, self.mesh, P("fsdp"))
+        out_params = constrain(out_params, self.mesh, P(None, None, None, "fsdp"))
+
+        q = jnp.einsum("bsm,mrhk->brhsk", x, q_params)
+        k = jnp.einsum("bdm,mhk->bhdk", x, k_params)
+        v = jnp.einsum("bdm,mhv->bhdv", x, v_params)
         q = constrain(q, self.mesh, P("fsdp"))
         k = constrain(k, self.mesh, P("fsdp"))
         v = constrain(v, self.mesh, P("fsdp"))
@@ -126,13 +131,7 @@ class Attention(nn.Module):
         qkv = jnp.einsum("brhsd,bhdv->brhsv", qk, v)
         qkv = constrain(qkv, self.mesh, P("fsdp"))
 
-        qkv = jnp.reshape(qkv, (B, self.num_heads, T, self.head_dim))  # brhsv->bhsv
-        qkv = constrain(qkv, self.mesh, P("fsdp"))
-
-        out_params = jnp.reshape(out_params, (self.num_heads, self.head_dim, C))
-        out_params = constrain(out_params, self.mesh, P("fsdp"))
-
-        out = jnp.einsum("bhsv,hvm->bsm", qkv, out_params)
+        out = jnp.einsum("brhsv,rhvm->bsm", qkv, out_params)
         out = constrain(out, self.mesh, P("fsdp"))
         return out
 
