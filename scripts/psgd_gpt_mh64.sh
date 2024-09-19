@@ -7,7 +7,9 @@ HF_TOKEN=$2
 EXPERIMENT=run_$(date +%Y-%m-%d_%H-%M-%S)
 echo $EXPERIMENT
 
-gcloud compute tpus tpu-vm ssh --zone "us-central2-b" "node-1" --project "distributedmuzerojax" \
+# gcloud compute tpus tpu-vm ssh --zone "us-central2-b" "node-1" --project "distributedmuzerojax"
+# gcloud compute tpus tpu-vm ssh --zone "us-central2-b" "LLaMA" --project "my-phd-research-o"
+gcloud compute tpus tpu-vm ssh --zone "us-central2-b" "LLaMA" --project "my-phd-research-o" \
 --worker=all --command "bash -c \"
 export WANDB_API_KEY=$WANDB_API_KEY 
 export HF_TOKEN=$HF_TOKEN
@@ -15,7 +17,7 @@ export LIBTPU_INIT_ARGS="--xla_enable_async_all_gather=true"
 cd llm-jax
 nohup python3 main_multihost.py \
     --experiment_name=$EXPERIMENT \
-    --out_dir=gs://optimizertesting/llm-jax \
+    --out_dir=gs://uscentral2stuff/llm-jax \
     --attempt_to_load_checkpoint \
     --hellaswag_eval_interval=1000 \
     --checkpoint_interval=1000 \
@@ -28,12 +30,6 @@ nohup python3 main_multihost.py \
     --n_profile_steps=6 \
     --model.block_size=2048 \
     --model.sliding_window_size=1024 \
-    --model.num_layers=32 \
-    --model.num_heads=32 \
-    --model.num_kv_heads=8 \
-    --model.head_dim=96 \
-    --model.num_embeds=2048 \
-    --model.hidden_dim=7168 \
     --model.scan_layers \
     --model.scan_unroll=4 \
     --optimizer.type=psgd_affine \
