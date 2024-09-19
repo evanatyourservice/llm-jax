@@ -24,7 +24,6 @@ def scale_by_affine(
     precond_dtype: Optional[Union[str, jnp.dtype]] = None,
     precision: str = "bfloat16",
     scanned_layers: Optional[base.Params] = None,
-    scan_unroll: int = 1,
 ) -> base.GradientTransformationExtraArgs:
     """
     Implements Affine PSGD from https://github.com/lixilinx/psgd_torch.
@@ -45,7 +44,6 @@ def scale_by_affine(
         precond_dtype: optional str or jnp.dtype, dtype of the preconditioner.
         precision: str, precision for matmul, 'bfloat16', 'tensorfloat32', 'float32'.
         scanned_layers: optional base.Params, tree of bool indicating scanned layers.
-        scan_unroll: int, number of layers to scan over at once.
 
     Returns:
         optax.GradientTransformationExtraArgs
@@ -54,12 +52,12 @@ def scale_by_affine(
     precond_dtype = canonicalize_dtype(precond_dtype)
 
     def map_fn(fn: Callable, *inputs):
-        style = "map"
+        style = "vmap"
         if style == "scan":
             scan_body = lambda _, x: (None, fn(*x))
-            return jax.lax.scan(scan_body, None, inputs, unroll=scan_unroll)[1]
+            return jax.lax.scan(scan_body, None, inputs, unroll=3)[1]
         elif style == "map":
-            return jax.lax.map(lambda xs: fn(*xs), inputs, batch_size=4)
+            return jax.lax.map(lambda xs: fn(*xs), inputs, batch_size=8)
         elif style == "vmap":
             return jax.vmap(fn)(*inputs)
 
@@ -220,7 +218,6 @@ def affine(
     precond_dtype: Optional[Union[str, jnp.dtype]] = None,
     precision: str = "bfloat16",
     scanned_layers: Optional[base.Params] = None,
-    scan_unroll: int = 1,
 ) -> base.GradientTransformationExtraArgs:
     """
     Implements Affine PSGD from https://github.com/lixilinx/psgd_torch.
@@ -244,7 +241,6 @@ def affine(
         precond_dtype: optional str or jnp.dtype, dtype of the preconditioner.
         precision: str, precision for matmul, 'bfloat16', 'tensorfloat32', 'float32'.
         scanned_layers: optional base.Params, tree of bool indicating scanned layers.
-        scan_unroll: int, number of layers to scan over at once.
 
     Returns:
         optax.GradientTransformationExtraArgs
@@ -262,7 +258,6 @@ def affine(
             precond_dtype=precond_dtype,
             precision=precision,
             scanned_layers=scanned_layers,
-            scan_unroll=scan_unroll,
         )
     ]
     if weight_decay > 0:

@@ -163,7 +163,6 @@ def main(config: TrainConfig):
                     precond_dtype=config.optimizer.preconditioner_dtype,
                     precision="bfloat16",
                     scanned_layers=scanned_layers,
-                    scan_unroll=config.model.scan_unroll,
                 )
             )
         elif config.optimizer.type in ["shampoo", "caspr"]:
