@@ -39,7 +39,8 @@ def infer_sharding(params, mesh, op):
         params,
         names,
         specs,
-        is_leaf=lambda v: isinstance(v, nn.Partitioned),
+        # Preconditioners for PSGD and tearfree shampoo kept in lists
+        is_leaf=lambda v: isinstance(v, nn.Partitioned) or isinstance(v, list),
     )
 
     # Two-level tree_map to prevent it from doing traversal inside the spec.
@@ -48,7 +49,7 @@ def infer_sharding(params, mesh, op):
     return sharding, specs
 
 
-def fsdp_sharding(axis, min_size_to_shard_mb=1, psgd_reshaped: bool = False):
+def fsdp_sharding(axis, min_size_to_shard_mb=1):
     """FSDP sharding rule.
 
     Shards the largest dimension that is not sharded already and is divisible
@@ -66,10 +67,30 @@ def fsdp_sharding(axis, min_size_to_shard_mb=1, psgd_reshaped: bool = False):
 
     def _update_spec(cur_spec, mesh, name, x):
         axis_size = np.prod([mesh.shape[a] for a in axis_tuple])
+
+        if isinstance(x, list):
+            # Preconditioners for PSGD and tearfree shampoo kept in lists
+            precond_specs = []
+            # psgd likes last dim sharded, shampoo first
+            shard_dim = -1 if "Qs_preconditioners" in name[0] else -2
+            for precond in x:
+                shape = precond.shape
+                new_sharding = [None for _ in shape]
+                if (
+                    np.prod(shape) * precond.dtype.itemsize
+                    >= min_size_to_shard_mb * (2**20)
+                    and len(shape) > 1
+                    and shape[shard_dim] % axis_size == 0
+                ):
+                    new_sharding[shard_dim] = axis
+                print(f"sharding {name}:{shape} to {new_sharding}")
+                precond_specs.append(tuple(new_sharding))
+            return precond_specs
+
         shape = x.shape
 
         # Partitioning rules
-        # indexed backwards from last dim for scan leading dims friendliness
+        # indexed backwards from last dim for scanned leading dims friendliness
         if (
             np.prod(shape) * x.dtype.itemsize >= min_size_to_shard_mb * (2**20)
             and len(shape) > 1
@@ -78,12 +99,7 @@ def fsdp_sharding(axis, min_size_to_shard_mb=1, psgd_reshaped: bool = False):
             if "scale" in name:
                 # norm layers
                 pass
-            elif any(
-                s in name
-                for s in ["preconditioner", "embedding", "out_kernel", "down_kernel"]
-            ):
-                # shard these on last dim, including PSGD preconditioners so expanding
-                # axes stay sharded while applying preconditioner
+            elif any(s in name for s in ["embedding", "out_kernel", "down_kernel"]):
                 if shape[-1] % axis_size == 0:
                     new_sharding[-1] = axis
                     print(f"sharding {name}:{shape} to {new_sharding}")

@@ -516,7 +516,7 @@ def _precondition_blocks_shampoo(
     inputs = ",".join([blocked_input] + preconditioner_inputs)
     formula = inputs + "->" + blocked_output
     with jax.named_scope("PreconditionShampoo"):
-        write_note(formula, update.shape, [x.shape for x in preconditioners])
+        write_note(f"{formula} {update.shape} {[x.shape for x in preconditioners]}")
         return jnp.einsum(formula, update, *preconditioners)
 
 
@@ -552,7 +552,7 @@ def _precondition_blocks_caspr(
     ]
 
     with jax.named_scope("PreconditionCASPR"):
-        write_note(formulas, update.shape, [x.shape for x in preconditioners])
+        write_note(f"{formulas} {update.shape} {[x.shape for x in preconditioners]}")
         for i in range(2):
             to_sum = []
             for f, p in zip(formulas, preconditioners):

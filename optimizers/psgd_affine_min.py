@@ -130,8 +130,13 @@ def scale_by_affine(
         key, subkey = jax.random.split(key)
         do_update = jax.random.uniform(subkey, dtype=jnp.float32) < update_prob_in
 
+        factor_out_v = False
         update_precond_fn = partial(
-            _update_precond_affine_dropv_math,
+            (
+                _update_precond_affine_dropv_math
+                if factor_out_v
+                else _update_precond_affine_math
+            ),
             precond_lr=precond_lr_in,
             precision=precision,
         )
@@ -475,8 +480,10 @@ def _solve_triangular(a, b, upper, left=True):
     return jax.lax.linalg.triangular_solve(a, b, left_side=left, lower=not upper)
 
 
-def _update_precond_affine_math_(Ql, Qr, dX, dG, precond_lr, precision):
+def _update_precond_affine_math(key, Ql, Qr, dG, precond_lr, precision):
     step_normalizer = "2nd"
+
+    dX = jax.random.normal(key, dG.shape, dtype=dG.dtype)
 
     with jax.default_matmul_precision(precision):
         if Ql.ndim == 2:
@@ -645,10 +652,7 @@ def _update_precond_affine_dropv_math(key, Ql, Qr, dG, precond_lr, precision):
             #   1) gradient is a tall matrix, but left side is a dense preconditioner, right side is diagonal
             #   2) gradient is a short matrix, but left side is a diagonal preconditioner, right side is dense
             #   3) both sides use dense preconditioner, but gradient is skewed (no saving for square shape gradient)
-            key, subkey = jax.random.split(key)
-            # JAX does an ok job at sharding this so let's leave alone for now
-            v = jax.random.normal(subkey, dG.shape, dtype=dG.dtype)
-            return _update_precond_affine_math_(Ql, Qr, v, dG, precond_lr, precision)
+            return _update_precond_affine_math(key, Ql, Qr, dG, precond_lr, precision)
 
         return [Ql, Qr]
 

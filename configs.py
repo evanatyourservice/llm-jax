@@ -36,6 +36,8 @@ class OptimizerConfig:
         nesterov: Whether to use nesterov momentum.
         preconditioner_update_probability: Probability of updating the
             preconditioner.
+        update_prob_anneal_steps: Number of steps to anneal the update
+            probability from 1.0 to the given preconditioner_update_probability.
         max_size_triangular: Max size for affine preconditioner to be
             triangular.
         max_skew_triangular: Max skew for affine preconditioner to be
@@ -56,6 +58,7 @@ class OptimizerConfig:
     b2: float = 0.95
     nesterov: bool = False
     preconditioner_update_probability: float = 0.02
+    update_prob_anneal_steps: int = 4000
     max_size_triangular: int = 4096
     max_skew_triangular: int = 10
     precond_lr: float = 0.1

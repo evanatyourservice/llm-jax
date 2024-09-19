@@ -121,19 +121,15 @@ def main(config: TrainConfig):
             out = non_kernels.update(lambda _: False, all_true)
             return out
 
+        update_prob_schedule = optax.linear_schedule(
+            1.0,
+            config.optimizer.preconditioner_update_probability,
+            config.optimizer.update_prob_anneal_steps,
+        )
+
         optimizer = []
         if config.optimizer.grad_clip > 0.0:
             optimizer.append(optax.clip_by_global_norm(config.optimizer.grad_clip))
-
-        def update_prob_schedule(n):
-            """Exponentially anneal PSGD update probability at beginning of training."""
-            decay = 0.001  # 0.001 decays to min_prob in about 5000 steps
-            flat_start = 200  # hold at 1.0 for this many steps
-            min_prob = config.optimizer.preconditioner_update_probability
-            max_prob = 1.0
-            return jnp.minimum(
-                jnp.maximum(jnp.exp(-decay * (n - flat_start)), min_prob), max_prob
-            )
 
         if config.optimizer.type in ["adam", "adamw"]:
             optimizer.append(
