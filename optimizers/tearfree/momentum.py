@@ -16,10 +16,13 @@
 
 import copy
 import dataclasses
-from typing import Union, Optional
+from typing import Any, NamedTuple, Union, Optional
 
 import jax
+import jax.tree_util as jtu
 import optax
+from optax._src import base, utils
+import optax.tree_utils as otu
 from optimizers.tearfree import praxis_shim
 
 
@@ -126,7 +129,7 @@ def _sharded_trace(
     momentum: float, nesterov: bool, accumulator_dtype: str
 ) -> praxis_shim.ShardedGradientTransformation:
     """Extend optax's trace to allow sharding."""
-    trace = optax.trace(momentum, nesterov, accumulator_dtype=accumulator_dtype)
+    trace_transform = trace(momentum, nesterov, accumulator_dtype=accumulator_dtype)
 
     def init_pspec_fn(mdl_params):
         def _opt_state_sharding_spec(var_hparams):
@@ -135,8 +138,59 @@ def _sharded_trace(
             return s_var_hparams
 
         mdl_sharding = jax.tree.map(_opt_state_sharding_spec, mdl_params)
-        return optax.TraceState(trace=mdl_sharding)
+        return TraceState(trace=mdl_sharding)
 
     return praxis_shim.ShardedGradientTransformation(
-        trace.init, trace.update, init_pspec_fn
+        trace_transform.init, trace_transform.update, init_pspec_fn
     )
+
+
+class TraceState(NamedTuple):
+    """Holds an aggregation of past updates."""
+
+    trace: base.Params
+
+
+def trace(
+    decay: float, nesterov: bool = False, accumulator_dtype: Optional[Any] = None
+) -> base.GradientTransformation:
+    """Compute a trace of past updates.
+
+    Note: `trace` and `ema` have very similar but distinct updates;
+    `trace = decay * trace + t`, while `ema = decay * ema + (1-decay) * t`.
+    Both are frequently found in the optimization literature.
+
+    Args:
+      decay: Decay rate for the trace of past updates.
+      nesterov: Whether to use Nesterov momentum.
+      accumulator_dtype: Optional `dtype` to be used for the accumulator; if
+        `None` then the `dtype` is inferred from `params` and `updates`.
+
+    Returns:
+      A `GradientTransformation` object.
+    """
+
+    accumulator_dtype = utils.canonicalize_dtype(accumulator_dtype)
+
+    def init_fn(params):
+        trace = otu.tree_zeros_like(params, dtype=accumulator_dtype)
+
+        # Calculate and print size for trace
+        trace_n_elements = sum(leaf.size for leaf in jax.tree.leaves(trace))
+        trace_size_MB = sum(
+            leaf.size * leaf.dtype.itemsize / (2**20) for leaf in jax.tree.leaves(trace)
+        )
+        if jax.process_index() == 0:
+            print(f"Momentum size: {trace_n_elements} elements, {trace_size_MB:.2f} MB")
+
+        return TraceState(trace=trace)
+
+    def update_fn(updates, state, params=None):
+        del params
+        f = lambda g, t: g + decay * t
+        new_trace = jtu.tree_map(f, updates, state.trace)
+        updates = jtu.tree_map(f, updates, new_trace) if nesterov else new_trace
+        new_trace = otu.tree_cast(new_trace, accumulator_dtype)
+        return updates, TraceState(trace=new_trace)
+
+    return base.GradientTransformation(init_fn, update_fn)

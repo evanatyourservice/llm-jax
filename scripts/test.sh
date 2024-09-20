@@ -1,10 +1,6 @@
 #!/bin/bash
 
-EXPERIMENT=run_$(date +%Y-%m-%d_%H-%M-%S)
-echo $EXPERIMENT
-
 export XLA_FLAGS="--xla_force_host_platform_device_count=2"
-
 
 python3 main.py \
     --out_dir=/Users/evanwalters/llm_testing \
@@ -19,7 +15,7 @@ python3 main.py \
     --gradient_accumulation_steps=2 \
     --profile \
     --wandb.mode=offline \
-    --optimizer.type=affine \
+    --optimizer.type=shampoo \
     --optimizer.learning_rate=0.001 \
     --optimizer.warmup_steps=20 \
     --optimizer.preconditioner_dtype=float32 \

@@ -29,8 +29,9 @@ from dataset import prepare_hellaswag, fineweb_edu_dataset, _fw_shard_names
 from configs import TrainConfig
 from optimizers.psgd_affine_min import affine
 from optimizers.tearfree import optimizer as tearfree_opt
-from optimizers.tearfree import shampoo, second_order
+from optimizers.tearfree import shampoo, second_order, grafting
 from optimizers.adam import adamw
+from optimizers.schedule_free import schedule_free
 from sharding import infer_sharding, fsdp_sharding
 from utils import check_dtypes, reshard, write_note, count_params, get_step
 from model.mistral import Mistral
@@ -121,11 +122,15 @@ def main(config: TrainConfig):
             out = non_kernels.update(lambda _: False, all_true)
             return out
 
-        update_prob_schedule = optax.linear_schedule(
-            1.0,
-            config.optimizer.preconditioner_update_probability,
-            config.optimizer.update_prob_anneal_steps,
-        )
+        def update_prob_schedule(n):
+            """Exponentially anneal PSGD update probability at beginning of training."""
+            decay = 0.001  # 0.001 decays to min_prob in about 5000 steps
+            flat_start = 200  # hold at 1.0 for this many steps
+            min_prob = config.optimizer.preconditioner_update_probability
+            max_prob = 1.0
+            return jnp.minimum(
+                jnp.maximum(jnp.exp(-decay * (n - flat_start)), min_prob), max_prob
+            )
 
         optimizer = []
         if config.optimizer.grad_clip > 0.0:
@@ -137,11 +142,14 @@ def main(config: TrainConfig):
                     lr_schedule,
                     config.optimizer.b1,
                     config.optimizer.b2,
+                    config.optimizer.eps,
                     weight_decay=config.optimizer.weight_decay,
                     mask=param_decay_mask,
                     mu_dtype=jnp.bfloat16,
+                    nesterov=config.optimizer.nesterov,
                 )
             )
+            optimizer = optax.chain(*optimizer)
         elif config.optimizer.type in ["psgd", "psgd_affine", "affine"]:
             optimizer.append(
                 affine(
@@ -161,38 +169,48 @@ def main(config: TrainConfig):
                     scanned_layers=scanned_layers,
                 )
             )
+            optimizer = optax.chain(*optimizer)
         elif config.optimizer.type in ["shampoo", "caspr"]:
             optimizer.append(
                 tearfree_opt.tearfree(
                     lr_schedule,
                     tearfree_opt.TearfreeOptions(
+                        second_order_options=second_order.Options(
+                            shampoo_options=shampoo.Options(
+                                use_CASPR_variant=config.optimizer.type == "caspr",
+                                update_preconditioners_freq=25,
+                            )
+                        ),
                         momentum_options=tearfree_opt.momentum.Options(
                             weight_decay=config.optimizer.weight_decay,
                             momentum_decay=config.optimizer.b1,
                             momentum_dtype="bfloat16",
-                        ),
-                        second_order_options=second_order.Options(
-                            shampoo_options=shampoo.Options(
-                                use_CASPR_variant=config.optimizer.type == "caspr"
-                            )
+                            nesterov=config.optimizer.nesterov,
                         ),
                     ),
                 )
             )
+            optimizer = optax.chain(*optimizer)
         elif config.optimizer.type == "schedule_free":
+            sf_lr = optax.linear_schedule(
+                0.0, config.optimizer.learning_rate, config.optimizer.warmup_steps
+            )
             optimizer.append(
-                optax.contrib.schedule_free_adamw(
-                    config.optimizer.learning_rate,
-                    warmup_steps=config.optimizer.warmup_steps,
-                    b1=config.optimizer.b1,
-                    b2=config.optimizer.b2,
+                adamw(
+                    lr_schedule,
+                    0.0,
+                    config.optimizer.b2,
+                    config.optimizer.eps,
                     weight_decay=config.optimizer.weight_decay,
+                    mask=param_decay_mask,
+                    mu_dtype=jnp.bfloat16,
+                    nesterov=config.optimizer.nesterov,
                 )
             )
+            optimizer = optax.chain(*optimizer)
+            optimizer = schedule_free(optimizer, sf_lr, b1=config.optimizer.b1)
         else:
             raise ValueError("Unknown optimizer type")
-
-        optimizer = optax.chain(*optimizer)
 
         return optimizer
 

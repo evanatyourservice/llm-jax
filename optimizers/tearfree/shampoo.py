@@ -196,7 +196,7 @@ def _validate(options: Options) -> None:
 
 
 def _init(options: Options, params: optax.Params) -> _ShampooState:
-    """Inititialize stats to 0 and preconditioners to identity."""
+    """Initialize stats to 0 and preconditioners to identity."""
 
     def make_blocks(path: ..., param: jax.Array) -> _AxesBlocks:
         if any(dim == 1 for dim in param.shape):
@@ -229,10 +229,20 @@ def _init(options: Options, params: optax.Params) -> _ShampooState:
         precond = [jnp.eye(d) * jnp.ones((n, 1, 1)) for d in dims]
         return _AxesBlocks(stats, precond)
 
-    return _ShampooState(
-        count=jnp.zeros([], jnp.int32),
-        blocks=jax.tree_util.tree_map_with_path(make_blocks, params),
+    blocks = jax.tree_util.tree_map_with_path(make_blocks, params)
+
+    # Calculate and print sizes for stats and preconditioners together
+    total_n_elements = sum(leaf.size for leaf in jax.tree.leaves(blocks))
+    total_size_MB = sum(
+        leaf.size * leaf.dtype.itemsize / (2**20) for leaf in jax.tree.leaves(blocks)
     )
+    if jax.process_index() == 0:
+        print(
+            f"Shampoo Stats and Preconditioners size: {total_n_elements} elements, "
+            f"{total_size_MB:.2f} MB"
+        )
+
+    return _ShampooState(count=jnp.zeros([], jnp.int32), blocks=blocks)
 
 
 def _pspec(

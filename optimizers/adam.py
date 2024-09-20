@@ -24,7 +24,29 @@ def scale_by_adam(
         else:
             mu = None
         nu = otu.tree_zeros_like(params)
-        return transform.ScaleByAdamState(count=jnp.zeros([], jnp.int32), mu=mu, nu=nu)
+        state = transform.ScaleByAdamState(count=jnp.zeros([], jnp.int32), mu=mu, nu=nu)
+
+        # Calculate sizes for nu (preconditioner) and mu (momentum)
+        nu_n_elements = sum(leaf.size for leaf in jax.tree.leaves(nu))
+        nu_size_MB = sum(
+            leaf.size * leaf.dtype.itemsize / (2**20) for leaf in jax.tree.leaves(nu)
+        )
+        if jax.process_index() == 0:
+            print(
+                f"Adam Preconditioner (nu) size: {nu_n_elements} elements, {nu_size_MB:.2f} MB"
+            )
+        if mu is not None:
+            mu_n_elements = sum(leaf.size for leaf in jax.tree.leaves(mu))
+            mu_size_MB = sum(
+                leaf.size * leaf.dtype.itemsize / (2**20)
+                for leaf in jax.tree.leaves(mu)
+            )
+            if jax.process_index() == 0:
+                print(
+                    f"Adam Momentum (mu) size: {mu_n_elements} elements, {mu_size_MB:.2f} MB"
+                )
+
+        return state
 
     def update_fn(updates, state, params=None):
         del params
@@ -64,11 +86,10 @@ def adamw(
     mu_dtype: Optional[Any] = None,
     weight_decay: float = 1e-4,
     mask: Optional[Union[Any, Callable[[base.Params], Any]]] = None,
-    *,
     nesterov: bool = False,
 ) -> base.GradientTransformation:
     return combine.chain(
-        transform.scale_by_adam(
+        scale_by_adam(
             b1=b1,
             b2=b2,
             eps=eps,

@@ -35,7 +35,7 @@ class Options:
         multiple of the block size.
     """
 
-    merge_dims: int = 4096
+    merge_dims: int = 8192
     block_size: int = 256
 
 

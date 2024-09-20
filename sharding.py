@@ -12,9 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Big vision sharding utilities.
-
-Modified for simple fsdp sharding."""
+"""Base sharding functions from big vision, changed for our nets and uses."""
 import numpy as np
 
 import jax

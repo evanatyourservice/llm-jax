@@ -55,7 +55,7 @@ def scale_by_affine(
         style = "vmap"
         if style == "scan":
             scan_body = lambda _, x: (None, fn(*x))
-            return jax.lax.scan(scan_body, None, inputs, unroll=3)[1]
+            return jax.lax.scan(scan_body, None, inputs, unroll=2)[1]
         elif style == "map":
             return jax.lax.map(lambda xs: fn(*xs), inputs, batch_size=8)
         elif style == "vmap":
@@ -85,6 +85,24 @@ def scale_by_affine(
         ]
         Qs = jax.tree.structure(params).unflatten(Qs)
         Qs = jax.tree.map(lambda q: jnp.sqrt(precond_init_scale) * q, Qs)
+
+        # Calculate sizes for nu (preconditioner) and mu (momentum)
+        Qs_n_elements = sum([q.size for q in jax.tree.leaves(Qs)])
+        Qs_size_MB = sum(
+            [q.size * q.dtype.itemsize / (2**20) for q in jax.tree.leaves(Qs)]
+        )
+        if jax.process_index() == 0:
+            print(
+                f"PSGD Preconditioners size: {Qs_n_elements} elements, "
+                f"{Qs_size_MB} MB"
+            )
+        if mu is not None:
+            mu_n_elements = sum([p.size for p in jax.tree.leaves(mu)])
+            mu_size_MB = sum(
+                [p.size * p.dtype.itemsize / (2**20) for p in jax.tree.leaves(mu)]
+            )
+            if jax.process_index() == 0:
+                print(f"PSGD Momentum size: {mu_n_elements} elements, {mu_size_MB} MB")
 
         # initial state
         return dict(
@@ -130,7 +148,7 @@ def scale_by_affine(
         key, subkey = jax.random.split(key)
         do_update = jax.random.uniform(subkey, dtype=jnp.float32) < update_prob_in
 
-        factor_out_v = False
+        factor_out_v = True
         update_precond_fn = partial(
             (
                 _update_precond_affine_dropv_math

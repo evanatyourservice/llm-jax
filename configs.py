@@ -32,6 +32,7 @@ class OptimizerConfig:
         grad_clip: Gradient clip.
         b1: Beta 1.
         b2: Beta 2.
+        eps: Epsilon.
         nesterov: Whether to use nesterov momentum.
         preconditioner_update_probability: Probability of updating the
             preconditioner.
@@ -53,13 +54,13 @@ class OptimizerConfig:
     grad_clip: float = 1.0
     b1: float = 0.9
     b2: float = 0.95
+    eps: float = 1e-8
     nesterov: bool = False
     preconditioner_update_probability: float = 0.02
-    update_prob_anneal_steps: int = 4000
     max_size_triangular: int = 4096
     max_skew_triangular: int = 10
     precond_lr: float = 0.1
-    precond_init_scale: Optional[float] = 0.0001
+    precond_init_scale: Optional[float] = 0.1
     preconditioner_dtype: str = "float32"
 
 

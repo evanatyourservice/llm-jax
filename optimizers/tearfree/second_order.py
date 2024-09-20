@@ -44,7 +44,7 @@ class Options:
       sketchy_options: Options for Sketchy.
     """
 
-    merge_dims: int = 4096
+    merge_dims: int = 8192
     second_order_type: SecondOrderType = SecondOrderType.SHAMPOO
     shampoo_options: Optional[shampoo.Options] = dataclasses.field(
         default_factory=shampoo.Options
