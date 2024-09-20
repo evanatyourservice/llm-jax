@@ -1,7 +1,11 @@
-# Example tyro YAML
-# Unused but can be loaded with default=tyro.from_yaml(TrainConfig, yaml_filepath) in main.py
-# or by adding filepath logic to get_default_config in configs.py
-# for example you could add logic to get_default_config to grab a yaml path from an env variable
+"""Example tyro YAML
+
+Unused but can be loaded with default=tyro.from_yaml(TrainConfig, yaml_filepath) in main.py
+or by adding filepath logic to get_default_config in configs.py.
+
+For example in get_default_config you could grab a yaml path from an env variable and return 
+tyro.from_yaml(TrainConfig, env_var_yaml_path). Then set the env variable in a script.
+"""
 !dataclass:TrainConfig
 hellaswag_eval_interval: 500
 checkpoint_interval: 1000
@@ -10,20 +14,14 @@ train_steps: 100000
 compute_dtype: float32
 params_dtype: float32
 optimizer: !dataclass:OptimizerConfig
-    type: "psgd_affine"
+    type: "adamw"
     learning_rate: 0.001
     warmup_steps: 1000
-    weight_decay: 0.1
-    grad_clip: 1.0
-    gradient_accumulation_steps: 1
-    b1: 0.9
-    b2: 0.95
-    nesterov: False
-    preconditioner_update_probability: 0.5
-    max_size_triangular: 8192
-    max_skew_triangular: 16
-    precond_lr: 0.1
-    precond_init_scale: 1.0
-    preconditioner_dtype: float32
+    weight_decay: 0.01
 wandb: !dataclass:WandbConfig
     mode: online
+model: !dataclass:ModelConfig
+    block_size: 2048
+    sliding_window_size: 1024
+    scan_layers: False
+    scan_unroll: 1

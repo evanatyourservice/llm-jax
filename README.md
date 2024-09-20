@@ -1,10 +1,12 @@
 # llm-jax
 
-Started with [this repo, credit to @jenkspt](https://github.com/jenkspt/gpt-jax). 
-Also pulled some tools from [big_vision](https://github.com/google-research/big_vision) to add simple FSDP.
+Pretrain a mistral-style model with fineweb-edu.
+
+Started with [this repo, credit to @jenkspt](https://github.com/jenkspt/gpt-jax). Also pulled some tools 
+from [big_vision](https://github.com/google-research/big_vision) to add simple FSDP rules.
 
 Has some different optimizers, adamw, schedule-free, PSGD, shampoo, and CASPR. Shampoo and CASPR probably 
-not ready for large nets, compile time problems.
+not good for large nets, compile time problems.
 
 Only set up for pretraining for now, working on inference and conversion to pytorch and huggingface hub.
 
@@ -28,7 +30,7 @@ cd llm-jax && pip install -U pip && pip install -r requirements.txt && pip insta
 
 ## Run
 
-See examples in /scripts like `scripts/psgd_gpt_mh.sh`.
+See examples in /scripts like `scripts/mh_125M.sh`.
 
 create TPU using queued-resources
 ```shell

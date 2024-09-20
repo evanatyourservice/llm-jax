@@ -3,7 +3,7 @@ from functools import partial
 from pprint import pprint
 import shutil
 import time
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, List, Tuple
 from dataclasses import asdict
 import os
 import random
@@ -16,7 +16,6 @@ from jaxlib import xla_client
 from jax.experimental import mesh_utils
 from jax.sharding import Mesh, PartitionSpec as P, NamedSharding
 import flax
-import flax.linen as nn
 from flax import struct
 from flax.training.train_state import TrainState as ts
 from flax.training import orbax_utils
@@ -27,9 +26,9 @@ import orbax.checkpoint as ocp
 
 from dataset import prepare_hellaswag, fineweb_edu_dataset, _fw_shard_names
 from configs import TrainConfig
-from optimizers.psgd_affine_min import affine
+from optimizers.psgd_affine import affine
 from optimizers.tearfree import optimizer as tearfree_opt
-from optimizers.tearfree import shampoo, second_order, grafting
+from optimizers.tearfree import shampoo, second_order
 from optimizers.adam import adamw
 from optimizers.schedule_free import schedule_free
 from sharding import infer_sharding, fsdp_sharding
@@ -123,13 +122,17 @@ def main(config: TrainConfig):
             return out
 
         def update_prob_schedule(n):
-            """Exponentially anneal PSGD update probability at beginning of training."""
-            decay = 0.001  # 0.001 decays to min_prob in about 5000 steps
-            flat_start = 200  # hold at 1.0 for this many steps
-            min_prob = config.optimizer.preconditioner_update_probability
+            """Exponentially anneal PSGD update probability at beginning of training.
+            
+            PSGD benefits from more precond updates at beginning of training,
+            then it can drop low."""
             max_prob = 1.0
+            min_prob = config.optimizer.preconditioner_update_probability
+            decay = 0.001
+            flat_start = 200  # hold at max_prob for this many steps at start
             return jnp.minimum(
-                jnp.maximum(jnp.exp(-decay * (n - flat_start)), min_prob), max_prob
+                jnp.maximum(max_prob * jnp.exp(-decay * (n - flat_start)), min_prob),
+                max_prob,
             )
 
         optimizer = []

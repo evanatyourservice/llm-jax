@@ -5,6 +5,8 @@ from typing import Optional
 
 @dataclass(frozen=True)
 class ModelConfig:
+    """Default model config for 125M."""
+
     block_size: int = 2048
     sliding_window_size: int = 1024
     vocab_size: int = 32768
@@ -36,8 +38,6 @@ class OptimizerConfig:
         nesterov: Whether to use nesterov momentum.
         preconditioner_update_probability: Probability of updating the
             preconditioner.
-        update_prob_anneal_steps: Number of steps to anneal the update
-            probability from 1.0 to the given preconditioner_update_probability.
         max_size_triangular: Max size for affine preconditioner to be
             triangular.
         max_skew_triangular: Max skew for affine preconditioner to be
@@ -56,7 +56,7 @@ class OptimizerConfig:
     b2: float = 0.95
     eps: float = 1e-8
     nesterov: bool = False
-    preconditioner_update_probability: float = 0.02
+    preconditioner_update_probability: float = 0.03
     max_size_triangular: int = 4096
     max_skew_triangular: int = 10
     precond_lr: float = 0.1
