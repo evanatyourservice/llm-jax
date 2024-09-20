@@ -30,7 +30,6 @@ class OptimizerConfig:
         warmup_steps: Warmup steps.
         weight_decay: Weight decay.
         grad_clip: Gradient clip.
-        gradient_accumulation_steps: Gradient accumulation steps.
         b1: Beta 1.
         b2: Beta 2.
         nesterov: Whether to use nesterov momentum.
@@ -45,7 +44,6 @@ class OptimizerConfig:
         precond_lr: Learning rate for the preconditioner.
         precond_init_scale: Initial scale for the preconditioner.
         preconditioner_dtype: Dtype of the preconditioner.
-        best_effort_vmap: Whether to use best effort vmap in PSGD.
     """
 
     type: str = "adamw"
@@ -53,7 +51,6 @@ class OptimizerConfig:
     warmup_steps: int = 1000
     weight_decay: float = 0.1
     grad_clip: float = 1.0
-    gradient_accumulation_steps: int = 1
     b1: float = 0.9
     b2: float = 0.95
     nesterov: bool = False
@@ -64,7 +61,6 @@ class OptimizerConfig:
     precond_lr: float = 0.1
     precond_init_scale: Optional[float] = 0.0001
     preconditioner_dtype: str = "float32"
-    best_effort_vmap: bool = False
 
 
 @dataclass(frozen=True)
@@ -95,6 +91,7 @@ class TrainConfig:
         keep_checkpoints: Number of historical checkpoints to keep.
         batch_size: Batch size.
         train_steps: Total number of training iterations.
+        gradient_accumulation_steps: Number of gradient accumulation steps.
         compute_dtype: Compute dtype.
         params_dtype: Params dtype.
         profile: Whether to profile the training.
@@ -116,6 +113,7 @@ class TrainConfig:
     checkpoint_milestone: int = 25000
     batch_size: int = 128
     train_steps: int = 150000
+    gradient_accumulation_steps: int = 1
     compute_dtype: str = "float32"
     params_dtype: str = "float32"
     profile: bool = False

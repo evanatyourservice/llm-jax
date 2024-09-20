@@ -3,7 +3,7 @@ from functools import partial
 from pprint import pprint
 import shutil
 import time
-from typing import Callable, Tuple
+from typing import Callable, List, Optional, Tuple
 from dataclasses import asdict
 import os
 import random
@@ -194,11 +194,6 @@ def main(config: TrainConfig):
 
         optimizer = optax.chain(*optimizer)
 
-        if config.optimizer.gradient_accumulation_steps > 1:
-            optimizer = optax.MultiSteps(
-                optimizer, config.optimizer.gradient_accumulation_steps
-            )
-
         return optimizer
 
     # ====== train state and sharding ======
@@ -208,7 +203,7 @@ def main(config: TrainConfig):
 
     def init_train_state(key):
         """Initialize the train state."""
-        model = Mistral(config.model, mesh)
+        model = Mistral(config.model, mesh, config.gradient_accumulation_steps > 1)
 
         dummy_tokens = jnp.zeros((1, config.model.block_size), dtype=jnp.uint16)
 
@@ -325,10 +320,10 @@ def main(config: TrainConfig):
 
     # ====== train and eval steps ======
     def train_step(
-        state: TrainState, tokens: jnp.ndarray
+        state: TrainState, batch: List[jnp.ndarray]
     ) -> Tuple[jnp.ndarray, TrainState, jnp.ndarray, jnp.ndarray]:
 
-        def loss_fn(params):
+        def loss_fn(params, tokens):
             logits = state.apply_fn(
                 otu.tree_cast(params, config.compute_dtype), tokens[:, :-1]
             )
@@ -348,23 +343,45 @@ def main(config: TrainConfig):
 
         before_dtypes = jax.tree.map(lambda x: x.dtype, state)
 
-        loss, grads = jax.value_and_grad(loss_fn)(state.params)
-        grads = jax.lax.with_sharding_constraint(grads, train_state_sharding.params)
+        if config.gradient_accumulation_steps > 1:
 
-        if config.optimizer.gradient_accumulation_steps > 1:
-            updates, new_opt_state = state.tx.update(
-                grads, state.opt_state, state.params
+            def scan_body(carry, tokens):
+                step, loss_sum, accum_grads = carry
+
+                loss, grads = jax.value_and_grad(loss_fn)(state.params, tokens)
+                grads = jax.lax.with_sharding_constraint(
+                    grads, train_state_sharding.params
+                )
+
+                accum_grads = jax.lax.cond(
+                    step == 0,
+                    lambda: grads,
+                    lambda: jax.tree.map(
+                        lambda ag, g: ag + (g - ag) / (step + 1), accum_grads, grads
+                    ),
+                )
+                accum_grads = jax.lax.with_sharding_constraint(
+                    accum_grads, train_state_sharding.params
+                )
+
+                carry = (step + 1, loss_sum + loss, accum_grads)
+                return carry, None
+
+            # init state is (step, loss_sum, accum_grads)
+            init_grads = jax.tree.map(jnp.zeros_like, state.params)
+            init_grads = jax.lax.with_sharding_constraint(
+                init_grads, train_state_sharding.params
             )
-            new_params = optax.apply_updates(state.params, updates)
-            new_state = state.replace(
-                step=jnp.where(
-                    state.tx.has_updated(new_opt_state), state.step + 1, state.step
-                ),
-                params=new_params,
-                opt_state=new_opt_state,
-            )
+            init_state = (0, 0.0, init_grads)
+
+            carry, _ = jax.lax.scan(scan_body, init_state, jnp.stack(batch))
+            _, loss_sum, grads = carry
+            loss = loss_sum / config.gradient_accumulation_steps
         else:
-            new_state = state.apply_gradients(grads=grads)
+            loss, grads = jax.value_and_grad(loss_fn)(state.params, batch[0])
+            grads = jax.lax.with_sharding_constraint(grads, train_state_sharding.params)
+
+        new_state = state.apply_gradients(grads=grads)
 
         check_dtypes(before_dtypes, jax.tree.map(lambda x: x.dtype, new_state))
 
@@ -422,7 +439,10 @@ def main(config: TrainConfig):
     train_step_jit = jax.jit(
         train_step,
         donate_argnums=(0,),
-        in_shardings=(train_state_sharding, data_sharding),
+        in_shardings=(
+            train_state_sharding,
+            [data_sharding for _ in range(config.gradient_accumulation_steps)],
+        ),
         out_shardings=(
             repl_sharding,
             train_state_sharding,
@@ -446,9 +466,7 @@ def main(config: TrainConfig):
     write_note(f"Starting training at step {curr_step}")
 
     orig_dtypes = jax.tree.map(lambda x: x.dtype, train_state)
-    effective_batch_size = (
-        config.batch_size * config.optimizer.gradient_accumulation_steps
-    )
+    effective_batch_size = config.batch_size * config.gradient_accumulation_steps
     min_loss = float("inf")
     max_hellaswag_acc = 0.0
     train_losses = []
@@ -456,63 +474,64 @@ def main(config: TrainConfig):
     start_time = None  # skip first loop for compile
     while curr_step < config.train_steps:
         with jax.profiler.StepTraceAnnotation("train", step_num=curr_step):
-            try:
-                tokens = next(train_ds)
-            except StopIteration:
-                print(
-                    f"Current dataset subshard exhausted on process "
-                    f"{jax.process_index()}, loading next subshard"
+            batch = []
+            for _ in range(config.gradient_accumulation_steps):
+                try:
+                    batch.append(next(train_ds))
+                except StopIteration:
+                    print(
+                        f"Current dataset subshard exhausted on process "
+                        f"{jax.process_index()}, loading next subshard"
+                    )
+                    del train_ds
+
+                    # delete huggingface datasets cache to save space
+                    if platform == "tpu":
+                        hf_cache_dir = "/dev/shm/huggingface_cache"
+                    else:
+                        hf_cache_dir = os.path.expanduser(
+                            "~/.cache/huggingface/datasets"
+                        )
+                    if os.path.exists(hf_cache_dir):
+                        print(f"Removing {hf_cache_dir} to save space")
+                        try:
+                            shutil.rmtree(hf_cache_dir)
+                        except Exception as e:
+                            print(f"Error removing {hf_cache_dir}: {e}")
+
+                    # start next subshard or restart whole dataset
+                    shard_idx += 1
+                    if jax.process_count() == 1:
+                        ds_name = None
+                    else:
+                        ds_name = process_shard[shard_idx % len(process_shard)]
+                    train_ds = make_train_ds(fineweb_edu_name=ds_name)
+
+                    batch.append(next(train_ds))
+
+            if curr_step == 0:
+                write_note(
+                    f"Batch info: {jax.tree.map(lambda x: (x.shape, x.dtype), batch)}"
                 )
-                del train_ds
 
-                # delete huggingface datasets cache to save space
-                if platform == "tpu":
-                    hf_cache_dir = "/dev/shm/huggingface_cache"
-                else:
-                    hf_cache_dir = os.path.expanduser("~/.cache/huggingface/datasets")
-                if os.path.exists(hf_cache_dir):
-                    print(f"Removing {hf_cache_dir} to save space")
-                    try:
-                        shutil.rmtree(hf_cache_dir)
-                    except Exception as e:
-                        print(f"Error removing {hf_cache_dir}: {e}")
-
-                # start next subshard or restart whole dataset
-                shard_idx += 1
-                if jax.process_count() == 1:
-                    ds_name = None
-                else:
-                    ds_name = process_shard[shard_idx % len(process_shard)]
-                train_ds = make_train_ds(fineweb_edu_name=ds_name)
-
-                tokens = next(train_ds)
-
-            loss, train_state, g_norm, lr = train_step_jit(train_state, tokens)
+            loss, train_state, g_norm, lr = train_step_jit(train_state, batch)
             train_losses.append(jax.device_get(loss).item())
             grad_norms.append(jax.device_get(g_norm).item())
 
         curr_step = get_step(train_state)
-        with jax.transfer_guard("allow"):
-            if config.optimizer.gradient_accumulation_steps > 1:
-                advanced_step = train_state.tx.has_updated(train_state.opt_state)
-            else:
-                advanced_step = True
 
-            # save checkpoint
-            if curr_step > 0 and advanced_step:
+        # save checkpoint
+        with jax.transfer_guard("allow"):
+            if curr_step > 0:
                 async_checkpoint_manager.save(curr_step, train_state)
 
-        if config.profile and curr_step == 10 and advanced_step:
+        if config.profile and curr_step == 10:
             jax.profiler.start_trace(config.out_dir + "/profile")
-        if (
-            config.profile
-            and curr_step == 10 + config.n_profile_steps
-            and advanced_step
-        ):
+        if config.profile and curr_step == 10 + config.n_profile_steps:
             jax.profiler.stop_trace()
 
         # logging
-        if curr_step % 10 == 0 and curr_step > 0 and advanced_step:
+        if curr_step % 10 == 0 and curr_step > 0:
             train_loss = np.mean(train_losses)
             min_loss = min(min_loss, train_loss)
             grad_norm = np.mean(grad_norms)

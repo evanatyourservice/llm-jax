@@ -176,16 +176,23 @@ class Mistral(nn.Module):
 
     config: ModelConfig
     mesh: Mesh
+    using_grad_accum: bool = False
 
     @nn.compact
     def __call__(self, tokens):
-        embedder = nn.remat(Embedder)(
-            self.config.vocab_size, self.config.num_embeds, self.mesh
-        )
+        remat_policy = jax.checkpoint_policies.dots_with_no_batch_dims_saveable
+
+        embedder = nn.remat(
+            Embedder, prevent_cse=not self.using_grad_accum, policy=remat_policy
+        )(self.config.vocab_size, self.config.num_embeds, self.mesh)
 
         x = embedder.encode(tokens)
 
-        RemattedBlock = nn.remat(Block, prevent_cse=not self.config.scan_layers)
+        RemattedBlock = nn.remat(
+            Block,
+            prevent_cse=not self.config.scan_layers or not self.using_grad_accum,
+            policy=remat_policy,
+        )
 
         if self.config.scan_layers:
             x, _ = nn.scan(

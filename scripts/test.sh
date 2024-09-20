@@ -7,8 +7,8 @@ export XLA_FLAGS="--xla_force_host_platform_device_count=2"
 
 
 python3 main.py \
-    --out_dir=/Users/evanwalters/llm_testing/run_checkpointing_test \
-    --no_attempt_to_load_checkpoint \
+    --out_dir=/Users/evanwalters/llm_testing \
+    --attempt_to_load_checkpoint \
     --compute_dtype=float32 \
     --params_dtype=float32 \
     --min_size_to_shard_mb=0 \
@@ -16,8 +16,9 @@ python3 main.py \
     --hellaswag_eval_interval=100 \
     --checkpoint_interval=100 \
     --batch_size=2 \
+    --gradient_accumulation_steps=2 \
+    --profile \
     --wandb.mode=offline \
-    --optimizer.gradient_accumulation_steps=2 \
     --optimizer.type=affine \
     --optimizer.learning_rate=0.001 \
     --optimizer.warmup_steps=20 \
