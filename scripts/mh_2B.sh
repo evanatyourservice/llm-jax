@@ -23,7 +23,7 @@ nohup python3 main_multihost.py \
     --checkpoint_interval=1000 \
     --train_steps=100000 \
     --batch_size=128 \
-    --optimizer.gradient_accumulation_steps=2 \
+    --gradient_accumulation_steps=2 \
     --compute_dtype=bfloat16 \
     --params_dtype=bfloat16 \
     --profile \
