@@ -58,6 +58,9 @@ class Embedder(nn.Module):
         x = jnp.dot(x, self.embedding.T)
         x = constrain(x, self.mesh, P("fsdp"))
 
+        # gemma style soft cap
+        x = jnp.tanh(x / 30.0) * 30.0
+
         return x
 
 
@@ -182,21 +185,25 @@ class Mistral(nn.Module):
     def __call__(self, tokens):
         remat_policy = jax.checkpoint_policies.checkpoint_dots_with_no_batch_dims
 
-        embedder = nn.remat(
-            Embedder, prevent_cse=not self.using_grad_accum, policy=remat_policy
-        )(self.config.vocab_size, self.config.num_embeds, self.mesh)
+        if self.using_grad_accum:  # we're scanning the loss function
+            embedder = nn.remat(Embedder, prevent_cse=False, policy=remat_policy)(
+                self.config.vocab_size, self.config.num_embeds, self.mesh
+            )
+        else:
+            embedder = Embedder(
+                self.config.vocab_size, self.config.num_embeds, self.mesh
+            )
 
         x = embedder.encode(tokens)
 
-        RemattedBlock = nn.remat(
-            Block,
-            prevent_cse=not self.config.scan_layers or not self.using_grad_accum,
-            policy=remat_policy,
-        )
+        if self.config.scan_layers or self.using_grad_accum:
+            BlockModule = nn.remat(Block, prevent_cse=False, policy=remat_policy)
+        else:
+            BlockModule = Block
 
         if self.config.scan_layers:
             x, _ = nn.scan(
-                RemattedBlock,
+                BlockModule,
                 variable_axes={True: 0},
                 split_rngs={"params": True},
                 length=self.config.num_layers,
@@ -215,7 +222,7 @@ class Mistral(nn.Module):
             )
         else:
             for _ in range(self.config.num_layers):
-                x = RemattedBlock(
+                x = BlockModule(
                     self.config.num_heads,
                     self.config.num_kv_heads,
                     self.config.head_dim,
