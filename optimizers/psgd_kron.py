@@ -22,6 +22,7 @@ def scale_by_kron(
     precond_lr: Union[float, Callable[[int], float]] = 0.1,
     precond_init_scale: float = 0.1,
     integrate_out_v: bool = False,
+    momentum_into_precond: bool = True,
     mu_dtype: Optional[Union[str, jnp.dtype]] = None,
     precond_dtype: Optional[Union[str, jnp.dtype]] = None,
     precision: str = "bfloat16",
@@ -42,6 +43,8 @@ def scale_by_kron(
         integrate_out_v: bool, whether to integrate out random vector `v` in PSGD.
             Integrating out v leads to faster precond updates, but can lead to
             slightly worse generalization.
+        momentum_into_precond: bool, whether to pass momentum update into 
+            preconditioner instead of raw gradients.
         mu_dtype: optional str or jnp.dtype, dtype of the momentum accumulator.
             Defaults to the same dtype as the parameters.
         precond_dtype: optional str or jnp.dtype, dtype of the preconditioner.
@@ -139,13 +142,15 @@ def scale_by_kron(
 
         # momentum
         mu = None
+        momentum_update = updates
         if state["mu"] is not None:
-            updates, mu = _apply_momentum(updates, state["mu"], count_inc, b1, nesterov)
+            momentum_update, mu = _apply_momentum(updates, state["mu"], count_inc, b1, nesterov)
 
         # flatten pytrees
         updates, grads_structure = jax.tree.flatten(updates)
         Qs = grads_structure.flatten_up_to(state["Qs_preconditioners"])
         flat_scanned_layers = grads_structure.flatten_up_to(scanned_layers_)
+        momentum_update = grads_structure.flatten_up_to(momentum_update)
 
         # get einsum expressions
         expressions = [
@@ -180,8 +185,9 @@ def scale_by_kron(
 
         def update_preconditioner():
             new_Qs = []
+            precond_gs = momentum_update if momentum_into_precond else updates
             for Q, g, v, expr, s in zip(
-                Qs, updates, Vs, expressions, flat_scanned_layers
+                Qs, precond_gs, Vs, expressions, flat_scanned_layers
             ):
                 if s:
                     in_axes = (0, 0, None, None) if v is None else (0, 0, 0, None)
@@ -229,7 +235,7 @@ def scale_by_kron(
 
         # precondition gradients
         precond_gs = []
-        for Q, expr, g, s in zip(Qs, expressions, updates, flat_scanned_layers):
+        for Q, expr, g, s in zip(Qs, expressions, momentum_update, flat_scanned_layers):
             if s:
                 precond_gs.append(
                     vmap(_precond_grad_kron_math, in_axes=(0, None, 0))(Q, expr, g)
@@ -274,6 +280,7 @@ def kron(
     precond_lr: Union[float, Callable[[int], float]] = 0.1,
     precond_init_scale: float = 0.1,
     integrate_out_v: bool = False,
+    momentum_into_precond: bool = True,
     mu_dtype: Optional[Union[str, jnp.dtype]] = None,
     precond_dtype: Optional[Union[str, jnp.dtype]] = None,
     precision: str = "bfloat16",
@@ -297,6 +304,8 @@ def kron(
         integrate_out_v: bool, whether to integrate out random vector `v` in PSGD.
             Integrating out v leads to faster precond updates, but can lead to
             slightly worse generalization.
+        momentum_into_precond: bool, whether to pass momentum update into 
+            preconditioner instead of raw gradients.
         mu_dtype: optional str or jnp.dtype, dtype of the momentum accumulator.
             Defaults to the same dtype as the parameters.
         precond_dtype: optional str or jnp.dtype, dtype of the preconditioner.
@@ -316,6 +325,7 @@ def kron(
             precond_lr=precond_lr,
             precond_init_scale=precond_init_scale,
             integrate_out_v=integrate_out_v,
+            momentum_into_precond=momentum_into_precond,
             mu_dtype=mu_dtype,
             precond_dtype=precond_dtype,
             precision=precision,

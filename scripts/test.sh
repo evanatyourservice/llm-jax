@@ -15,7 +15,7 @@ python3 main.py \
     --gradient_accumulation_steps=2 \
     --profile \
     --wandb.mode=offline \
-    --optimizer.type=affine \
+    --optimizer.type=kron \
     --optimizer.learning_rate=0.001 \
     --optimizer.warmup_steps=20 \
     --optimizer.preconditioner_dtype=float32 \

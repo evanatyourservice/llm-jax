@@ -65,8 +65,9 @@ class OptimizerConfig:
     max_skew_triangular: int = 10
     precond_lr: float = 0.1
     precond_init_scale: Optional[float] = 0.1
-    preconditioner_dtype: str = "float32"
     integrate_out_v: bool = False
+    momentum_into_precond: bool = True
+    preconditioner_dtype: str = "float32"
 
 
 @dataclass(frozen=True)

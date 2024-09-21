@@ -188,6 +188,7 @@ def main(config: TrainConfig):
                     precond_lr=config.optimizer.precond_lr,
                     precond_init_scale=config.optimizer.precond_init_scale,
                     integrate_out_v=config.optimizer.integrate_out_v,
+                    momentum_into_precond=config.optimizer.momentum_into_precond,
                     mu_dtype=jnp.bfloat16,
                     precond_dtype=config.optimizer.preconditioner_dtype,
                     precision="bfloat16",
