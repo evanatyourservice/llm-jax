@@ -170,7 +170,7 @@ def scale_by_kron(
             key, subkey = jax.random.split(key)
             Vs_keys = jax.random.split(subkey, len(updates))
             Vs = [
-                jax.random.normal(k, shape=g.shape, dtype=g.dtype)
+                jax.random.rademacher(k, shape=g.shape, dtype=g.dtype)
                 for k, g in zip(Vs_keys, updates)
             ]
 
