@@ -560,6 +560,8 @@ def _update_precond_kron_math(Q, G, V, exprs, precond_lr, precision):
     with jax.default_matmul_precision(precision):
 
         def solve_triangular(A, B, upper, left=True):
+            dtype_in = jnp.promote_types(A.dtype, B.dtype)
+            A, B = A.astype(dtype_in), B.astype(dtype_in)
             leading_dims = 0
             if B.ndim > 2:
                 leading_dims = B.ndim - 2
