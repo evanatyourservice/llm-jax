@@ -27,7 +27,6 @@ import orbax.checkpoint as ocp
 from dataset import prepare_hellaswag, fineweb_edu_dataset, _fw_shard_names
 from configs import TrainConfig
 from optimizers.psgd_kron import kron
-from optimizers.psgd_affine import affine
 from optimizers.tearfree import optimizer as tearfree_opt
 from optimizers.tearfree import shampoo, second_order
 from optimizers.adam import adamw
@@ -154,27 +153,7 @@ def main(config: TrainConfig):
                 )
             )
             optimizer = optax.chain(*optimizer)
-        elif config.optimizer.type in ["psgd_affine", "affine"]:
-            optimizer.append(
-                affine(
-                    lr_schedule,
-                    preconditioner_update_probability=update_prob_schedule,
-                    b1=config.optimizer.b1,
-                    nesterov=config.optimizer.nesterov,
-                    weight_decay=config.optimizer.weight_decay,
-                    mask=param_decay_mask,
-                    max_size_triangular=config.optimizer.max_size_triangular,
-                    max_skew_triangular=config.optimizer.max_skew_triangular,
-                    precond_lr=config.optimizer.precond_lr,
-                    precond_init_scale=config.optimizer.precond_init_scale,
-                    mu_dtype=jnp.bfloat16,
-                    precond_dtype=config.optimizer.preconditioner_dtype,
-                    precision="bfloat16",
-                    scanned_layers=scanned_layers,
-                )
-            )
-            optimizer = optax.chain(*optimizer)
-        elif config.optimizer.type in ["psgd_kron", "kron"]:
+        elif config.optimizer.type in ["psgd", "psgd_kron", "kron"]:
             optimizer.append(
                 kron(
                     lr_schedule,
@@ -187,8 +166,6 @@ def main(config: TrainConfig):
                     max_skew_triangular=config.optimizer.max_skew_triangular,
                     precond_lr=config.optimizer.precond_lr,
                     precond_init_scale=config.optimizer.precond_init_scale,
-                    integrate_out_v=config.optimizer.integrate_out_v,
-                    momentum_into_precond=config.optimizer.momentum_into_precond,
                     mu_dtype=jnp.bfloat16,
                     precond_dtype=config.optimizer.preconditioner_dtype,
                     precision="bfloat16",

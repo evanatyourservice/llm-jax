@@ -21,8 +21,6 @@ def scale_by_kron(
     max_skew_triangular: int = 10,
     precond_lr: Union[float, Callable[[int], float]] = 0.1,
     precond_init_scale: float = 0.1,
-    integrate_out_v: bool = False,
-    momentum_into_precond: bool = True,
     mu_dtype: Optional[Union[str, jnp.dtype]] = None,
     precond_dtype: Optional[Union[str, jnp.dtype]] = None,
     precision: str = "bfloat16",
@@ -40,11 +38,6 @@ def scale_by_kron(
         max_skew_triangular: int, max skew for preconditioner to be triangular.
         precond_lr: float or callable, learning rate for the preconditioner.
         precond_init_scale: float, initial scale for the preconditioner.
-        integrate_out_v: bool, whether to integrate out random vector `v` in PSGD.
-            Integrating out v leads to faster precond updates, but can lead to
-            slightly worse generalization.
-        momentum_into_precond: bool, whether to pass momentum update into 
-            preconditioner instead of raw gradients.
         mu_dtype: optional str or jnp.dtype, dtype of the momentum accumulator.
             Defaults to the same dtype as the parameters.
         precond_dtype: optional str or jnp.dtype, dtype of the preconditioner.
@@ -142,15 +135,13 @@ def scale_by_kron(
 
         # momentum
         mu = None
-        momentum_update = updates
         if state["mu"] is not None:
-            momentum_update, mu = _apply_momentum(updates, state["mu"], count_inc, b1, nesterov)
+            updates, mu = _apply_momentum(updates, state["mu"], count_inc, b1, nesterov)
 
         # flatten pytrees
         updates, grads_structure = jax.tree.flatten(updates)
         Qs = grads_structure.flatten_up_to(state["Qs_preconditioners"])
         flat_scanned_layers = grads_structure.flatten_up_to(scanned_layers_)
-        momentum_update = grads_structure.flatten_up_to(momentum_update)
 
         # get einsum expressions
         expressions = [
@@ -169,6 +160,7 @@ def scale_by_kron(
         key, subkey = jax.random.split(key)
         do_update = jax.random.uniform(subkey, dtype=jnp.float32) < update_prob_in
 
+        integrate_out_v = False
         if integrate_out_v:
             Vs = [None for _ in range(len(updates))]
         else:
@@ -185,9 +177,8 @@ def scale_by_kron(
 
         def update_preconditioner():
             new_Qs = []
-            precond_gs = momentum_update if momentum_into_precond else updates
             for Q, g, v, expr, s in zip(
-                Qs, precond_gs, Vs, expressions, flat_scanned_layers
+                Qs, updates, Vs, expressions, flat_scanned_layers
             ):
                 if s:
                     in_axes = (0, 0, None, None) if v is None else (0, 0, 0, None)
@@ -235,7 +226,7 @@ def scale_by_kron(
 
         # precondition gradients
         precond_gs = []
-        for Q, expr, g, s in zip(Qs, expressions, momentum_update, flat_scanned_layers):
+        for Q, expr, g, s in zip(Qs, expressions, updates, flat_scanned_layers):
             if s:
                 precond_gs.append(
                     vmap(_precond_grad_kron_math, in_axes=(0, None, 0))(Q, expr, g)
@@ -279,8 +270,6 @@ def kron(
     max_skew_triangular: int = 10,
     precond_lr: Union[float, Callable[[int], float]] = 0.1,
     precond_init_scale: float = 0.1,
-    integrate_out_v: bool = False,
-    momentum_into_precond: bool = True,
     mu_dtype: Optional[Union[str, jnp.dtype]] = None,
     precond_dtype: Optional[Union[str, jnp.dtype]] = None,
     precision: str = "bfloat16",
@@ -301,11 +290,6 @@ def kron(
         max_skew_triangular: int, max skew for preconditioner to be triangular.
         precond_lr: float or callable, learning rate for the preconditioner.
         precond_init_scale: float, initial scale for the preconditioner.
-        integrate_out_v: bool, whether to integrate out random vector `v` in PSGD.
-            Integrating out v leads to faster precond updates, but can lead to
-            slightly worse generalization.
-        momentum_into_precond: bool, whether to pass momentum update into 
-            preconditioner instead of raw gradients.
         mu_dtype: optional str or jnp.dtype, dtype of the momentum accumulator.
             Defaults to the same dtype as the parameters.
         precond_dtype: optional str or jnp.dtype, dtype of the preconditioner.
@@ -324,8 +308,6 @@ def kron(
             max_skew_triangular=max_skew_triangular,
             precond_lr=precond_lr,
             precond_init_scale=precond_init_scale,
-            integrate_out_v=integrate_out_v,
-            momentum_into_precond=momentum_into_precond,
             mu_dtype=mu_dtype,
             precond_dtype=precond_dtype,
             precision=precision,
@@ -589,7 +571,7 @@ def _update_precond_kron_math(Q, G, V, exprs, precond_lr, precision):
             return solve_fn(A, B)
 
         def triangular_inv(A):
-            # return inv(A); used only when V is None, i.e., integrating out V; NOT recommend.
+            # return inv(A); used only when V is None, i.e., integrating out V
             I = jnp.eye(A.shape[0], dtype=A.dtype)
             return solve_triangular(A, I, upper=True)
 

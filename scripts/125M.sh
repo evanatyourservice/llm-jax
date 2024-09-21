@@ -16,12 +16,12 @@ python3 main.py \
     --params_dtype=float32 \
     --optimizer.type=psgd \
     --optimizer.learning_rate=0.003 \
-    --optimizer.warmup_steps=0 \
+    --optimizer.warmup_steps=1000 \
     --optimizer.weight_decay=0.01 \
     --optimizer.grad_clip=1.0 \
     --optimizer.max_size_triangular=8192 \
     --optimizer.max_skew_triangular=10 \
     --optimizer.precond_lr=0.1 \
-    --optimizer.precond_init_scale=1.0 \
+    --optimizer.precond_init_scale=0.1 \
     --optimizer.preconditioner_dtype=float32 \
     --optimizer.preconditioner_update_probability=0.04

@@ -26,8 +26,8 @@ class OptimizerConfig:
     """Optimizer configuration.
 
     Attributes:
-        type: Optimizer type, one of ["adamw", "psgd_affine", "psgd_kron", "shampoo",
-            "caspr", "schedule_free"]
+        type: Optimizer type, one of ["adamw", "psgd", "shampoo", "caspr",
+            "schedule_free"]
         learning_rate: Learning rate.
         warmup_steps: Warmup steps.
         weight_decay: Weight decay.
@@ -46,9 +46,6 @@ class OptimizerConfig:
         precond_init_scale: Initial scale for the preconditioner in PSGD.
         preconditioner_dtype: Dtype of the preconditioner in PSGD. Has no problem
             being bfloat16.
-        integrate_out_v: Whether to integrate out random vector `v` in PSGD.
-            Integrating out v leads to faster precond updates, but can lead to
-            slightly worse generalization.
     """
 
     type: str = "adamw"
@@ -65,8 +62,6 @@ class OptimizerConfig:
     max_skew_triangular: int = 10
     precond_lr: float = 0.1
     precond_init_scale: Optional[float] = 0.1
-    integrate_out_v: bool = False
-    momentum_into_precond: bool = True
     preconditioner_dtype: str = "float32"
 
 
