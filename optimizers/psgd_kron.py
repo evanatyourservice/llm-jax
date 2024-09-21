@@ -23,7 +23,7 @@ def scale_by_kron(
     precond_init_scale: float = 0.1,
     mu_dtype: Optional[Union[str, jnp.dtype]] = None,
     precond_dtype: Optional[Union[str, jnp.dtype]] = None,
-    precision: str = "bfloat16",
+    precision: str = "tensorfloat32",
     scanned_layers: Optional[base.Params] = None,
 ) -> base.GradientTransformationExtraArgs:
     """
@@ -272,7 +272,7 @@ def kron(
     precond_init_scale: float = 0.1,
     mu_dtype: Optional[Union[str, jnp.dtype]] = None,
     precond_dtype: Optional[Union[str, jnp.dtype]] = None,
-    precision: str = "bfloat16",
+    precision: str = "tensorfloat32",
     scanned_layers: Optional[base.Params] = None,
 ) -> base.GradientTransformationExtraArgs:
     """

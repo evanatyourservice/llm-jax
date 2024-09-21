@@ -183,10 +183,13 @@ class Mistral(nn.Module):
 
     @nn.compact
     def __call__(self, tokens):
-        remat_policy = jax.checkpoint_policies.checkpoint_dots_with_no_batch_dims
+        policy = jax.checkpoint_policies.offload_dot_with_no_batch_dims(
+            "device", "pinned_host"
+        )  # trying this new fun thing
 
-        if self.using_grad_accum:  # we're scanning the loss function
-            embedder = nn.remat(Embedder, prevent_cse=False, policy=remat_policy)(
+        # remat if within a scan, otherwise let JAX manage
+        if self.using_grad_accum:
+            embedder = nn.remat(Embedder, prevent_cse=False, policy=policy)(
                 self.config.vocab_size, self.config.num_embeds, self.mesh
             )
         else:
@@ -197,7 +200,7 @@ class Mistral(nn.Module):
         x = embedder.encode(tokens)
 
         if self.config.scan_layers or self.using_grad_accum:
-            BlockModule = nn.remat(Block, prevent_cse=False, policy=remat_policy)
+            BlockModule = nn.remat(Block, prevent_cse=False, policy=policy)
         else:
             BlockModule = Block
 
