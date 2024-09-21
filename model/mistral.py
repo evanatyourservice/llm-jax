@@ -180,7 +180,7 @@ class Mistral(nn.Module):
 
     @nn.compact
     def __call__(self, tokens):
-        remat_policy = None
+        remat_policy = jax.checkpoint_policies.checkpoint_dots_with_no_batch_dims
 
         embedder = nn.remat(
             Embedder, prevent_cse=not self.using_grad_accum, policy=remat_policy
