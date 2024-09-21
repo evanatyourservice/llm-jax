@@ -26,7 +26,7 @@ class OptimizerConfig:
     """Optimizer configuration.
 
     Attributes:
-        type: Optimizer type, one of ["adamw", "psgd_affine", "shampoo",
+        type: Optimizer type, one of ["adamw", "psgd_affine", "psgd_kron", "shampoo",
             "caspr", "schedule_free"]
         learning_rate: Learning rate.
         warmup_steps: Warmup steps.
@@ -37,14 +37,18 @@ class OptimizerConfig:
         eps: Epsilon.
         nesterov: Whether to use nesterov momentum.
         preconditioner_update_probability: Probability of updating the
-            preconditioner.
-        max_size_triangular: Max size for affine preconditioner to be
-            triangular.
-        max_skew_triangular: Max skew for affine preconditioner to be
-            triangular.
-        precond_lr: Learning rate for the preconditioner.
-        precond_init_scale: Initial scale for the preconditioner.
-        preconditioner_dtype: Dtype of the preconditioner.
+            preconditioner in PSGD.
+        max_size_triangular: Max dim size for preconditioner to be triangular
+            in PSGD.
+        max_skew_triangular: Max skew for preconditioner to be triangular
+            in PSGD.
+        precond_lr: Learning rate for the preconditioner in PSGD.
+        precond_init_scale: Initial scale for the preconditioner in PSGD.
+        preconditioner_dtype: Dtype of the preconditioner in PSGD. Has no problem
+            being bfloat16.
+        integrate_out_v: Whether to integrate out random vector `v` in PSGD.
+            Integrating out v leads to faster precond updates, but can lead to
+            slightly worse generalization.
     """
 
     type: str = "adamw"
@@ -62,6 +66,7 @@ class OptimizerConfig:
     precond_lr: float = 0.1
     precond_init_scale: Optional[float] = 0.1
     preconditioner_dtype: str = "float32"
+    integrate_out_v: bool = False
 
 
 @dataclass(frozen=True)

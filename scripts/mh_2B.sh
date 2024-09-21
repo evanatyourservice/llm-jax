@@ -37,7 +37,7 @@ nohup python3 main_multihost.py \
     --model.hidden_dim=7168 \
     --model.scan_layers \
     --model.scan_unroll=1 \
-    --optimizer.type=psgd_affine \
+    --optimizer.type=psgd \
     --optimizer.learning_rate=0.001 \
     --optimizer.warmup_steps=1000 \
     --optimizer.weight_decay=0.01 \

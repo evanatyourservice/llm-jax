@@ -17,9 +17,9 @@ def scale_by_affine(
     b1: float = 0.9,
     nesterov: bool = False,
     max_size_triangular: int = 4096,
-    max_skew_triangular: int = 16,
+    max_skew_triangular: int = 10,
     precond_lr: Union[float, Callable[[int], float]] = 0.1,
-    precond_init_scale: float = 1.0,
+    precond_init_scale: float = 0.1,
     mu_dtype: Optional[Union[str, jnp.dtype]] = None,
     precond_dtype: Optional[Union[str, jnp.dtype]] = None,
     precision: str = "bfloat16",
@@ -102,7 +102,9 @@ def scale_by_affine(
                 [p.size * p.dtype.itemsize / (2**20) for p in jax.tree.leaves(mu)]
             )
             if jax.process_index() == 0:
-                print(f"PSGD Momentum size: {mu_n_elements} elements, {mu_size_MB:.2f} MB")
+                print(
+                    f"PSGD Momentum size: {mu_n_elements} elements, {mu_size_MB:.2f} MB"
+                )
 
         # initial state
         return dict(
@@ -148,7 +150,7 @@ def scale_by_affine(
         key, subkey = jax.random.split(key)
         do_update = jax.random.uniform(subkey, dtype=jnp.float32) < update_prob_in
 
-        factor_out_v = False
+        factor_out_v = True
         update_precond_fn = partial(
             (
                 _update_precond_affine_dropv_math
@@ -234,9 +236,9 @@ def affine(
     weight_decay: float = 0.0,
     mask: Optional[Union[Any, Callable[[base.Params], Any]]] = None,
     max_size_triangular: int = 4096,
-    max_skew_triangular: int = 16,
+    max_skew_triangular: int = 10,
     precond_lr: Union[float, Callable[[int], float]] = 0.1,
-    precond_init_scale: float = 1.0,
+    precond_init_scale: float = 0.1,
     mu_dtype: Optional[Union[str, jnp.dtype]] = None,
     precond_dtype: Optional[Union[str, jnp.dtype]] = None,
     precision: str = "bfloat16",

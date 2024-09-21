@@ -5,7 +5,7 @@ Pretrain a mistral-style model with fineweb-edu.
 Started with [this repo, credit to @jenkspt](https://github.com/jenkspt/gpt-jax). Also pulled some tools 
 from [big_vision](https://github.com/google-research/big_vision) to add simple FSDP rules.
 
-Has some different optimizers, adamw, schedule-free, PSGD, shampoo, and CASPR. Shampoo and CASPR probably 
+Has some different optimizers, adamw, schedule-free, PSGD kron, shampoo, and CASPR. Shampoo and CASPR probably 
 not good for large nets, compile time problems.
 
 Only set up for pretraining for now, working on inference and conversion to pytorch and huggingface hub.
