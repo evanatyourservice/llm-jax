@@ -183,9 +183,7 @@ class Mistral(nn.Module):
 
     @nn.compact
     def __call__(self, tokens):
-        policy = jax.checkpoint_policies.offload_dot_with_no_batch_dims(
-            "device", "pinned_host"
-        )  # trying this new fun thing
+        policy = jax.checkpoint_policies.checkpoint_dots_with_no_batch_dims
 
         # remat if within a scan, otherwise let JAX manage
         if self.using_grad_accum:
