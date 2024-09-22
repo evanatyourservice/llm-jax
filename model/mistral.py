@@ -100,8 +100,12 @@ class Attention(nn.Module):
         k = jnp.reshape(k, (B, T, self.num_kv_heads, self.head_dim))
         v = jnp.reshape(v, (B, T, self.num_kv_heads, self.head_dim))
 
+        q = constrain(q, self.mesh, P("fsdp"))
+        k = constrain(k, self.mesh, P("fsdp"))
+        v = constrain(v, self.mesh, P("fsdp"))
+
         sin, cos = sine_table(self.head_dim, T, max_timescale=self.rope_theta)
-        q, k = apply_rotary_embedding(q, k, cos, sin, seq_first=True)
+        q, k = apply_rotary_embedding(q, k, cos, sin, seq_first=True, mesh=self.mesh)
 
         qkv = dot_product_attention(
             q, k, v, is_causal=True, local_window_size=(self.sliding_window_size, 0)
