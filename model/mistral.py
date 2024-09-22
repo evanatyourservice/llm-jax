@@ -180,11 +180,8 @@ class Mistral(nn.Module):
 
     @nn.compact
     def __call__(self, tokens):
-        policy = None
-
-        # remat if within a scan, otherwise let JAX manage
-        if self.config.remat and self.using_grad_accum:
-            embedder = nn.remat(Embedder, prevent_cse=False, policy=policy)(
+        if self.config.remat:
+            embedder = nn.remat(Embedder, prevent_cse=not self.using_grad_accum)(
                 self.config.vocab_size, self.config.num_embeds, self.mesh
             )
         else:
@@ -194,8 +191,11 @@ class Mistral(nn.Module):
 
         x = embedder.encode(tokens)
 
-        if self.config.remat and (self.config.scan_layers or self.using_grad_accum):
-            BlockModule = nn.remat(Block, prevent_cse=False, policy=policy)
+        if self.config.remat:
+            prevent_cse = True
+            if self.using_grad_accum or self.config.scan_layers:
+                prevent_cse = False
+            BlockModule = nn.remat(Block, prevent_cse=prevent_cse)
         else:
             BlockModule = Block
 
