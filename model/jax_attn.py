@@ -86,23 +86,21 @@ def _dot_product_attention_core(
     kv_seqlen,
     local_window_size,
 ):
-    logits_dtype = jnp.promote_types(query.dtype, jnp.float32)
-    logits = jnp.einsum(
-        "BTNH,BSNH->BNTS", query, key, preferred_element_type=logits_dtype
-    )
+    logits = jnp.einsum("BTNH,BSNH->BNTS", query, key)
 
     logits *= jnp.array(scale, dtype=logits.dtype)
 
     if bias is not None:
-        logits = (logits + bias).astype(logits.dtype)
+        logits += bias.astype(logits.dtype)
 
     padded_logits = _apply_masks(
         logits, mask, is_causal, q_seqlen, kv_seqlen, local_window_size
     )
 
     # Softmax and it is always carried out in fp32.
-    padded_logits = padded_logits.astype(jnp.float32)
-    probs = jax.nn.softmax(padded_logits, axis=-1).astype(key.dtype)
+    probs = jax.nn.softmax(padded_logits.astype(jnp.float32), axis=-1).astype(
+        padded_logits.dtype
+    )
 
     encoded = jnp.einsum("BNTS,BSNH->BTNH", probs, value)
     if q_seqlen is not None and kv_seqlen is not None:
