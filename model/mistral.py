@@ -58,9 +58,6 @@ class Embedder(nn.Module):
         x = jnp.dot(x, self.embedding.T)
         x = constrain(x, self.mesh, P("fsdp"))
 
-        # gemma style soft cap
-        x = jnp.tanh(x / 30.0) * 30.0
-
         return x
 
 
@@ -100,12 +97,8 @@ class Attention(nn.Module):
         k = jnp.reshape(k, (B, T, self.num_kv_heads, self.head_dim))
         v = jnp.reshape(v, (B, T, self.num_kv_heads, self.head_dim))
 
-        q = constrain(q, self.mesh, P("fsdp"))
-        k = constrain(k, self.mesh, P("fsdp"))
-        v = constrain(v, self.mesh, P("fsdp"))
-
         sin, cos = sine_table(self.head_dim, T, max_timescale=self.rope_theta)
-        q, k = apply_rotary_embedding(q, k, cos, sin, seq_first=True, mesh=self.mesh)
+        q, k = apply_rotary_embedding(q, k, cos, sin, seq_first=True)
 
         qkv = dot_product_attention(
             q, k, v, is_causal=True, local_window_size=(self.sliding_window_size, 0)
@@ -187,10 +180,10 @@ class Mistral(nn.Module):
 
     @nn.compact
     def __call__(self, tokens):
-        policy = jax.checkpoint_policies.checkpoint_dots_with_no_batch_dims
+        policy = None
 
         # remat if within a scan, otherwise let JAX manage
-        if self.using_grad_accum:
+        if self.config.remat and self.using_grad_accum:
             embedder = nn.remat(Embedder, prevent_cse=False, policy=policy)(
                 self.config.vocab_size, self.config.num_embeds, self.mesh
             )
@@ -201,7 +194,7 @@ class Mistral(nn.Module):
 
         x = embedder.encode(tokens)
 
-        if self.config.scan_layers or self.using_grad_accum:
+        if self.config.remat and (self.config.scan_layers or self.using_grad_accum):
             BlockModule = nn.remat(Block, prevent_cse=False, policy=policy)
         else:
             BlockModule = Block

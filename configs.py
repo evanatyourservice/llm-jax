@@ -19,6 +19,7 @@ class ModelConfig:
     rope_theta: float = 1000000.0
     scan_layers: bool = False
     scan_unroll: int = 1
+    remat: bool = False
 
 
 @dataclass(frozen=True)

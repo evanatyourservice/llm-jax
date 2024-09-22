@@ -86,15 +86,15 @@ def _dot_product_attention_core(
     kv_seqlen,
     local_window_size,
 ):
-    logits = jnp.einsum("BTNH,BSNH->BNTS", query, key)
+    logits_dtype = jnp.promote_types(query.dtype, jnp.float32)
+    logits = jnp.einsum(
+        "BTNH,BSNH->BNTS", query, key, preferred_element_type=logits_dtype
+    )
 
     logits *= jnp.array(scale, dtype=logits.dtype)
 
-    # gemma style soft cap
-    logits = jnp.tanh(logits / 50.0) * 50.0
-
     if bias is not None:
-        logits += bias.astype(logits.dtype)
+        logits = (logits + bias).astype(logits.dtype)
 
     padded_logits = _apply_masks(
         logits, mask, is_causal, q_seqlen, kv_seqlen, local_window_size

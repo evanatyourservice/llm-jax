@@ -24,7 +24,7 @@ def rotate_half(x):
     return x
 
 
-def apply_rotary_embedding(q, k, cos, sin, seq_first=True, mesh=None):
+def apply_rotary_embedding(q, k, cos, sin, seq_first=True):
     """Helper function to apply Rotary Embeddings.
 
     Inputs are (batch, seq, heads, head_dim) if seq_first is True (default),
@@ -50,17 +50,6 @@ def apply_rotary_embedding(q, k, cos, sin, seq_first=True, mesh=None):
         qsin = jnp.swapaxes(qsin, -2, -3)
         kcos = jnp.swapaxes(kcos, -2, -3)
         ksin = jnp.swapaxes(ksin, -2, -3)
-
-    if mesh is not None:
-        qcos = jnp.broadcast_to(qcos, q.shape)
-        qsin = jnp.broadcast_to(qsin, q.shape)
-        kcos = jnp.broadcast_to(kcos, k.shape)
-        ksin = jnp.broadcast_to(ksin, k.shape)
-
-        qcos = jax.lax.with_sharding_constraint(qcos, NamedSharding(mesh, P("fsdp")))
-        qsin = jax.lax.with_sharding_constraint(qsin, NamedSharding(mesh, P("fsdp")))
-        kcos = jax.lax.with_sharding_constraint(kcos, NamedSharding(mesh, P("fsdp")))
-        ksin = jax.lax.with_sharding_constraint(ksin, NamedSharding(mesh, P("fsdp")))
 
     out_q = q * qcos + rotate_half(q) * qsin
     out_k = k * kcos + rotate_half(k) * ksin
