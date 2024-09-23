@@ -25,7 +25,7 @@ def scale_by_kron(
     precond_dtype: Optional[Union[str, jnp.dtype]] = None,
     precision: str = "tensorfloat32",
     scanned_layers: Optional[base.Params] = None,
-    momentum_into_preconditioner: bool = False,
+    momentum_into_preconditioner: bool = True,
 ) -> base.GradientTransformationExtraArgs:
     """
     Implements PSGD Kron from https://github.com/lixilinx/psgd_torch.
