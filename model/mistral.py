@@ -1,16 +1,13 @@
 import jax
 import jax.numpy as jnp
-from jax.sharding import NamedSharding as NS, Mesh, PartitionSpec as P
+from jax.sharding import Mesh, NamedSharding as NS, PartitionSpec as P
 import flax.linen as nn
 
 from configs import ModelConfig
-from model.rotary_embedding import apply_rotary_embedding, sine_table
-from model.jax_attn import dot_product_attention
+from model.attention import Attention
 
 
 initializer = nn.initializers.normal(0.02)
-
-
 constrain = lambda x, mesh, spec: jax.lax.with_sharding_constraint(x, NS(mesh, spec))
 
 
@@ -58,57 +55,10 @@ class Embedder(nn.Module):
         x = jnp.dot(x, self.embedding.T)
         x = constrain(x, self.mesh, P("fsdp"))
 
+        # gemma style
+        x = jnp.tanh(x / 30.0) * 30.0
+
         return x
-
-
-class Attention(nn.Module):
-    """Multi-head attention with RoPE and GQA.
-
-    Upcasts to float32 and back for softmax."""
-
-    num_heads: int
-    num_kv_heads: int
-    head_dim: int
-    rope_theta: float
-    sliding_window_size: int
-    mesh: Mesh
-
-    @nn.compact
-    def __call__(self, x):
-        B, T, C = x.shape
-
-        q_params = self.param(
-            "q_kernel", initializer, (C, self.num_heads * self.head_dim)
-        )
-        k_params = self.param(
-            "k_kernel", initializer, (C, self.num_kv_heads * self.head_dim)
-        )
-        v_params = self.param(
-            "v_kernel", initializer, (C, self.num_kv_heads * self.head_dim)
-        )
-        out_params = self.param(
-            "out_kernel", initializer, (self.num_heads * self.head_dim, C)
-        )
-
-        q = jnp.dot(x, q_params)
-        k = jnp.dot(x, k_params)
-        v = jnp.dot(x, v_params)
-        q = jnp.reshape(q, (B, T, self.num_heads, self.head_dim))
-        k = jnp.reshape(k, (B, T, self.num_kv_heads, self.head_dim))
-        v = jnp.reshape(v, (B, T, self.num_kv_heads, self.head_dim))
-
-        sin, cos = sine_table(self.head_dim, T, max_timescale=self.rope_theta)
-        q, k = apply_rotary_embedding(q, k, cos, sin, seq_first=True)
-
-        qkv = dot_product_attention(
-            q, k, v, is_causal=True, local_window_size=(self.sliding_window_size, 0)
-        )
-
-        qkv = jnp.reshape(qkv, (B, T, self.num_heads * self.head_dim))
-
-        out = jnp.dot(qkv, out_params)
-        out = constrain(out, self.mesh, P("fsdp"))
-        return out
 
 
 class MLP(nn.Module):
@@ -180,10 +130,14 @@ class Mistral(nn.Module):
 
     @nn.compact
     def __call__(self, tokens):
+        remat_policy = None
+        if not self.config.remat_everything:
+            remat_policy = jax.checkpoint_policies.checkpoint_dots_with_no_batch_dims
+
         if self.config.remat:
-            embedder = nn.remat(Embedder, prevent_cse=not self.using_grad_accum)(
-                self.config.vocab_size, self.config.num_embeds, self.mesh
-            )
+            embedder = nn.remat(
+                Embedder, prevent_cse=not self.using_grad_accum, policy=remat_policy
+            )(self.config.vocab_size, self.config.num_embeds, self.mesh)
         else:
             embedder = Embedder(
                 self.config.vocab_size, self.config.num_embeds, self.mesh
@@ -195,7 +149,7 @@ class Mistral(nn.Module):
             prevent_cse = True
             if self.using_grad_accum or self.config.scan_layers:
                 prevent_cse = False
-            BlockModule = nn.remat(Block, prevent_cse=prevent_cse)
+            BlockModule = nn.remat(Block, prevent_cse=prevent_cse, policy=remat_policy)
         else:
             BlockModule = Block
 

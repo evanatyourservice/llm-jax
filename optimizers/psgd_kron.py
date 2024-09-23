@@ -412,6 +412,8 @@ def _init_Q_exprs(t, scale, max_size, max_skew, dtype, existing_Q=None):
             tensor `Q`.
         2.3, `exprP` is the expression for calculating the preconditioned gradient,
             e.g., `'aA,bB,cC,dD,eE,aα,bβ,cγ,dδ,eε,αβγδε->ABCDE'`
+
+    If `existing_Q` is passed in, only expressions are returned.
     """
     shape = t.shape
     if len(shape) == 0:  # scalar
@@ -540,14 +542,6 @@ def _init_Q_exprs(t, scale, max_size, max_skew, dtype, existing_Q=None):
 
     if existing_Q is not None:
         return exprA, exprGs, exprP
-
-    print(
-        f"Q: {[q.shape for q in Q]}",
-        f"exprA: {exprA}",
-        f"exprGs: {exprGs}",
-        f"exprP: {exprP}",
-        sep="\n",
-    )
     return [Q, (exprA, exprGs, exprP)]
 
 

@@ -5,7 +5,25 @@ from typing import Optional
 
 @dataclass(frozen=True)
 class ModelConfig:
-    """Default model config for 125M."""
+    """Default model config for 125M.
+
+    Attributes:
+        block_size: Block size.
+        sliding_window_size: Sliding window size.
+        vocab_size: Vocabulary size.
+        num_layers: Number of layers.
+        num_heads: Number of attention heads.
+        num_kv_heads: Number of key-value heads.
+        head_dim: Head dimension.
+        num_embeds: Number of embeddings.
+        hidden_dim: Hidden dimension.
+        rope_theta: Rotary embedding theta.
+        scan_layers: Whether to scan layers.
+        scan_unroll: Scan unroll.
+        remat: Whether to use remat. Should be used if scanning layers.
+        remat_everything: Whether to remat everything, otherwise only use
+            `checkpoint_dots_with_no_batch_dims`.
+    """
 
     block_size: int = 2048
     sliding_window_size: int = 1024
@@ -20,6 +38,7 @@ class ModelConfig:
     scan_layers: bool = False
     scan_unroll: int = 1
     remat: bool = False
+    remat_everything: bool = False
 
 
 @dataclass(frozen=True)
