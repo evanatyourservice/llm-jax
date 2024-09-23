@@ -66,6 +66,9 @@ class OptimizerConfig:
         precond_init_scale: Initial scale for the preconditioner in PSGD.
         preconditioner_dtype: Dtype of the preconditioner in PSGD. Has no problem
             being bfloat16.
+        lax_map_fns: Whether to use lax.map for scanned layers instead of vmap.
+            Useful for very large models (> 1B parameters).
+        lax_map_batch_size: Batch size for lax.map, see jax docs for more info.
     """
 
     type: str = "adamw"
@@ -83,6 +86,8 @@ class OptimizerConfig:
     precond_lr: float = 0.1
     precond_init_scale: Optional[float] = 0.1
     preconditioner_dtype: str = "float32"
+    lax_map_fns: bool = False
+    lax_map_batch_size: int = 4
 
 
 @dataclass(frozen=True)

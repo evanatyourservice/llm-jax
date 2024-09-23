@@ -170,6 +170,8 @@ def main(config: TrainConfig):
                     precond_dtype=config.optimizer.preconditioner_dtype,
                     precision="bfloat16",
                     scanned_layers=scanned_layers,
+                    lax_map_fns=config.optimizer.lax_map_fns,
+                    lax_map_batch_size=config.optimizer.lax_map_batch_size,
                 )
             )
             optimizer = optax.chain(*optimizer)

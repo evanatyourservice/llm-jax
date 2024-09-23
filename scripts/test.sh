@@ -22,6 +22,8 @@ python3 main.py \
     --optimizer.preconditioner_update_probability=0.05 \
     --optimizer.precond_init_scale=0.01 \
     --optimizer.precond_lr=0.1 \
+    --optimizer.lax_map_fns \
+    --optimizer.lax_map_batch_size=1 \
     --model.block_size=64 \
     --model.sliding_window_size=32 \
     --model.num_layers=2 \

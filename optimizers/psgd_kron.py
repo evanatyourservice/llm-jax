@@ -25,6 +25,8 @@ def scale_by_kron(
     precond_dtype: Optional[Union[str, jnp.dtype]] = None,
     precision: str = "tensorfloat32",
     scanned_layers: Optional[base.Params] = None,
+    lax_map_fns: bool = False,
+    lax_map_batch_size: int = 4,
 ) -> base.GradientTransformationExtraArgs:
     """
     Implements PSGD Kron from https://github.com/lixilinx/psgd_torch.
@@ -43,12 +45,24 @@ def scale_by_kron(
         precond_dtype: optional str or jnp.dtype, dtype of the preconditioner.
         precision: str, precision for matmul, 'bfloat16', 'tensorfloat32', 'float32'.
         scanned_layers: optional base.Params, tree of bool indicating scanned layers.
+        lax_map_fns: bool, whether to use lax.map for scanned layers instead of vmap.
+        lax_map_batch_size: int, batch size for lax.map, see jax docs for more info.
 
     Returns:
         optax.GradientTransformationExtraArgs
     """
     mu_dtype = canonicalize_dtype(mu_dtype)
     precond_dtype = canonicalize_dtype(precond_dtype)
+
+    def map_fn(fn, *args):
+        if lax_map_fns:
+            return jax.lax.map(
+                lambda xs: fn(*xs),
+                xs=args,
+                batch_size=lax_map_batch_size if lax_map_batch_size > 1 else None,
+            )
+        else:
+            return vmap(fn)(*args)
 
     def init_fn(params):
         scanned_layers_ = scanned_layers
@@ -170,22 +184,35 @@ def scale_by_kron(
                     for k, g in zip(Vs_keys, updates)
                 ]
 
-            update_precond_fn = partial(
-                _update_precond_kron_math, precond_lr=precond_lr_in, precision=precision
-            )
-
             precond_updates_in = momentum_updates
             new_Qs = []
             for Q, g, v, expr, s in zip(
                 Qs, precond_updates_in, Vs, expressions, flat_scanned_layers
             ):
                 if s:
-                    in_axes = (0, 0, None, None) if v is None else (0, 0, 0, None)
-                    new_Qs.append(
-                        vmap(update_precond_fn, in_axes=in_axes)(Q, g, v, expr)
-                    )
+                    if v is None:
+                        update_precond_fn = partial(
+                            _update_precond_kron_math,
+                            V=v,
+                            exprs=expr,
+                            precond_lr=precond_lr_in,
+                            precision=precision,
+                        )
+                        new_Qs.append(map_fn(update_precond_fn, Q, g))
+                    else:
+                        update_precond_fn = partial(
+                            _update_precond_kron_math,
+                            exprs=expr,
+                            precond_lr=precond_lr_in,
+                            precision=precision,
+                        )
+                        new_Qs.append(map_fn(update_precond_fn, Q, g, v))
                 else:
-                    new_Qs.append(update_precond_fn(Q, g, v, expr))
+                    new_Qs.append(
+                        _update_precond_kron_math(
+                            Q, g, v, expr, precond_lr_in, precision
+                        )
+                    )
             new_Qs = otu.tree_cast(new_Qs, precond_dtype)
             return new_Qs
 
@@ -224,10 +251,10 @@ def scale_by_kron(
         ):
             if s:
                 precond_gs.append(
-                    vmap(_precond_grad_kron_math, in_axes=(0, None, 0))(Q, expr, g)
+                    vmap(_precond_grad_kron_math, in_axes=(0, 0, None))(Q, g, expr)
                 )
             else:
-                precond_gs.append(_precond_grad_kron_math(Q, expr, g))
+                precond_gs.append(_precond_grad_kron_math(Q, g, expr))
 
         # trust region
         # global clipping
@@ -269,6 +296,8 @@ def kron(
     precond_dtype: Optional[Union[str, jnp.dtype]] = None,
     precision: str = "tensorfloat32",
     scanned_layers: Optional[base.Params] = None,
+    lax_map_fns: bool = False,
+    lax_map_batch_size: int = 4,
 ) -> base.GradientTransformationExtraArgs:
     """
     Implements PSGD Kron from https://github.com/lixilinx/psgd_torch.
@@ -290,7 +319,8 @@ def kron(
         precond_dtype: optional str or jnp.dtype, dtype of the preconditioner.
         precision: str, precision for matmul, 'bfloat16', 'tensorfloat32', 'float32'.
         scanned_layers: optional base.Params, tree of bool indicating scanned layers.
-
+        lax_map_fns: bool, whether to use lax.map for scanned layers instead of vmap.
+        lax_map_batch_size: int, batch size for lax.map, see jax docs for more info.
     Returns:
         optax.GradientTransformationExtraArgs
     """
@@ -307,6 +337,8 @@ def kron(
             precond_dtype=precond_dtype,
             precision=precision,
             scanned_layers=scanned_layers,
+            lax_map_fns=lax_map_fns,
+            lax_map_batch_size=lax_map_batch_size,
         )
     ]
     if weight_decay > 0:
@@ -645,7 +677,7 @@ def _update_precond_kron_math(Q, G, V, exprs, precond_lr, precision):
         return Q
 
 
-def _precond_grad_kron_math(Q, exprs, G):
+def _precond_grad_kron_math(Q, G, exprs):
     """Precondition gradient G with preconditioner Q."""
     # the last expr is exprP
     return exprs[-1](*[q.conj() for q in Q], *Q, G, backend="jax")
