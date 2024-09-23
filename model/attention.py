@@ -1,6 +1,9 @@
+from functools import partial
+
 import jax
 import jax.numpy as jnp
 from jax.sharding import Mesh, NamedSharding as NS, PartitionSpec as P
+from jax.experimental.shard_map import shard_map
 import flax.linen as nn
 from jax.experimental.pallas.ops.tpu import flash_attention
 
@@ -182,14 +185,27 @@ class Attention(nn.Module):
             q = jnp.reshape(q, (B, T, N, H)).swapaxes(-2, -3)
             k = jnp.reshape(k, (B, T, K, H)).swapaxes(-2, -3)
             v = jnp.reshape(v, (B, T, K, H)).swapaxes(-2, -3)
-            
+
             with jax.named_scope("rope"):
                 sin, cos = _sine_table(H, T, max_timescale=self.rope_theta)
                 q, k = _apply_rotary_embedding(q, k, cos, sin, seqs_second_to_last=True)
 
-            encoded = flash_attention.flash_attention(
-                q, k, v, causal=True, sm_scale=H**-0.5
+            q = constrain(q, self.mesh, P("fsdp"))
+            k = constrain(k, self.mesh, P("fsdp"))
+            v = constrain(v, self.mesh, P("fsdp"))
+
+            @partial(
+                shard_map,
+                mesh=self.mesh,
+                in_specs=(P("fsdp"), P("fsdp"), P("fsdp")),
+                out_specs=P("fsdp"),
             )
+            def flash_attn_call(q, k, v):
+                return flash_attention.flash_attention(
+                    q, k, v, causal=True, sm_scale=H**-0.5
+                )
+
+            encoded = flash_attn_call(q, k, v)
             encoded = jnp.swapaxes(encoded, -2, -3)
             encoded = jnp.reshape(encoded, (B, T, N * H))
         else:
