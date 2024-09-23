@@ -182,9 +182,10 @@ class Attention(nn.Module):
             q = jnp.reshape(q, (B, T, N, H)).swapaxes(-2, -3)
             k = jnp.reshape(k, (B, T, K, H)).swapaxes(-2, -3)
             v = jnp.reshape(v, (B, T, K, H)).swapaxes(-2, -3)
-
-            sin, cos = _sine_table(H, T, max_timescale=self.rope_theta)
-            q, k = _apply_rotary_embedding(q, k, cos, sin, seqs_second_to_last=True)
+            
+            with jax.named_scope("rope"):
+                sin, cos = _sine_table(H, T, max_timescale=self.rope_theta)
+                q, k = _apply_rotary_embedding(q, k, cos, sin, seqs_second_to_last=True)
 
             encoded = flash_attention.flash_attention(
                 q, k, v, causal=True, sm_scale=H**-0.5
@@ -197,8 +198,9 @@ class Attention(nn.Module):
             k = jnp.reshape(k, (B, T, K, H))
             v = jnp.reshape(v, (B, T, K, H))
 
-            sin, cos = _sine_table(H, T, max_timescale=self.rope_theta)
-            q, k = _apply_rotary_embedding(q, k, cos, sin)
+            with jax.named_scope("rope"):
+                sin, cos = _sine_table(H, T, max_timescale=self.rope_theta)
+                q, k = _apply_rotary_embedding(q, k, cos, sin)
 
             vmapped_fn = jax.vmap(
                 _dot_product_attention_core,
