@@ -199,6 +199,7 @@ class Attention(nn.Module):
                 mesh=self.mesh,
                 in_specs=(P("fsdp"), P("fsdp"), P("fsdp")),
                 out_specs=P("fsdp"),
+                check_rep=False,
             )
             def flash_attn_call(q, k, v):
                 return flash_attention.flash_attention(
