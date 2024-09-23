@@ -1,11 +1,7 @@
-from functools import partial
-
 import jax
 import jax.numpy as jnp
 from jax.sharding import Mesh, NamedSharding as NS, PartitionSpec as P
-from jax.experimental.shard_map import shard_map
 import flax.linen as nn
-from jax.experimental.pallas.ops.tpu import flash_attention
 
 
 initializer = nn.initializers.normal(0.02)
@@ -109,40 +105,19 @@ def _rotate_half(x):
     return x
 
 
-def _apply_rotary_embedding(q, k, cos, sin, seqs_second_to_last: bool = False):
-    """Helper function to apply Rotary Embeddings.
-
-    If `seqs_second_to_last`:
-
-    `q` comes in `(..., T, H)`, `k` comes in `(..., T, H)`,
-
-    else:
-
-    `q` comes in `(B, T, K, G, H)`, `k` comes in `(B, T, K, H)`.
-
-    B = batch size,
-    T = sequence length,
-    K = number of kv heads,
-    G = number of groups,
-    H = head dimension.
-    """
-    if seqs_second_to_last:
-        qlen = q.shape[-2]
-        klen = k.shape[-2]
-    else:
-        qlen = q.shape[-4]
-        klen = k.shape[-3]
+def _apply_rotary_embedding(q, k, cos, sin):
+    qlen = q.shape[-4]
+    klen = k.shape[-3]
 
     qcos = jnp.expand_dims(cos[:qlen, :], range(len(q.shape) - 2))
     qsin = jnp.expand_dims(sin[:qlen, :], range(len(q.shape) - 2))
     kcos = jnp.expand_dims(cos[:klen, :], range(len(k.shape) - 2))
     ksin = jnp.expand_dims(sin[:klen, :], range(len(k.shape) - 2))
 
-    if not seqs_second_to_last:
-        qcos = jnp.swapaxes(qcos, -2, -4)
-        qsin = jnp.swapaxes(qsin, -2, -4)
-        kcos = jnp.swapaxes(kcos, -2, -3)
-        ksin = jnp.swapaxes(ksin, -2, -3)
+    qcos = jnp.swapaxes(qcos, -2, -4)
+    qsin = jnp.swapaxes(qsin, -2, -4)
+    kcos = jnp.swapaxes(kcos, -2, -3)
+    ksin = jnp.swapaxes(ksin, -2, -3)
 
     out_q = q * qcos + _rotate_half(q) * qsin
     out_k = k * kcos + _rotate_half(k) * ksin
@@ -160,14 +135,13 @@ class Attention(nn.Module):
     head_dim: int
     rope_theta: float
     sliding_window_size: int
-    flash_attention: bool
     mesh: Mesh
 
     @nn.compact
     def __call__(self, x):
         B, T, C = x.shape
         N = self.num_heads
-        K = self.num_heads if self.flash_attention else self.num_kv_heads
+        K = self.num_kv_heads
         G = N // K
         H = self.head_dim
 
@@ -180,53 +154,22 @@ class Attention(nn.Module):
         k = jnp.dot(x, k_params)
         v = jnp.dot(x, v_params)
 
-        if self.flash_attention:
-            # [B, T, NH] -> [B, N, T, H]
-            q = jnp.reshape(q, (B, T, N, H)).swapaxes(-2, -3)
-            k = jnp.reshape(k, (B, T, K, H)).swapaxes(-2, -3)
-            v = jnp.reshape(v, (B, T, K, H)).swapaxes(-2, -3)
+        # [B, T, NH] -> [B, T, K, G, H]
+        q = jnp.reshape(q, (B, T, K, G, H))
+        k = jnp.reshape(k, (B, T, K, H))
+        v = jnp.reshape(v, (B, T, K, H))
 
-            with jax.named_scope("rope"):
-                sin, cos = _sine_table(H, T, max_timescale=self.rope_theta)
-                q, k = _apply_rotary_embedding(q, k, cos, sin, seqs_second_to_last=True)
+        with jax.named_scope("rope"):
+            sin, cos = _sine_table(H, T, max_timescale=self.rope_theta)
+            q, k = _apply_rotary_embedding(q, k, cos, sin)
 
-            q = constrain(q, self.mesh, P("fsdp"))
-            k = constrain(k, self.mesh, P("fsdp"))
-            v = constrain(v, self.mesh, P("fsdp"))
-
-            @partial(
-                shard_map,
-                mesh=self.mesh,
-                in_specs=(P("fsdp"), P("fsdp"), P("fsdp")),
-                out_specs=P("fsdp"),
-                check_rep=False,
-            )
-            def flash_attn_call(q, k, v):
-                return flash_attention.flash_attention(
-                    q, k, v, causal=True, sm_scale=H**-0.5
-                )
-
-            encoded = flash_attn_call(q, k, v)
-            encoded = jnp.swapaxes(encoded, -2, -3)
-            encoded = jnp.reshape(encoded, (B, T, N * H))
-        else:
-            # [B, T, NH] -> [B, T, K, G, H]
-            q = jnp.reshape(q, (B, T, K, G, H))
-            k = jnp.reshape(k, (B, T, K, H))
-            v = jnp.reshape(v, (B, T, K, H))
-
-            with jax.named_scope("rope"):
-                sin, cos = _sine_table(H, T, max_timescale=self.rope_theta)
-                q, k = _apply_rotary_embedding(q, k, cos, sin)
-
-            vmapped_fn = jax.vmap(
-                _dot_product_attention_core,
-                in_axes=(3, None, None, None, None),
-                out_axes=3,
-            )
-            encoded = vmapped_fn(q, k, v, True, (self.sliding_window_size, 0))
-            encoded = jnp.reshape(encoded, (B, T, N * H))
-        assert encoded.dtype == x.dtype
+        vmapped_fn = jax.vmap(
+            _dot_product_attention_core,
+            in_axes=(3, None, None, None, None),
+            out_axes=3,
+        )
+        encoded = vmapped_fn(q, k, v, True, (self.sliding_window_size, 0))
+        encoded = jnp.reshape(encoded, (B, T, N * H))
 
         out = jnp.dot(encoded, out_params)
         out = constrain(out, self.mesh, P("fsdp"))
