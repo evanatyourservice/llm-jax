@@ -154,7 +154,6 @@ class Attention(nn.Module):
         k = jnp.dot(x, k_params)
         v = jnp.dot(x, v_params)
 
-        # [B, T, NH] -> [B, T, K, G, H]
         q = jnp.reshape(q, (B, T, K, G, H))
         k = jnp.reshape(k, (B, T, K, H))
         v = jnp.reshape(v, (B, T, K, H))
@@ -164,9 +163,7 @@ class Attention(nn.Module):
             q, k = _apply_rotary_embedding(q, k, cos, sin)
 
         vmapped_fn = jax.vmap(
-            _dot_product_attention_core,
-            in_axes=(3, None, None, None, None),
-            out_axes=3,
+            _dot_product_attention_core, in_axes=(3, None, None, None, None), out_axes=3
         )
         encoded = vmapped_fn(q, k, v, True, (self.sliding_window_size, 0))
         encoded = jnp.reshape(encoded, (B, T, N * H))

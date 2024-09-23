@@ -17,7 +17,7 @@ def scale_by_kron(
     preconditioner_update_probability: Union[float, Callable[[int], float]] = 0.5,
     b1: float = 0.9,
     nesterov: bool = False,
-    max_size_triangular: int = 4096,
+    max_size_triangular: int = 8192,
     max_skew_triangular: int = 10,
     precond_lr: Union[float, Callable[[int], float]] = 0.1,
     precond_init_scale: float = 0.1,
@@ -25,7 +25,6 @@ def scale_by_kron(
     precond_dtype: Optional[Union[str, jnp.dtype]] = None,
     precision: str = "tensorfloat32",
     scanned_layers: Optional[base.Params] = None,
-    momentum_into_preconditioner: bool = True,
 ) -> base.GradientTransformationExtraArgs:
     """
     Implements PSGD Kron from https://github.com/lixilinx/psgd_torch.
@@ -44,8 +43,6 @@ def scale_by_kron(
         precond_dtype: optional str or jnp.dtype, dtype of the preconditioner.
         precision: str, precision for matmul, 'bfloat16', 'tensorfloat32', 'float32'.
         scanned_layers: optional base.Params, tree of bool indicating scanned layers.
-        momentum_into_preconditioner: bool, whether to pass momentum update into 
-            preconditioner instead of raw grads. Default True.
 
     Returns:
         optax.GradientTransformationExtraArgs
@@ -135,10 +132,12 @@ def scale_by_kron(
             precond_lr_in = precond_lr(count_inc)
 
         # momentum
-        mu = None
         momentum_updates = updates
+        mu = None
         if state["mu"] is not None:
-            momentum_updates, mu = _apply_momentum(updates, state["mu"], count_inc, b1, nesterov)
+            momentum_updates, mu = _apply_momentum(
+                updates, state["mu"], count_inc, b1, nesterov
+            )
 
         # flatten pytrees
         updates, grads_structure = jax.tree.flatten(updates)
@@ -175,10 +174,7 @@ def scale_by_kron(
                 _update_precond_kron_math, precond_lr=precond_lr_in, precision=precision
             )
 
-            precond_updates_in = updates
-            if momentum_into_preconditioner:
-                precond_updates_in = momentum_updates
-
+            precond_updates_in = momentum_updates
             new_Qs = []
             for Q, g, v, expr, s in zip(
                 Qs, precond_updates_in, Vs, expressions, flat_scanned_layers
@@ -201,7 +197,7 @@ def scale_by_kron(
         # balance preconditioners
         def balance_Q(Q: List[jax.Array]):
             norms = jnp.array([jnp.max(jnp.abs(q)) for q in Q], dtype=jnp.float32)
-            gmean = jnp.prod(norms)**(1/len(norms))
+            gmean = jnp.prod(norms) ** (1 / len(norms))
             to_mul = gmean / norms
             return [q * x.astype(q.dtype) for q, x in zip(Q, to_mul)]
 
@@ -223,7 +219,9 @@ def scale_by_kron(
 
         # precondition gradients
         precond_gs = []
-        for Q, expr, g, s in zip(Qs, expressions, momentum_updates, flat_scanned_layers):
+        for Q, expr, g, s in zip(
+            Qs, expressions, momentum_updates, flat_scanned_layers
+        ):
             if s:
                 precond_gs.append(
                     vmap(_precond_grad_kron_math, in_axes=(0, None, 0))(Q, expr, g)
@@ -263,7 +261,7 @@ def kron(
     nesterov: bool = False,
     weight_decay: float = 0.0,
     mask: Optional[Union[Any, Callable[[base.Params], Any]]] = None,
-    max_size_triangular: int = 4096,
+    max_size_triangular: int = 8192,
     max_skew_triangular: int = 10,
     precond_lr: Union[float, Callable[[int], float]] = 0.1,
     precond_init_scale: float = 0.1,
