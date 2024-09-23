@@ -25,6 +25,7 @@ def scale_by_kron(
     precond_dtype: Optional[Union[str, jnp.dtype]] = None,
     precision: str = "tensorfloat32",
     scanned_layers: Optional[base.Params] = None,
+    momentum_into_preconditioner: bool = False,
 ) -> base.GradientTransformationExtraArgs:
     """
     Implements PSGD Kron from https://github.com/lixilinx/psgd_torch.
@@ -43,6 +44,8 @@ def scale_by_kron(
         precond_dtype: optional str or jnp.dtype, dtype of the preconditioner.
         precision: str, precision for matmul, 'bfloat16', 'tensorfloat32', 'float32'.
         scanned_layers: optional base.Params, tree of bool indicating scanned layers.
+        momentum_into_preconditioner: bool, whether to pass momentum update into 
+            preconditioner instead of raw grads. Default True.
 
     Returns:
         optax.GradientTransformationExtraArgs
@@ -133,11 +136,13 @@ def scale_by_kron(
 
         # momentum
         mu = None
+        momentum_updates = updates
         if state["mu"] is not None:
-            updates, mu = _apply_momentum(updates, state["mu"], count_inc, b1, nesterov)
+            momentum_updates, mu = _apply_momentum(updates, state["mu"], count_inc, b1, nesterov)
 
         # flatten pytrees
         updates, grads_structure = jax.tree.flatten(updates)
+        momentum_updates = grads_structure.flatten_up_to(momentum_updates)
         Qs = grads_structure.flatten_up_to(state["Qs_preconditioners"])
         flat_scanned_layers = grads_structure.flatten_up_to(scanned_layers_)
 
@@ -155,28 +160,28 @@ def scale_by_kron(
         ]
 
         # update preconditioner
-        key, subkey = jax.random.split(key)
-        do_update = jax.random.uniform(subkey, dtype=jnp.float32) < update_prob_in
+        def update_preconditioner(key):
+            integrate_out_v = False
+            if integrate_out_v:
+                Vs = [None for _ in range(len(updates))]
+            else:
+                Vs_keys = jax.random.split(key, len(updates))
+                Vs = [
+                    jax.random.normal(k, shape=g.shape, dtype=g.dtype)
+                    for k, g in zip(Vs_keys, updates)
+                ]
 
-        integrate_out_v = False
-        if integrate_out_v:
-            Vs = [None for _ in range(len(updates))]
-        else:
-            key, subkey = jax.random.split(key)
-            Vs_keys = jax.random.split(subkey, len(updates))
-            Vs = [
-                jax.random.normal(k, shape=g.shape, dtype=g.dtype)
-                for k, g in zip(Vs_keys, updates)
-            ]
+            update_precond_fn = partial(
+                _update_precond_kron_math, precond_lr=precond_lr_in, precision=precision
+            )
 
-        update_precond_fn = partial(
-            _update_precond_kron_math, precond_lr=precond_lr_in, precision=precision
-        )
+            precond_updates_in = updates
+            if momentum_into_preconditioner:
+                precond_updates_in = momentum_updates
 
-        def update_preconditioner():
             new_Qs = []
             for Q, g, v, expr, s in zip(
-                Qs, updates, Vs, expressions, flat_scanned_layers
+                Qs, precond_updates_in, Vs, expressions, flat_scanned_layers
             ):
                 if s:
                     in_axes = (0, 0, None, None) if v is None else (0, 0, 0, None)
@@ -188,32 +193,20 @@ def scale_by_kron(
             new_Qs = otu.tree_cast(new_Qs, precond_dtype)
             return new_Qs
 
-        Qs = jax.lax.cond(do_update, update_preconditioner, lambda: Qs)
+        key, subkey = jax.random.split(key)
+        do_update = jax.random.uniform(subkey, dtype=jnp.float32) < update_prob_in
+        key, subkey = jax.random.split(key)
+        Qs = jax.lax.cond(do_update, update_preconditioner, lambda _: Qs, subkey)
 
-        # balance preconditioners about every 100 updates
+        # balance preconditioners
         def balance_Q(Q: List[jax.Array]):
-            """
-            norms = [torch.max(torch.abs(q)) for q in Q]
-            gmean = (torch.cumprod(torch.stack(norms), dim=0)[-1])**(1/order) # geometric mean
-            for i, q in enumerate(Q):
-                q.mul_(gmean/norms[i])
-            """
             norms = jnp.array([jnp.max(jnp.abs(q)) for q in Q], dtype=jnp.float32)
-
-            large_idx, small_idx = jnp.argmax(norms), jnp.argmin(norms)
-            large = jax.lax.dynamic_index_in_dim(norms, large_idx, keepdims=False)
-            small = jax.lax.dynamic_index_in_dim(norms, small_idx, keepdims=False)
-
-            rho = jnp.sqrt(large / small)
-
-            to_mul = jnp.ones_like(norms)
-            to_mul = jax.lax.dynamic_update_index_in_dim(to_mul, 1 / rho, large_idx, 0)
-            to_mul = jax.lax.dynamic_update_index_in_dim(to_mul, rho, small_idx, 0)
-
-            return [(q * m).astype(q.dtype) for q, m in zip(Q, to_mul)]
+            gmean = jnp.prod(norms)**(1/len(norms))
+            to_mul = gmean / norms
+            return [q * x.astype(q.dtype) for q, x in zip(Q, to_mul)]
 
         key, subkey = jax.random.split(key)
-        do_balances = jax.random.uniform(subkey, shape=(len(Qs),)) < 0.01
+        do_balances = jax.random.uniform(subkey, shape=(len(Qs),)) < 0.1
         Qs = [
             (
                 jax.lax.cond(
@@ -230,7 +223,7 @@ def scale_by_kron(
 
         # precondition gradients
         precond_gs = []
-        for Q, expr, g, s in zip(Qs, expressions, updates, flat_scanned_layers):
+        for Q, expr, g, s in zip(Qs, expressions, momentum_updates, flat_scanned_layers):
             if s:
                 precond_gs.append(
                     vmap(_precond_grad_kron_math, in_axes=(0, None, 0))(Q, expr, g)
@@ -598,7 +591,8 @@ def _update_precond_kron_math(Q, G, V, exprs, precond_lr, precision):
                     # transpose dims like
                     # [1,2,3,4,0]->[0,2,3,4,1]->[0,1,3,4,2]->[0,1,2,4,3]->[0,1,2,3,4]
                     conjB = jnp.swapaxes(conjB, i, order - 1)
-        else:  # V is integrated out, and no need to form conjB
+        else:
+            # V is integrated out, and no need to form conjB
             conjB = None
             invQ = [1 / q if q.ndim < 2 else triangular_inv(q) for q in Q]
             invQhinvQ = [q.conj() * q if q.ndim < 2 else q.conj().T @ q for q in invQ]
