@@ -1,4 +1,5 @@
 #!/bin/bash
+# single host TPU run script for 125M model
 
 EXPERIMENT=run_$(date +%Y-%m-%d_%H-%M-%S)
 echo $EXPERIMENT
