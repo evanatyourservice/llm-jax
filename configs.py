@@ -15,6 +15,9 @@ class ModelConfig:
         num_heads: Number of attention heads.
         num_kv_heads: Number of key-value heads.
         head_dim: Head dimension.
+        flash_attention: Whether to use flash attention. Turns off sliding
+            window attention and group query attention (sets num_kv_heads = num_heads).
+            (Uses full attention)
         num_embeds: Number of embeddings.
         hidden_dim: Hidden dimension.
         rope_theta: Rotary embedding theta.
@@ -32,6 +35,7 @@ class ModelConfig:
     num_heads: int = 9
     num_kv_heads: int = 3
     head_dim: int = 576 // 9
+    flash_attention: bool = False
     num_embeds: int = 576
     hidden_dim: int = 1536
     rope_theta: float = 1000000.0

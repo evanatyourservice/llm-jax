@@ -51,10 +51,9 @@ def scale_by_kron(
     precond_dtype = canonicalize_dtype(precond_dtype)
 
     def init_fn(params):
+        scanned_layers_ = scanned_layers
         if scanned_layers is None:
             scanned_layers_ = jax.tree.map(lambda _: False, params)
-        else:
-            scanned_layers_ = scanned_layers
 
         # momentum
         mu = None
@@ -120,10 +119,9 @@ def scale_by_kron(
         count_inc = safe_int32_increment(state["count"])
         key = state["key"]
 
+        scanned_layers_ = scanned_layers
         if scanned_layers is None:
             scanned_layers_ = jax.tree.map(lambda _: False, updates)
-        else:
-            scanned_layers_ = scanned_layers
 
         update_prob_in = preconditioner_update_probability
         if isinstance(preconditioner_update_probability, Callable):
@@ -194,6 +192,12 @@ def scale_by_kron(
 
         # balance preconditioners about every 100 updates
         def balance_Q(Q: List[jax.Array]):
+            """
+            norms = [torch.max(torch.abs(q)) for q in Q]
+            gmean = (torch.cumprod(torch.stack(norms), dim=0)[-1])**(1/order) # geometric mean
+            for i, q in enumerate(Q):
+                q.mul_(gmean/norms[i])
+            """
             norms = jnp.array([jnp.max(jnp.abs(q)) for q in Q], dtype=jnp.float32)
 
             large_idx, small_idx = jnp.argmax(norms), jnp.argmin(norms)

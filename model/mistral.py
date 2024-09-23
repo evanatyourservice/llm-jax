@@ -92,6 +92,7 @@ class Block(nn.Module):
     num_kv_heads: int
     head_dim: int
     sliding_window_size: int
+    flash_attention: bool
     hidden_dim: int
     rope_theta: float
     mesh: Mesh
@@ -105,6 +106,7 @@ class Block(nn.Module):
             self.head_dim,
             self.rope_theta,
             self.sliding_window_size,
+            self.flash_attention,
             self.mesh,
         )
 
@@ -157,7 +159,7 @@ class Mistral(nn.Module):
             x, _ = nn.scan(
                 BlockModule,
                 variable_axes={True: 0},
-                split_rngs={"params": True},
+                split_rngs={True: True},
                 length=self.config.num_layers,
                 unroll=self.config.scan_unroll,
             )(
@@ -165,6 +167,7 @@ class Mistral(nn.Module):
                 self.config.num_kv_heads,
                 self.config.head_dim,
                 self.config.sliding_window_size,
+                self.config.flash_attention,
                 self.config.hidden_dim,
                 self.config.rope_theta,
                 self.mesh,
@@ -179,6 +182,7 @@ class Mistral(nn.Module):
                     self.config.num_kv_heads,
                     self.config.head_dim,
                     self.config.sliding_window_size,
+                    self.config.flash_attention,
                     self.config.hidden_dim,
                     self.config.rope_theta,
                     self.mesh,
