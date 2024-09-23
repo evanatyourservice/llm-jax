@@ -226,7 +226,9 @@ def main(config: TrainConfig):
         """Initialize the train state."""
         model = Mistral(config.model, mesh, config.gradient_accumulation_steps > 1)
 
-        dummy_tokens = jnp.zeros((1, config.model.block_size), dtype=jnp.uint16)
+        dummy_tokens = jnp.zeros(
+            (config.batch_size, config.model.block_size), dtype=jnp.uint16
+        )
 
         params = model.init(key, dummy_tokens)
         params = otu.tree_cast(params, config.params_dtype)
