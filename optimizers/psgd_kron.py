@@ -56,17 +56,17 @@ def scale_by_kron(
 
     def map_fn(fn, *args):
         if lax_map_fns:
-            # return jax.lax.map(
-            #     lambda xs: fn(*xs),
-            #     xs=args,
-            #     batch_size=lax_map_batch_size if lax_map_batch_size > 1 else None,
-            # )
-            return jax.lax.scan(
-                lambda _, xs: (None, fn(*xs)),
-                init=None,
+            return jax.lax.map(
+                lambda xs: fn(*xs),
                 xs=args,
-                unroll=lax_map_batch_size,
-            )[1]
+                batch_size=lax_map_batch_size if lax_map_batch_size > 1 else None,
+            )
+            # return jax.lax.scan(
+            #     lambda _, xs: (None, fn(*xs)),
+            #     init=None,
+            #     xs=args,
+            #     unroll=lax_map_batch_size,
+            # )[1]
         else:
             return vmap(fn)(*args)
 
@@ -578,6 +578,32 @@ def _init_Q_exprs(t, scale, max_size, max_skew, dtype, existing_Q=None):
     return [Q, (exprA, exprGs, exprP)]
 
 
+def _solve_triangular(A, B, upper, left=True):
+    dtype_in = jnp.promote_types(A.dtype, B.dtype)
+    A, B = A.astype(dtype_in), B.astype(dtype_in)
+    leading_dims = 0
+    if B.ndim > 2:
+        leading_dims = B.ndim - 2
+    solve_fn = partial(jax.lax.linalg.triangular_solve, left_side=left, lower=not upper)
+    for _ in range(leading_dims):
+        solve_fn = vmap(solve_fn, in_axes=(None, 0))
+    return solve_fn(A, B)
+
+
+def _triangular_inv(A):
+    # return inv(A); used only when V is None, i.e., integrating out V
+    I = jnp.eye(A.shape[0], dtype=A.dtype)
+    return _solve_triangular(A, I, upper=True)
+
+
+def _solve_triangular_right(X, A):
+    # return X @ inv(A)
+    if X.ndim > 1:
+        return _solve_triangular(A, X, upper=True, left=False)
+    else:
+        return _solve_triangular(A, X[None, :], upper=True, left=False)[0]
+
+
 def _update_precond_kron_math(Q, G, V, exprs, precond_lr, precision):
     """Update Kronecker product preconditioner Q with (vector, hess-vector-product).
 
@@ -585,32 +611,6 @@ def _update_precond_kron_math(Q, G, V, exprs, precond_lr, precision):
     """
 
     with jax.default_matmul_precision(precision):
-
-        def solve_triangular(A, B, upper, left=True):
-            dtype_in = jnp.promote_types(A.dtype, B.dtype)
-            A, B = A.astype(dtype_in), B.astype(dtype_in)
-            leading_dims = 0
-            if B.ndim > 2:
-                leading_dims = B.ndim - 2
-            solve_fn = partial(
-                jax.lax.linalg.triangular_solve, left_side=left, lower=not upper
-            )
-            for _ in range(leading_dims):
-                solve_fn = vmap(solve_fn, in_axes=(None, 0))
-            return solve_fn(A, B)
-
-        def triangular_inv(A):
-            # return inv(A); used only when V is None, i.e., integrating out V
-            I = jnp.eye(A.shape[0], dtype=A.dtype)
-            return solve_triangular(A, I, upper=True)
-
-        def solve_triangular_right(X, A):
-            # return X @ inv(A)
-            if X.ndim > 1:
-                return solve_triangular(A, X, upper=True, left=False)
-            else:
-                return solve_triangular(A, X[None, :], upper=True, left=False)[0]
-
         order = G.ndim  # order of tensor
 
         exprA, exprGs, _ = exprs
@@ -622,7 +622,7 @@ def _update_precond_kron_math(Q, G, V, exprs, precond_lr, precision):
             # permute dims like [0,1,2,3,4] -> [1,2,3,4,0]
             conjB = jnp.transpose(V.conj(), p[1:] + p[:1])
             for i, q in enumerate(Q):
-                conjB = conjB / q if q.ndim < 2 else solve_triangular_right(conjB, q)
+                conjB = conjB / q if q.ndim < 2 else _solve_triangular_right(conjB, q)
                 if i < order - 1:
                     # transpose dims like
                     # [1,2,3,4,0]->[0,2,3,4,1]->[0,1,3,4,2]->[0,1,2,4,3]->[0,1,2,3,4]
@@ -630,7 +630,7 @@ def _update_precond_kron_math(Q, G, V, exprs, precond_lr, precision):
         else:
             # V is integrated out, and no need to form conjB
             conjB = None
-            invQ = [1 / q if q.ndim < 2 else triangular_inv(q) for q in Q]
+            invQ = [1 / q if q.ndim < 2 else _triangular_inv(q) for q in Q]
             invQhinvQ = [q.conj() * q if q.ndim < 2 else q.conj().T @ q for q in invQ]
             trace_invQhinvQ = [
                 jnp.sum(q) if q.ndim < 2 else jnp.trace(q) for q in invQhinvQ
