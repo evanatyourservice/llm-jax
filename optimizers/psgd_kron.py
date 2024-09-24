@@ -56,11 +56,17 @@ def scale_by_kron(
 
     def map_fn(fn, *args):
         if lax_map_fns:
-            return jax.lax.map(
-                lambda xs: fn(*xs),
+            # return jax.lax.map(
+            #     lambda xs: fn(*xs),
+            #     xs=args,
+            #     batch_size=lax_map_batch_size if lax_map_batch_size > 1 else None,
+            # )
+            return jax.lax.scan(
+                lambda _, xs: (None, fn(*xs)),
+                init=None,
                 xs=args,
-                batch_size=lax_map_batch_size if lax_map_batch_size > 1 else None,
-            )
+                unroll=lax_map_batch_size,
+            )[1]
         else:
             return vmap(fn)(*args)
 
