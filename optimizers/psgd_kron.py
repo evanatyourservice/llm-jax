@@ -235,7 +235,7 @@ def scale_by_kron(
             return [q * x.astype(q.dtype) for q, x in zip(Q, to_mul)]
 
         key, subkey = jax.random.split(key)
-        do_balances = jax.random.uniform(subkey, shape=(len(Qs),)) < 0.01
+        do_balances = jax.random.uniform(subkey, shape=(len(Qs),)) < 0.03
         Qs = [
             (
                 jax.lax.cond(
@@ -612,7 +612,6 @@ def _update_precond_kron_math(Q, G, V, exprs, precond_lr, precision):
 
     with jax.default_matmul_precision(precision):
         order = G.ndim  # order of tensor
-
         exprA, exprGs, _ = exprs
 
         A = exprA(*Q, G, backend="jax")

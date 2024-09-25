@@ -122,7 +122,9 @@ class Block(nn.Module):
 
 
 class Mistral(nn.Module):
-    """Mistral model."""
+    """Mistral model.
+
+    Also uses gemma style soft cap on attn and output."""
 
     config: ModelConfig
     mesh: Mesh
