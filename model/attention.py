@@ -162,10 +162,19 @@ class Attention(nn.Module):
             sin, cos = _sine_table(H, T, max_timescale=self.rope_theta)
             q, k = _apply_rotary_embedding(q, k, cos, sin)
 
-        vmapped_fn = jax.vmap(
-            _dot_product_attention_core, in_axes=(3, None, None, None, None), out_axes=3
-        )
-        encoded = vmapped_fn(q, k, v, True, (self.sliding_window_size, 0))
+        # vmapped_fn = jax.vmap(
+        #     _dot_product_attention_core, in_axes=(3, None, None, None, None), out_axes=3
+        # )
+        # encoded = vmapped_fn(q, k, v, True, (self.sliding_window_size, 0))
+        encoded = []
+        for i in range(G):
+            encoded.append(
+                _dot_product_attention_core(
+                    q[:, :, :, i], k, v, True, (self.sliding_window_size, 0)
+                )
+            )
+        encoded = jnp.stack(encoded, axis=3)
+
         encoded = jnp.reshape(encoded, (B, T, N * H))
 
         out = jnp.dot(encoded, out_params)

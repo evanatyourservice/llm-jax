@@ -235,7 +235,7 @@ def scale_by_kron(
             return [q * x.astype(q.dtype) for q, x in zip(Q, to_mul)]
 
         key, subkey = jax.random.split(key)
-        do_balances = jax.random.uniform(subkey, shape=(len(Qs),)) < 0.1
+        do_balances = jax.random.uniform(subkey, shape=(len(Qs),)) < 0.01
         Qs = [
             (
                 jax.lax.cond(
@@ -257,7 +257,7 @@ def scale_by_kron(
         ):
             if s:
                 precond_gs.append(
-                    vmap(_precond_grad_kron_math, in_axes=(0, 0, None))(Q, g, expr)
+                    map_fn(partial(_precond_grad_kron_math, exprs=expr), Q, g)
                 )
             else:
                 precond_gs.append(_precond_grad_kron_math(Q, g, expr))
