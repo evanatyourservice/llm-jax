@@ -25,9 +25,9 @@ python3 main.py \
     --optimizer.type=kron \
     --optimizer.learning_rate=0.003 \
     --optimizer.warmup_steps=1000 \
-    --optimizer.weight_decay=0.03 \
+    --optimizer.weight_decay=0.01 \
     --optimizer.grad_clip=1.0 \
-    --optimizer.preconditioner_update_probability=0.05 \
+    --optimizer.preconditioner_update_probability=0.04 \
     --optimizer.max_size_triangular=8192 \
     --optimizer.max_skew_triangular=10 \
     --optimizer.precond_lr=0.3 \

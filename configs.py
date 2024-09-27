@@ -69,6 +69,7 @@ class OptimizerConfig:
         lax_map_fns: Whether to use lax.map for scanned layers instead of vmap.
             Useful for very large models (> 1B parameters).
         lax_map_batch_size: Batch size for lax.map, see jax docs for more info.
+        integrate_out_v: Whether to integrate out v. Experimental, keep as False.
     """
 
     type: str = "adamw"
@@ -88,6 +89,7 @@ class OptimizerConfig:
     preconditioner_dtype: str = "float32"
     lax_map_fns: bool = False
     lax_map_batch_size: int = 4
+    integrate_out_v: bool = False
 
 
 @dataclass(frozen=True)

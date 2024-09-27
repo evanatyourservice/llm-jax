@@ -24,6 +24,7 @@ python3 main.py \
     --optimizer.precond_lr=0.1 \
     --optimizer.lax_map_fns \
     --optimizer.lax_map_batch_size=1 \
+    --optimizer.integrate_out_v \
     --model.block_size=64 \
     --model.sliding_window_size=32 \
     --model.num_layers=2 \

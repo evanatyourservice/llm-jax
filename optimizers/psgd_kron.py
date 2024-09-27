@@ -27,6 +27,7 @@ def scale_by_kron(
     scanned_layers: Optional[base.Params] = None,
     lax_map_fns: bool = False,
     lax_map_batch_size: int = 4,
+    integrate_out_v: bool = False,
 ) -> base.GradientTransformationExtraArgs:
     """
     Implements PSGD Kron from https://github.com/lixilinx/psgd_torch.
@@ -39,14 +40,19 @@ def scale_by_kron(
         max_size_triangular: int, max size for preconditioner to be triangular.
         max_skew_triangular: int, max skew for preconditioner to be triangular.
         precond_lr: float or callable, learning rate for the preconditioner.
-        precond_init_scale: float, initial scale for the preconditioner.
+        precond_init_scale: float, initial scale for the preconditioner. Think SGD,
+            0.1 or 0.01 are good defaults.
         mu_dtype: optional str or jnp.dtype, dtype of the momentum accumulator.
             Defaults to the same dtype as the parameters.
         precond_dtype: optional str or jnp.dtype, dtype of the preconditioner.
-        precision: str, precision for matmul, 'bfloat16', 'tensorfloat32', 'float32'.
-        scanned_layers: optional base.Params, tree of bool indicating scanned layers.
+        precision: str, precision for matmul during preconditioner update,
+             'bfloat16', 'tensorfloat32', 'float32'.
+        scanned_layers: optional base.Params, tree of bool same structure as params
+            indicating scanned layers.
         lax_map_fns: bool, whether to use lax.map for scanned layers instead of vmap.
+            Useful to save memory.
         lax_map_batch_size: int, batch size for lax.map, see jax docs for more info.
+        integrate_out_v: bool, whether to integrate out v. Experimental, keep as False.
 
     Returns:
         optax.GradientTransformationExtraArgs
@@ -54,21 +60,18 @@ def scale_by_kron(
     mu_dtype = canonicalize_dtype(mu_dtype)
     precond_dtype = canonicalize_dtype(precond_dtype)
 
-    def map_fn(fn, *args):
-        if lax_map_fns:
-            return jax.lax.map(
-                lambda xs: fn(*xs),
-                xs=args,
-                batch_size=lax_map_batch_size if lax_map_batch_size > 1 else None,
-            )
-            # return jax.lax.scan(
-            #     lambda _, xs: (None, fn(*xs)),
-            #     init=None,
-            #     xs=args,
-            #     unroll=lax_map_batch_size,
-            # )[1]
+    def map_fn(do_map, fn, *args):
+        if do_map:
+            if lax_map_fns:
+                return jax.lax.map(
+                    lambda xs: fn(*xs),
+                    xs=args,
+                    batch_size=lax_map_batch_size if lax_map_batch_size > 1 else None,
+                )
+            else:
+                return vmap(fn)(*args)
         else:
-            return vmap(fn)(*args)
+            return fn(*args)
 
     def init_fn(params):
         scanned_layers_ = scanned_layers
@@ -152,18 +155,14 @@ def scale_by_kron(
             precond_lr_in = precond_lr(count_inc)
 
         # momentum
-        momentum_updates = updates
         mu = None
         if state["mu"] is not None:
-            momentum_updates, mu = _apply_momentum(
-                updates, state["mu"], count_inc, b1, nesterov
-            )
+            updates, mu = _apply_momentum(updates, state["mu"], count_inc, b1, nesterov)
 
         # flatten pytrees
         updates, grads_structure = jax.tree.flatten(updates)
-        momentum_updates = grads_structure.flatten_up_to(momentum_updates)
         Qs = grads_structure.flatten_up_to(state["Qs_preconditioners"])
-        flat_scanned_layers = grads_structure.flatten_up_to(scanned_layers_)
+        scanned_layers_ = grads_structure.flatten_up_to(scanned_layers_)
 
         # get einsum expressions
         expressions = [
@@ -175,92 +174,81 @@ def scale_by_kron(
                 precond_dtype,
                 existing_Q=jax.tree.map(lambda d: d[0], Q) if s else Q,
             )
-            for t, s, Q in zip(updates, flat_scanned_layers, Qs)
+            for t, s, Q in zip(updates, scanned_layers_, Qs)
         ]
 
-        # update preconditioner
-        def update_preconditioner(key):
-            integrate_out_v = False
-            if integrate_out_v:
-                Vs = [None for _ in range(len(updates))]
-            else:
-                Vs_keys = jax.random.split(key, len(updates))
-                Vs = [
-                    jax.random.normal(k, shape=g.shape, dtype=g.dtype)
-                    for k, g in zip(Vs_keys, updates)
+        # maybe update preconditioner
+        def update_preconditioner(key, Qs):
+            with jax.default_matmul_precision(precision):
+                if integrate_out_v:
+                    Vs = [None for _ in updates]
+                else:
+                    # random vectors
+                    key, subkey = jax.random.split(key)
+                    Vs_keys = jax.random.split(subkey, len(updates))
+                    Vs = [
+                        jax.random.normal(k, shape=g.shape, dtype=g.dtype)
+                        for k, g in zip(Vs_keys, updates)
+                    ]
+
+                # form conjB or invQhinvQ
+                conjB_or_invQhinvQ = [
+                    map_fn(s, _conjB_or_invQhinvQ, Q, g, v)
+                    for s, Q, g, v in zip(scanned_layers_, Qs, updates, Vs)
                 ]
 
-            precond_updates_in = momentum_updates
-            new_Qs = []
-            for Q, g, v, expr, s in zip(
-                Qs, precond_updates_in, Vs, expressions, flat_scanned_layers
-            ):
-                if s:
-                    if v is None:
-                        update_precond_fn = partial(
-                            _update_precond_kron_math,
-                            V=v,
-                            exprs=expr,
+                # update Qs
+                new_Qs = [
+                    map_fn(
+                        s,
+                        partial(
+                            _update_Q,
+                            exprs=exprs,
                             precond_lr=precond_lr_in,
-                            precision=precision,
-                        )
-                        new_Qs.append(map_fn(update_precond_fn, Q, g))
-                    else:
-                        update_precond_fn = partial(
-                            _update_precond_kron_math,
-                            exprs=expr,
-                            precond_lr=precond_lr_in,
-                            precision=precision,
-                        )
-                        new_Qs.append(map_fn(update_precond_fn, Q, g, v))
-                else:
-                    new_Qs.append(
-                        _update_precond_kron_math(
-                            Q, g, v, expr, precond_lr_in, precision
-                        )
+                            integrate_out_v=integrate_out_v,
+                        ),
+                        Q,
+                        g,
+                        c_or_i,
                     )
-            new_Qs = otu.tree_cast(new_Qs, precond_dtype)
-            return new_Qs
+                    for s, exprs, Q, g, c_or_i in zip(
+                        scanned_layers_, expressions, Qs, updates, conjB_or_invQhinvQ
+                    )
+                ]
+
+                # balance preconditioners
+                def balance_Qs(Qs: List[List[jax.Array]]):
+                    def _balance_Q(Q: List[jax.Array]):
+                        norms = jnp.array(
+                            [jnp.max(jnp.abs(q)) for q in Q], dtype=jnp.float32
+                        )
+                        gmean = jnp.prod(norms) ** (1 / len(norms))
+                        to_mul = gmean / norms
+                        return [q * x.astype(q.dtype) for q, x in zip(Q, to_mul)]
+
+                    return [
+                        map_fn(s, _balance_Q, Q) for Q, s in zip(Qs, scanned_layers_)
+                    ]
+
+                key, subkey = jax.random.split(key)
+                do_balances = jax.random.uniform(subkey) < 0.01
+                new_Qs = jax.lax.cond(do_balances, balance_Qs, lambda qs: qs, new_Qs)
+
+                new_Qs = otu.tree_cast(new_Qs, precond_dtype)
+                return new_Qs
 
         key, subkey = jax.random.split(key)
         do_update = jax.random.uniform(subkey, dtype=jnp.float32) < update_prob_in
         key, subkey = jax.random.split(key)
-        Qs = jax.lax.cond(do_update, update_preconditioner, lambda _: Qs, subkey)
-
-        # balance preconditioners
-        def balance_Q(Q: List[jax.Array]):
-            norms = jnp.array([jnp.max(jnp.abs(q)) for q in Q], dtype=jnp.float32)
-            gmean = jnp.prod(norms) ** (1 / len(norms))
-            to_mul = gmean / norms
-            return [q * x.astype(q.dtype) for q, x in zip(Q, to_mul)]
-
-        key, subkey = jax.random.split(key)
-        do_balances = jax.random.uniform(subkey, shape=(len(Qs),)) < 0.03
-        Qs = [
-            (
-                jax.lax.cond(
-                    jnp.logical_and(db, do_update),
-                    vmap(balance_Q) if s else balance_Q,
-                    lambda q: q,
-                    Q,
-                )
-                if len(Qs) > 1
-                else Q
-            )
-            for db, Q, s in zip(do_balances, Qs, flat_scanned_layers)
-        ]
+        Qs = jax.lax.cond(
+            do_update, update_preconditioner, lambda _, qs: qs, subkey, Qs
+        )
 
         # precondition gradients
-        precond_gs = []
-        for Q, expr, g, s in zip(
-            Qs, expressions, momentum_updates, flat_scanned_layers
-        ):
-            if s:
-                precond_gs.append(
-                    map_fn(partial(_precond_grad_kron_math, exprs=expr), Q, g)
-                )
-            else:
-                precond_gs.append(_precond_grad_kron_math(Q, g, expr))
+        precond_gs = [
+            map_fn(s, partial(_precond_grad_kron_math, exprs=exprs), Q, g)
+            for s, exprs, Q, g in zip(scanned_layers_, expressions, Qs, updates)
+        ]
 
         # trust region
         # global clipping
@@ -304,6 +292,7 @@ def kron(
     scanned_layers: Optional[base.Params] = None,
     lax_map_fns: bool = False,
     lax_map_batch_size: int = 4,
+    integrate_out_v: bool = False,
 ) -> base.GradientTransformationExtraArgs:
     """
     Implements PSGD Kron from https://github.com/lixilinx/psgd_torch.
@@ -319,14 +308,20 @@ def kron(
         max_size_triangular: int, max size for preconditioner to be triangular.
         max_skew_triangular: int, max skew for preconditioner to be triangular.
         precond_lr: float or callable, learning rate for the preconditioner.
-        precond_init_scale: float, initial scale for the preconditioner.
+        precond_init_scale: float, initial scale for the preconditioner. Think SGD,
+            0.1 or 0.01 are good defaults.
         mu_dtype: optional str or jnp.dtype, dtype of the momentum accumulator.
             Defaults to the same dtype as the parameters.
         precond_dtype: optional str or jnp.dtype, dtype of the preconditioner.
-        precision: str, precision for matmul, 'bfloat16', 'tensorfloat32', 'float32'.
-        scanned_layers: optional base.Params, tree of bool indicating scanned layers.
+        precision: str, precision for matmul during preconditioner update,
+            'bfloat16', 'tensorfloat32', 'float32'.
+        scanned_layers: optional base.Params, tree of bool same structure as params
+            indicating scanned layers.
         lax_map_fns: bool, whether to use lax.map for scanned layers instead of vmap.
+            Useful to save memory.
         lax_map_batch_size: int, batch size for lax.map, see jax docs for more info.
+        integrate_out_v: bool, whether to integrate out v. Experimental, keep as False.
+
     Returns:
         optax.GradientTransformationExtraArgs
     """
@@ -345,6 +340,7 @@ def kron(
             scanned_layers=scanned_layers,
             lax_map_fns=lax_map_fns,
             lax_map_batch_size=lax_map_batch_size,
+            integrate_out_v=integrate_out_v,
         )
     ]
     if weight_decay > 0:
@@ -397,8 +393,9 @@ def _norm_lower_bound(A: jax.Array):
 
     def calc(A):
         A = A / max_abs
+        A_conj = A.conj()
 
-        aa = jnp.real(A * A.conj())
+        aa = jnp.real(A * A_conj)
 
         aa_sum0 = jnp.sum(aa, axis=0)
         aa_sum1 = jnp.sum(aa, axis=1)
@@ -410,12 +407,12 @@ def _norm_lower_bound(A: jax.Array):
         def gt_branch():
             x = jax.lax.dynamic_index_in_dim(A, i, 1, keepdims=False)
             x = x.conj() @ A
-            return max_abs * jnp.linalg.norm((x / jnp.linalg.norm(x)) @ A.conj().T)
+            return max_abs * jnp.linalg.norm((x / jnp.linalg.norm(x)) @ A_conj.T)
 
         def le_branch():
             x = jax.lax.dynamic_index_in_dim(A, j, 0, keepdims=False)
             x = A @ x.conj()
-            return max_abs * jnp.linalg.norm(A.conj().T @ (x / jnp.linalg.norm(x)))
+            return max_abs * jnp.linalg.norm(A_conj.T @ (x / jnp.linalg.norm(x)))
 
         # these lax.cond fall back to lax.select inside vmap but we'll keep them anyway
         return jax.lax.cond(value0 > value1, gt_branch, le_branch)
@@ -591,140 +588,135 @@ def _solve_triangular(A, B, upper, left=True):
 
 
 def _triangular_inv(A):
-    # return inv(A); used only when V is None, i.e., integrating out V
+    """Compute inv(A).
+
+    A triangular solve has roughly the same complexity as a matmul.
+    """
     I = jnp.eye(A.shape[0], dtype=A.dtype)
     return _solve_triangular(A, I, upper=True)
 
 
 def _solve_triangular_right(X, A):
-    # return X @ inv(A)
+    """Compute X @ inv(A).
+
+    A triangular solve has roughly the same complexity as a matmul.
+    """
     if X.ndim > 1:
         return _solve_triangular(A, X, upper=True, left=False)
     else:
         return _solve_triangular(A, X[None, :], upper=True, left=False)[0]
 
 
-def _update_precond_kron_math(Q, G, V, exprs, precond_lr, precision):
-    """Update Kronecker product preconditioner Q with (vector, hess-vector-product).
+def _conjB_or_invQhinvQ(Q, G, V):
+    """Compute conjB or trace(inv(Q).H @ inv(Q)) depending on V."""
+    if V is not None:
+        order = G.ndim
+        p = list(range(order))
+        # permute dims like [0,1,2,3,4] -> [1,2,3,4,0]
+        conjB = jnp.transpose(V.conj(), p[1:] + p[:1])
+        for i, q in enumerate(Q):
+            conjB = conjB / q if q.ndim < 2 else _solve_triangular_right(conjB, q)
+            if i < order - 1:
+                # transpose dims like
+                # [1,2,3,4,0]->[0,2,3,4,1]->[0,1,3,4,2]->[0,1,2,4,3]->[0,1,2,3,4]
+                conjB = jnp.swapaxes(conjB, i, order - 1)
+        return conjB
+    else:
+        # V is integrated out, no need to form conjB
+        invQ = [1 / q if q.ndim < 2 else _triangular_inv(q) for q in Q]
+        invQhinvQ = [q.conj() * q if q.ndim < 2 else q.conj().T @ q for q in invQ]
+        return invQhinvQ
 
-    V is optional, and we can set it to None if it is integrated out (NOT recommended).
-    """
 
-    with jax.default_matmul_precision(precision):
-        order = G.ndim  # order of tensor
-        exprA, exprGs, _ = exprs
+def _update_Q(Q, G, conjB_or_invQhinvQ, exprs, precond_lr, integrate_out_v):
+    """Compute A and update Q."""
+    exprA, exprGs, _ = exprs
 
-        A = exprA(*Q, G, backend="jax")
-        if V is not None:
-            invQhinvQ, trace_invQhinvQ = None, None
-            p = list(range(order))
-            # permute dims like [0,1,2,3,4] -> [1,2,3,4,0]
-            conjB = jnp.transpose(V.conj(), p[1:] + p[:1])
-            for i, q in enumerate(Q):
-                conjB = conjB / q if q.ndim < 2 else _solve_triangular_right(conjB, q)
-                if i < order - 1:
-                    # transpose dims like
-                    # [1,2,3,4,0]->[0,2,3,4,1]->[0,1,3,4,2]->[0,1,2,4,3]->[0,1,2,3,4]
-                    conjB = jnp.swapaxes(conjB, i, order - 1)
+    A = exprA(*Q, G, backend="jax")
+    A_conj = A.conj()
+    if integrate_out_v:
+        invQhinvQ = conjB_or_invQhinvQ
+        trace_invQhinvQ = [
+            jnp.sum(q) if q.ndim < 2 else jnp.trace(q) for q in invQhinvQ
+        ]
+    else:
+        conjB = conjB_or_invQhinvQ
+        conjB_conj = conjB.conj()
+
+    def _update_single_q(i, q):
+        term1 = exprGs[i](A, A_conj)
+        if integrate_out_v:
+            term2 = 1.0
+            for j, trace in enumerate(trace_invQhinvQ):
+                term2 = term2 * (trace if i != j else invQhinvQ[i])
         else:
-            # V is integrated out, and no need to form conjB
-            conjB = None
-            invQ = [1 / q if q.ndim < 2 else _triangular_inv(q) for q in Q]
-            invQhinvQ = [q.conj() * q if q.ndim < 2 else q.conj().T @ q for q in invQ]
-            trace_invQhinvQ = [
-                jnp.sum(q) if q.ndim < 2 else jnp.trace(q) for q in invQhinvQ
-            ]
+            term2 = exprGs[i](conjB_conj, conjB)
 
-        def update_q(q, i):
-            step_normalizer = "2nd"
-            term1 = exprGs[i](A, A.conj())
-            if conjB is not None:
-                term2 = exprGs[i](conjB.conj(), conjB)
-            else:  # V is integrated out
-                term2 = 1.0
-                for j, trace in enumerate(trace_invQhinvQ):
-                    term2 = term2 * (trace if i != j else invQhinvQ[i])
+        if q.ndim < 2:
+            q -= (
+                precond_lr
+                / _add_eps(jnp.max(jnp.abs(term1 + term2)))
+                * (term1 - term2)
+                * q
+            )
+        else:
+            q -= (
+                precond_lr
+                / _add_eps(_norm_lower_bound(term1 + term2))
+                * jnp.triu(term1 - term2)
+                @ q
+            )
+        return q
 
-            if step_normalizer == "2nd":
-                if q.ndim < 2:  # q is a diagonal matrix or scalar
-                    q -= (
-                        precond_lr
-                        / _add_eps(jnp.max(jnp.abs(term1 + term2)))
-                        * (term1 - term2)
-                        * q
-                    )
-                else:
-                    q -= (
-                        precond_lr
-                        / _add_eps(_norm_lower_bound(term1 + term2))
-                        * jnp.triu(term1 - term2)
-                        @ q
-                    )
-            else:  # only use gradient for step size normalization
-                if q.ndim < 2:  # q is a diagonal matrix or scalar
-                    q -= (
-                        precond_lr
-                        / _add_eps(jnp.max(jnp.abs(term1 - term2)))
-                        * (term1 - term2)
-                        * q
-                    )
-                else:
-                    q -= (
-                        precond_lr
-                        / _add_eps(_norm_lower_bound(term1 - term2))
-                        * jnp.triu(term1 - term2)
-                        @ q
-                    )
-            return q
-
-        Q = [update_q(q, i) for i, q in enumerate(Q)]
-
-        return Q
+    return [_update_single_q(i, q) for i, q in enumerate(Q)]
 
 
 def _precond_grad_kron_math(Q, G, exprs):
     """Precondition gradient G with preconditioner Q."""
-    # the last expr is exprP
-    return exprs[-1](*[q.conj() for q in Q], *Q, G, backend="jax")
+    exprP = exprs[-1]
+    return exprP(*[q.conj() for q in Q], *Q, G, backend="jax")
 
 
 if __name__ == "__main__":
     from pprint import pprint
 
-    params = {
-        "a": jnp.ones(()),
-        "b": jnp.ones((2,)),
-        "c": jnp.ones((2, 100)),
-        "d": jnp.ones((3, 7, 4)),
-        "e": jnp.ones((2, 3, 4)),  # scan
-        "f": jnp.ones((2, 4, 5, 2)),  # scan
-        "g": jnp.ones((2, 5)),  # scan
-        "h": jnp.ones((1, 2, 3, 4, 4, 3)),
-    }
-    scanned = {
-        "a": False,
-        "b": False,
-        "c": False,
-        "d": False,
-        "e": True,
-        "f": True,
-        "g": True,
-        "h": False,
-    }
-    print("Params:")
-    pprint(jax.tree.map(lambda p: p.shape, params), width=150)
-    pprint(jnp.array([x.mean() for x in jax.tree.leaves(params)]).mean())
+    for integrate_out_v in [True, False]:
+        params = {
+            "a": jnp.ones(()),
+            "b": jnp.ones((2,)),
+            "c": jnp.ones((2, 100)),
+            "d": jnp.ones((3, 7, 4)),
+            "e": jnp.ones((2, 3, 4)),  # scan
+            "f": jnp.ones((2, 4, 5, 2)),  # scan
+            "g": jnp.ones((2, 5)),  # scan
+            "h": jnp.ones((1, 2, 3, 4, 4, 3)),
+        }
+        scanned = {
+            "a": False,
+            "b": False,
+            "c": False,
+            "d": False,
+            "e": True,
+            "f": True,
+            "g": True,
+            "h": False,
+        }
+        print("Params:")
+        pprint(jax.tree.map(lambda p: p.shape, params), width=150)
+        pprint(jnp.array([x.mean() for x in jax.tree.leaves(params)]).mean())
 
-    opt = kron(learning_rate=0.1, scanned_layers=scanned)
-    opt_state = jax.jit(opt.init)(params)
-    print("Opt State:")
-    pprint(jax.tree.map(lambda p: p.shape, opt_state), width=150)
+        opt = kron(
+            learning_rate=0.1, scanned_layers=scanned, integrate_out_v=integrate_out_v
+        )
+        opt_state = jax.jit(opt.init)(params)
+        print("Opt State:")
+        pprint(jax.tree.map(lambda p: p.shape, opt_state), width=150)
 
-    for _ in range(10):
-        grads = jax.tree.map(lambda p: p * 2, params)
-        updates, opt_state = jax.jit(opt.update)(grads, opt_state)
-        params = jax.tree.map(lambda p, u: p + u, params, updates)
+        for _ in range(10):
+            grads = jax.tree.map(lambda p: p * 2, params)
+            updates, opt_state = jax.jit(opt.update)(grads, opt_state)
+            params = jax.tree.map(lambda p, u: p + u, params, updates)
 
-    print("Params:")
-    pprint(jax.tree.map(lambda p: p.shape, params), width=150)
-    pprint(jnp.array([x.mean() for x in jax.tree.leaves(params)]).mean())
+        print("Params:")
+        pprint(jax.tree.map(lambda p: p.shape, params), width=150)
+        pprint(jnp.array([x.mean() for x in jax.tree.leaves(params)]).mean())

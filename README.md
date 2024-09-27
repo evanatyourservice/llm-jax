@@ -10,6 +10,8 @@ not good for large nets, compile time problems.
 
 Only set up for pretraining for now, working on inference and conversion to pytorch and huggingface hub.
 
+Modified mistral slightly to include gemma style soft capping because I liked the idea.
+
 ## Install
 
 Clone llm-jax

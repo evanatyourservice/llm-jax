@@ -168,10 +168,11 @@ def main(config: TrainConfig):
                     precond_init_scale=config.optimizer.precond_init_scale,
                     mu_dtype=jnp.bfloat16,
                     precond_dtype=config.optimizer.preconditioner_dtype,
-                    precision="bfloat16",
+                    precision="tensorfloat32",
                     scanned_layers=scanned_layers,
                     lax_map_fns=config.optimizer.lax_map_fns,
                     lax_map_batch_size=config.optimizer.lax_map_batch_size,
+                    integrate_out_v=config.optimizer.integrate_out_v,
                 )
             )
             optimizer = optax.chain(*optimizer)
