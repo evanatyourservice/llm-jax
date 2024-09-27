@@ -308,7 +308,7 @@ def main(config: TrainConfig):
         # we just restart this with a new random shuffle if restarting
         process_shard = _fw_shard_names[jax.process_index() :: jax.process_count()]
         # shuffle using current step so first steps are deterministic,
-        # after that it doesn't matter as much
+        # after that it doesn't matter as much if restarting training
         rng = np.random.RandomState(curr_step + jax.process_index())
         rng.shuffle(process_shard)
         ds_name = process_shard[shard_idx % len(process_shard)]

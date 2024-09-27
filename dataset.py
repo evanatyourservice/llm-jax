@@ -152,7 +152,8 @@ def fineweb_edu_dataset(
         def tokenize(example):
             # mistral tokenizer adds bos token to beginning
             tokenized = tokenizer(example)["input_ids"]
-            # cap tokenized lengths to 10 * block_size and add eot_token
+            # cap tokenized lengths to 10 * block_size to prevent too much
+            # similarity between blocks in a batch or group of batches
             tokenized = [t[: 10 * block_size] for t in tokenized]
             return {"tokens": tokenized}
 
