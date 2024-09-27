@@ -56,7 +56,7 @@ class Embedder(nn.Module):
         x = constrain(x, self.mesh, P("fsdp"))
 
         # gemma style
-        x = jnp.tanh(x / 30.0) * 30.0
+        # x = jnp.tanh(x / 30.0) * 30.0
 
         return x
 
