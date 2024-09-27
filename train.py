@@ -227,12 +227,13 @@ def main(config: TrainConfig):
 
     def init_train_state(key):
         """Initialize the train state."""
+        # make model
         model = Mistral(config.model, mesh, config.gradient_accumulation_steps > 1)
 
+        # init params
         dummy_tokens = jnp.zeros(
             (config.batch_size, config.model.block_size), dtype=jnp.uint16
         )
-
         params = model.init(key, dummy_tokens)
         params = otu.tree_cast(params, config.params_dtype)
 
@@ -245,8 +246,10 @@ def main(config: TrainConfig):
         else:
             scanned_layers = None
 
+        # make optimizer
         optimizer = make_opt(scanned_layers=scanned_layers)
 
+        # make train state
         train_state = TrainState(
             step=0,
             apply_fn=model.apply,
