@@ -159,7 +159,6 @@ def main(config: TrainConfig):
                     lr_schedule,
                     preconditioner_update_probability=update_prob_schedule,
                     b1=config.optimizer.b1,
-                    nesterov=config.optimizer.nesterov,
                     weight_decay=config.optimizer.weight_decay,
                     mask=param_decay_mask,
                     max_size_triangular=config.optimizer.max_size_triangular,
@@ -172,7 +171,6 @@ def main(config: TrainConfig):
                     scanned_layers=scanned_layers,
                     lax_map_fns=config.optimizer.lax_map_fns,
                     lax_map_batch_size=config.optimizer.lax_map_batch_size,
-                    integrate_out_v=config.optimizer.integrate_out_v,
                 )
             )
             optimizer = optax.chain(*optimizer)

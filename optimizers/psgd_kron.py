@@ -16,7 +16,6 @@ from optax._src.combine import chain
 def scale_by_kron(
     preconditioner_update_probability: Union[float, Callable[[int], float]] = 0.5,
     b1: float = 0.9,
-    nesterov: bool = False,
     max_size_triangular: int = 8192,
     max_skew_triangular: int = 10,
     precond_lr: Union[float, Callable[[int], float]] = 0.1,
@@ -27,7 +26,6 @@ def scale_by_kron(
     scanned_layers: Optional[base.Params] = None,
     lax_map_fns: bool = False,
     lax_map_batch_size: int = 4,
-    integrate_out_v: bool = False,
 ) -> base.GradientTransformationExtraArgs:
     """
     Implements PSGD Kron from https://github.com/lixilinx/psgd_torch.
@@ -36,7 +34,6 @@ def scale_by_kron(
         preconditioner_update_probability: float, probability of updating the
             preconditioner.
         b1: float, momentum parameter.
-        nesterov: bool, whether to use Nesterov momentum.
         max_size_triangular: int, max size for preconditioner to be triangular.
         max_skew_triangular: int, max skew for preconditioner to be triangular.
         precond_lr: float or callable, learning rate for the preconditioner.
@@ -50,15 +47,16 @@ def scale_by_kron(
         scanned_layers: optional base.Params, tree of bool same structure as params
             indicating scanned layers.
         lax_map_fns: bool, whether to use lax.map for scanned layers instead of vmap.
-            Useful to save memory.
+            Useful to save memory with large models.
         lax_map_batch_size: int, batch size for lax.map, see jax docs for more info.
-        integrate_out_v: bool, whether to integrate out v. Experimental, keep as False.
 
     Returns:
         optax.GradientTransformationExtraArgs
     """
     mu_dtype = canonicalize_dtype(mu_dtype)
     precond_dtype = canonicalize_dtype(precond_dtype)
+
+    integrate_out_v = False
 
     def map_fn(do_map, fn, *args):
         if do_map:
@@ -157,7 +155,7 @@ def scale_by_kron(
         # momentum
         mu = None
         if state["mu"] is not None:
-            updates, mu = _apply_momentum(updates, state["mu"], count_inc, b1, nesterov)
+            updates, mu = _apply_momentum(updates, state["mu"], count_inc, b1)
 
         # flatten pytrees
         updates, grads_structure = jax.tree.flatten(updates)
@@ -279,7 +277,6 @@ def kron(
     learning_rate: Union[float, Callable[[int], float]] = 0.001,
     preconditioner_update_probability: Union[float, Callable[[int], float]] = 0.5,
     b1: float = 0.9,
-    nesterov: bool = False,
     weight_decay: float = 0.0,
     mask: Optional[Union[Any, Callable[[base.Params], Any]]] = None,
     max_size_triangular: int = 8192,
@@ -292,7 +289,6 @@ def kron(
     scanned_layers: Optional[base.Params] = None,
     lax_map_fns: bool = False,
     lax_map_batch_size: int = 4,
-    integrate_out_v: bool = False,
 ) -> base.GradientTransformationExtraArgs:
     """
     Implements PSGD Kron from https://github.com/lixilinx/psgd_torch.
@@ -302,8 +298,7 @@ def kron(
         preconditioner_update_probability: float, probability of updating the
             preconditioner.
         b1: float, momentum parameter.
-        nesterov: bool, whether to use Nesterov momentum.
-        weight_decay: float, weight decay.
+        weight_decay: float, PSGD does not need high weight decay.
         mask: optional Any or callable, mask to apply to parameters.
         max_size_triangular: int, max size for preconditioner to be triangular.
         max_skew_triangular: int, max skew for preconditioner to be triangular.
@@ -318,9 +313,8 @@ def kron(
         scanned_layers: optional base.Params, tree of bool same structure as params
             indicating scanned layers.
         lax_map_fns: bool, whether to use lax.map for scanned layers instead of vmap.
-            Useful to save memory.
+            Useful to save memory with large models.
         lax_map_batch_size: int, batch size for lax.map, see jax docs for more info.
-        integrate_out_v: bool, whether to integrate out v. Experimental, keep as False.
 
     Returns:
         optax.GradientTransformationExtraArgs
@@ -329,7 +323,6 @@ def kron(
         scale_by_kron(
             preconditioner_update_probability=preconditioner_update_probability,
             b1=b1,
-            nesterov=nesterov,
             max_size_triangular=max_size_triangular,
             max_skew_triangular=max_skew_triangular,
             precond_lr=precond_lr,
@@ -340,7 +333,6 @@ def kron(
             scanned_layers=scanned_layers,
             lax_map_fns=lax_map_fns,
             lax_map_batch_size=lax_map_batch_size,
-            integrate_out_v=integrate_out_v,
         )
     ]
     if weight_decay > 0:
@@ -350,22 +342,10 @@ def kron(
 
 
 def _apply_momentum(
-    updates: base.Updates, momentum: base.Updates, step, b1, nesterov
+    updates: base.Updates, momentum: base.Updates, step, b1
 ) -> Tuple[base.Updates, base.Updates]:
-    # ema
     mu = otu.tree_update_moment(updates, momentum, b1, 1)
-    if nesterov:
-        # nesterov momentum for ema with bias correction
-        # https://openreview.net/pdf?id=OM0jvwB8jIp57ZJjtNEZ
-        updates = jax.tree.map(
-            lambda m, g: b1 * m + (1 - b1) * g,
-            otu.tree_bias_correction(mu, b1, safe_int32_increment(step)),
-            otu.tree_bias_correction(updates, b1, step),
-        )
-    else:
-        # bias correction only
-        updates = otu.tree_bias_correction(mu, b1, step)
-
+    updates = otu.tree_bias_correction(mu, b1, step)
     return updates, mu
 
 

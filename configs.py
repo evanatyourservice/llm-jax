@@ -69,27 +69,25 @@ class OptimizerConfig:
         lax_map_fns: Whether to use lax.map for scanned layers instead of vmap.
             Useful for very large models (> 1B parameters).
         lax_map_batch_size: Batch size for lax.map, see jax docs for more info.
-        integrate_out_v: Whether to integrate out v. Experimental, keep as False.
     """
 
-    type: str = "adamw"
+    type: str = "kron"
     learning_rate: float = 0.003
     warmup_steps: int = 1000
-    weight_decay: float = 0.1
+    weight_decay: float = 0.01
     grad_clip: float = 1.0
     b1: float = 0.9
     b2: float = 0.95
     eps: float = 1e-8
     nesterov: bool = False
     preconditioner_update_probability: float = 0.03
-    max_size_triangular: int = 4096
+    max_size_triangular: int = 8192
     max_skew_triangular: int = 10
-    precond_lr: float = 0.1
-    precond_init_scale: Optional[float] = 0.1
+    precond_lr: float = 0.3
+    precond_init_scale: Optional[float] = 0.01
     preconditioner_dtype: str = "float32"
     lax_map_fns: bool = False
-    lax_map_batch_size: int = 4
-    integrate_out_v: bool = False
+    lax_map_batch_size: int = 8
 
 
 @dataclass(frozen=True)
