@@ -26,7 +26,7 @@ import orbax.checkpoint as ocp
 
 from dataset import prepare_hellaswag, fineweb_edu_dataset, _fw_shard_names
 from configs import TrainConfig
-from optimizers.psgd_kron import kron
+from optimizers.psgd_kron import kron, precond_update_prob_schedule
 from optimizers.tearfree import optimizer as tearfree_opt
 from optimizers.tearfree import shampoo, second_order
 from optimizers.adam import adamw
@@ -121,20 +121,6 @@ def main(config: TrainConfig):
             out = non_kernels.update(lambda _: False, all_true)
             return out
 
-        def update_prob_schedule(n):
-            """Exponentially anneal PSGD update probability at beginning of training.
-
-            PSGD benefits from more precond updates at beginning of training,
-            then it can drop low."""
-            max_prob = 1.0
-            min_prob = config.optimizer.preconditioner_update_probability
-            decay = 0.001
-            flat_start = 200  # hold at max_prob for this many steps at start
-            return jnp.minimum(
-                jnp.maximum(max_prob * jnp.exp(-decay * (n - flat_start)), min_prob),
-                max_prob,
-            )
-
         optimizer = []
         if config.optimizer.grad_clip > 0.0:
             optimizer.append(optax.clip_by_global_norm(config.optimizer.grad_clip))
@@ -157,19 +143,20 @@ def main(config: TrainConfig):
             optimizer.append(
                 kron(
                     lr_schedule,
-                    preconditioner_update_probability=update_prob_schedule,
                     b1=config.optimizer.b1,
                     weight_decay=config.optimizer.weight_decay,
                     mask=param_decay_mask,
+                    preconditioner_update_probability=precond_update_prob_schedule(
+                        min_prob=config.optimizer.preconditioner_update_probability
+                    ),
                     max_size_triangular=config.optimizer.max_size_triangular,
                     max_skew_triangular=config.optimizer.max_skew_triangular,
                     precond_lr=config.optimizer.precond_lr,
-                    precond_init_scale=config.optimizer.precond_init_scale,
                     mu_dtype=jnp.bfloat16,
                     precond_dtype=config.optimizer.preconditioner_dtype,
                     precision="tensorfloat32",
                     scanned_layers=scanned_layers,
-                    lax_map_fns=config.optimizer.lax_map_fns,
+                    lax_map_scanned_layers=config.optimizer.lax_map_scanned_layers,
                     lax_map_batch_size=config.optimizer.lax_map_batch_size,
                 )
             )
@@ -265,9 +252,7 @@ def main(config: TrainConfig):
     # get train state shapes and shardings
     train_state_shapes = jax.eval_shape(init_train_state, rng)
 
-    # sharding rule fn
     op = fsdp_sharding("fsdp", min_size_to_shard_mb=config.min_size_to_shard_mb)
-
     train_state_sharding, _ = infer_sharding(
         params=train_state_shapes, mesh=mesh, op=op
     )
@@ -449,7 +434,7 @@ def main(config: TrainConfig):
     def eval_hellaswag(state: TrainState, data, begin_lens, seq_lens, labels):
         """Evaluate the hellaswag dataset."""
         # data comes in shape (b, 4, block_size + 1)
-        # seq lens come in shape (b, 4)
+        # begin and seq lens come in shape (b, 4)
         # labels come in shape (b,)
         bs_in = data.shape[0]
         data = jnp.reshape(data, (-1, data.shape[-1]))

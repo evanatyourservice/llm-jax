@@ -55,7 +55,7 @@ class Embedder(nn.Module):
         x = jnp.dot(x, self.embedding.T)
         x = constrain(x, self.mesh, P("fsdp"))
 
-        # gemma style
+        # gemma style soft cap
         x = jnp.tanh(x / 30.0) * 30.0
 
         return x

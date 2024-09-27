@@ -69,11 +69,11 @@ def _apply_masks(logits, mask, is_causal, q_seqlen, kv_seqlen, local_window_size
 
 
 def _dot_product_attention_core(query, key, value, is_causal, local_window_size):
-    # gemma style
     query *= jax.lax.rsqrt(jnp.array(query.shape[-1], dtype=jnp.float32)).astype(
         query.dtype
     )
     logits = jnp.einsum("BTNH,BSNH->BNTS", query, key)
+    # gemma style soft cap
     logits = jnp.tanh(logits / 50.0) * 50.0
 
     padded_logits = _apply_masks(logits, None, is_causal, None, None, local_window_size)

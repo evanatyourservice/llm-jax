@@ -91,7 +91,6 @@ nohup python3 main_multihost.py \
     --optimizer.max_size_triangular=8192 \
     --optimizer.max_skew_triangular=10 \
     --optimizer.precond_lr=0.3 \
-    --optimizer.precond_init_scale=0.1 \
     --optimizer.preconditioner_dtype=float32 \
     > nohup.out 2>&1 & 
 PID=\\\$!

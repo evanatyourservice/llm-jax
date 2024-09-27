@@ -89,12 +89,10 @@ def prepare_hellaswag(
             all_seq_lengths.append(np.array(seq_lengths_to_concat, dtype=np.int32))
             all_labels.append(int(correct_end))
 
-    all_data = np.array(all_data, dtype=np.uint16)  # (10042, 4, seq_len)
-    all_beginning_lengths = np.array(
-        all_beginning_lengths, dtype=np.int32
-    )  # (10042, 4)
-    all_seq_lengths = np.array(all_seq_lengths, dtype=np.int32)  # (10042, 4)
-    all_labels = np.array(all_labels, dtype=np.int32)  # (10042,)
+    all_data = np.array(all_data, dtype=np.uint16)
+    all_beginning_lengths = np.array(all_beginning_lengths, dtype=np.int32)
+    all_seq_lengths = np.array(all_seq_lengths, dtype=np.int32)
+    all_labels = np.array(all_labels, dtype=np.int32)
 
     ds = tf.data.Dataset.from_tensor_slices(
         (all_data, all_beginning_lengths, all_seq_lengths, all_labels)

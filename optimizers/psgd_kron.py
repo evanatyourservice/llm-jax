@@ -13,32 +13,55 @@ from optax._src.utils import canonicalize_dtype
 from optax._src.combine import chain
 
 
+def precond_update_prob_schedule(
+    max_prob=1.0, min_prob=0.03, decay=0.001, flat_start=200
+):
+    """Anneal preconditioner update probability during beginning of training.
+
+    PSGD can benefit from more preconditioner updates at the beginning of training,
+    but once the preconditioner is learned the update probability can drop low.
+
+    This schedule is an exponential anneal with a flat start. Default settings keep
+    update probability at 1.0 for 200 steps then exponentially anneal down to
+    `min_prob` by 4000 steps. Default settings work very well for most models and
+    training regimes.
+    """
+
+    def _schedule(n):
+        """Exponential anneal with flat start."""
+        return jnp.minimum(
+            jnp.maximum(max_prob * jnp.exp(-decay * (n - flat_start)), min_prob),
+            max_prob,
+        )
+
+    return _schedule
+
+
 def scale_by_kron(
-    preconditioner_update_probability: Union[float, Callable[[int], float]] = 0.5,
     b1: float = 0.9,
+    preconditioner_update_probability: Union[
+        float, Callable[[int], float]
+    ] = precond_update_prob_schedule(),
     max_size_triangular: int = 8192,
     max_skew_triangular: int = 10,
     precond_lr: Union[float, Callable[[int], float]] = 0.1,
-    precond_init_scale: float = 0.1,
     mu_dtype: Optional[Union[str, jnp.dtype]] = None,
     precond_dtype: Optional[Union[str, jnp.dtype]] = None,
     precision: str = "tensorfloat32",
     scanned_layers: Optional[base.Params] = None,
-    lax_map_fns: bool = False,
+    lax_map_scanned_layers: bool = False,
     lax_map_batch_size: int = 4,
 ) -> base.GradientTransformationExtraArgs:
     """
     Implements PSGD Kron from https://github.com/lixilinx/psgd_torch.
 
     Args:
-        preconditioner_update_probability: float, probability of updating the
-            preconditioner.
         b1: float, momentum parameter.
+        preconditioner_update_probability: float, probability of updating the
+            preconditioner. Default anneals from 1.0 to 0.03 by 4000 steps.
         max_size_triangular: int, max size for preconditioner to be triangular.
         max_skew_triangular: int, max skew for preconditioner to be triangular.
         precond_lr: float or callable, learning rate for the preconditioner.
-        precond_init_scale: float, initial scale for the preconditioner. Think SGD,
-            0.1 or 0.01 are good defaults.
         mu_dtype: optional str or jnp.dtype, dtype of the momentum accumulator.
             Defaults to the same dtype as the parameters.
         precond_dtype: optional str or jnp.dtype, dtype of the preconditioner.
@@ -46,8 +69,8 @@ def scale_by_kron(
              'bfloat16', 'tensorfloat32', 'float32'.
         scanned_layers: optional base.Params, tree of bool same structure as params
             indicating scanned layers.
-        lax_map_fns: bool, whether to use lax.map for scanned layers instead of vmap.
-            Useful to save memory with large models.
+        lax_map_scanned_layers: bool, whether to use lax.map for scanned layers
+            instead of vmap. Useful to save memory with large models.
         lax_map_batch_size: int, batch size for lax.map, see jax docs for more info.
 
     Returns:
@@ -56,11 +79,13 @@ def scale_by_kron(
     mu_dtype = canonicalize_dtype(mu_dtype)
     precond_dtype = canonicalize_dtype(precond_dtype)
 
+    precond_init_scale = 0.01
+    momentum_into_preconditioner = True
     integrate_out_v = False
 
     def map_fn(do_map, fn, *args):
         if do_map:
-            if lax_map_fns:
+            if lax_map_scanned_layers:
                 return jax.lax.map(
                     lambda xs: fn(*xs),
                     xs=args,
@@ -128,17 +153,12 @@ def scale_by_kron(
                 )
 
         # initial state
-        return dict(
-            count=jnp.zeros([], jnp.int32),
-            key=jax.random.PRNGKey(5318008),
-            mu=mu,
-            Qs_preconditioners=Qs,
-        )
+        return dict(count=jnp.zeros([], jnp.int32), mu=mu, Qs_preconditioners=Qs)
 
     def update_fn(updates: base.Updates, state: dict, params: base.Params = None):
         del params
         count_inc = safe_int32_increment(state["count"])
-        key = state["key"]
+        key = jax.random.fold_in(jax.random.PRNGKey(5318008), state["count"])
 
         scanned_layers_ = scanned_layers
         if scanned_layers is None:
@@ -153,12 +173,14 @@ def scale_by_kron(
             precond_lr_in = precond_lr(count_inc)
 
         # momentum
+        momentum_updates = updates
         mu = None
         if state["mu"] is not None:
-            updates, mu = _apply_momentum(updates, state["mu"], count_inc, b1)
+            momentum_updates, mu = _apply_momentum(updates, state["mu"], count_inc, b1)
 
         # flatten pytrees
         updates, grads_structure = jax.tree.flatten(updates)
+        momentum_updates = grads_structure.flatten_up_to(momentum_updates)
         Qs = grads_structure.flatten_up_to(state["Qs_preconditioners"])
         scanned_layers_ = grads_structure.flatten_up_to(scanned_layers_)
 
@@ -178,21 +200,26 @@ def scale_by_kron(
         # maybe update preconditioner
         def update_preconditioner(key, Qs):
             with jax.default_matmul_precision(precision):
+                if momentum_into_preconditioner:
+                    precond_updates_in = momentum_updates
+                else:
+                    precond_updates_in = updates
+
                 if integrate_out_v:
-                    Vs = [None for _ in updates]
+                    Vs = [None for _ in precond_updates_in]
                 else:
                     # random vectors
                     key, subkey = jax.random.split(key)
-                    Vs_keys = jax.random.split(subkey, len(updates))
+                    Vs_keys = jax.random.split(subkey, len(precond_updates_in))
                     Vs = [
                         jax.random.normal(k, shape=g.shape, dtype=g.dtype)
-                        for k, g in zip(Vs_keys, updates)
+                        for k, g in zip(Vs_keys, precond_updates_in)
                     ]
 
                 # form conjB or invQhinvQ
                 conjB_or_invQhinvQ = [
                     map_fn(s, _conjB_or_invQhinvQ, Q, g, v)
-                    for s, Q, g, v in zip(scanned_layers_, Qs, updates, Vs)
+                    for s, Q, g, v in zip(scanned_layers_, Qs, precond_updates_in, Vs)
                 ]
 
                 # update Qs
@@ -210,7 +237,11 @@ def scale_by_kron(
                         c_or_i,
                     )
                     for s, exprs, Q, g, c_or_i in zip(
-                        scanned_layers_, expressions, Qs, updates, conjB_or_invQhinvQ
+                        scanned_layers_,
+                        expressions,
+                        Qs,
+                        precond_updates_in,
+                        conjB_or_invQhinvQ,
                     )
                 ]
 
@@ -245,18 +276,20 @@ def scale_by_kron(
         # precondition gradients
         precond_gs = [
             map_fn(s, partial(_precond_grad_kron_math, exprs=exprs), Q, g)
-            for s, exprs, Q, g in zip(scanned_layers_, expressions, Qs, updates)
+            for s, exprs, Q, g in zip(
+                scanned_layers_, expressions, Qs, momentum_updates
+            )
         ]
 
         # trust region
-        # global clipping
+        # global clipping (sqrt n params)
         max_norm = jnp.sqrt(
             jnp.array(
                 [p.size for p in jax.tree.leaves(precond_gs)], dtype=jnp.float32
             ).sum()
         )
         precond_gs = _global_clip(precond_gs, max_norm)
-        # element-wise clipping
+        # element-wise clipping (1.0)
         precond_gs = jax.tree.map(lambda x: jnp.clip(x, -1.0, 1.0), precond_gs)
 
         # unflatten pytrees
@@ -266,7 +299,7 @@ def scale_by_kron(
         # dtypes and new state
         mu = otu.tree_cast(mu, mu_dtype)
         Qs = otu.tree_cast(Qs, precond_dtype)
-        state = dict(count=count_inc, key=key, mu=mu, Qs_preconditioners=Qs)
+        state = dict(count=count_inc, mu=mu, Qs_preconditioners=Qs)
 
         return updates, state
 
@@ -275,19 +308,20 @@ def scale_by_kron(
 
 def kron(
     learning_rate: Union[float, Callable[[int], float]] = 0.001,
-    preconditioner_update_probability: Union[float, Callable[[int], float]] = 0.5,
     b1: float = 0.9,
     weight_decay: float = 0.0,
     mask: Optional[Union[Any, Callable[[base.Params], Any]]] = None,
+    preconditioner_update_probability: Union[
+        float, Callable[[int], float]
+    ] = precond_update_prob_schedule(),
     max_size_triangular: int = 8192,
     max_skew_triangular: int = 10,
     precond_lr: Union[float, Callable[[int], float]] = 0.1,
-    precond_init_scale: float = 0.1,
     mu_dtype: Optional[Union[str, jnp.dtype]] = None,
     precond_dtype: Optional[Union[str, jnp.dtype]] = None,
     precision: str = "tensorfloat32",
     scanned_layers: Optional[base.Params] = None,
-    lax_map_fns: bool = False,
+    lax_map_scanned_layers: bool = False,
     lax_map_batch_size: int = 4,
 ) -> base.GradientTransformationExtraArgs:
     """
@@ -295,16 +329,14 @@ def kron(
 
     Args:
         learning_rate: float or callable, learning rate.
-        preconditioner_update_probability: float, probability of updating the
-            preconditioner.
         b1: float, momentum parameter.
-        weight_decay: float, PSGD does not need high weight decay.
+        weight_decay: float, weight decay. PSGD does not need high weight decay.
         mask: optional Any or callable, mask to apply to parameters.
+        preconditioner_update_probability: float, probability of updating the
+            preconditioner. Default anneals from 1.0 to 0.03 by 4000 steps.
         max_size_triangular: int, max size for preconditioner to be triangular.
         max_skew_triangular: int, max skew for preconditioner to be triangular.
         precond_lr: float or callable, learning rate for the preconditioner.
-        precond_init_scale: float, initial scale for the preconditioner. Think SGD,
-            0.1 or 0.01 are good defaults.
         mu_dtype: optional str or jnp.dtype, dtype of the momentum accumulator.
             Defaults to the same dtype as the parameters.
         precond_dtype: optional str or jnp.dtype, dtype of the preconditioner.
@@ -312,8 +344,8 @@ def kron(
             'bfloat16', 'tensorfloat32', 'float32'.
         scanned_layers: optional base.Params, tree of bool same structure as params
             indicating scanned layers.
-        lax_map_fns: bool, whether to use lax.map for scanned layers instead of vmap.
-            Useful to save memory with large models.
+        lax_map_scanned_layers: bool, whether to use lax.map for scanned layers
+            instead of vmap. Useful to save memory with large models.
         lax_map_batch_size: int, batch size for lax.map, see jax docs for more info.
 
     Returns:
@@ -326,12 +358,11 @@ def kron(
             max_size_triangular=max_size_triangular,
             max_skew_triangular=max_skew_triangular,
             precond_lr=precond_lr,
-            precond_init_scale=precond_init_scale,
             mu_dtype=mu_dtype,
             precond_dtype=precond_dtype,
             precision=precision,
             scanned_layers=scanned_layers,
-            lax_map_fns=lax_map_fns,
+            lax_map_scanned_layers=lax_map_scanned_layers,
             lax_map_batch_size=lax_map_batch_size,
         )
     ]
@@ -394,7 +425,6 @@ def _norm_lower_bound(A: jax.Array):
             x = A @ x.conj()
             return max_abs * jnp.linalg.norm(A_conj.T @ (x / jnp.linalg.norm(x)))
 
-        # these lax.cond fall back to lax.select inside vmap but we'll keep them anyway
         return jax.lax.cond(value0 > value1, gt_branch, le_branch)
 
     def no_calc(_):
@@ -556,6 +586,7 @@ def _init_Q_exprs(t, scale, max_size, max_skew, dtype, existing_Q=None):
 
 
 def _solve_triangular(A, B, upper, left=True):
+    """A triangular solve has roughly the same complexity as a matmul."""
     dtype_in = jnp.promote_types(A.dtype, B.dtype)
     A, B = A.astype(dtype_in), B.astype(dtype_in)
     leading_dims = 0
@@ -655,48 +686,3 @@ def _precond_grad_kron_math(Q, G, exprs):
     """Precondition gradient G with preconditioner Q."""
     exprP = exprs[-1]
     return exprP(*[q.conj() for q in Q], *Q, G, backend="jax")
-
-
-if __name__ == "__main__":
-    from pprint import pprint
-
-    for integrate_out_v in [True, False]:
-        params = {
-            "a": jnp.ones(()),
-            "b": jnp.ones((2,)),
-            "c": jnp.ones((2, 100)),
-            "d": jnp.ones((3, 7, 4)),
-            "e": jnp.ones((2, 3, 4)),  # scan
-            "f": jnp.ones((2, 4, 5, 2)),  # scan
-            "g": jnp.ones((2, 5)),  # scan
-            "h": jnp.ones((1, 2, 3, 4, 4, 3)),
-        }
-        scanned = {
-            "a": False,
-            "b": False,
-            "c": False,
-            "d": False,
-            "e": True,
-            "f": True,
-            "g": True,
-            "h": False,
-        }
-        print("Params:")
-        pprint(jax.tree.map(lambda p: p.shape, params), width=150)
-        pprint(jnp.array([x.mean() for x in jax.tree.leaves(params)]).mean())
-
-        opt = kron(
-            learning_rate=0.1, scanned_layers=scanned, integrate_out_v=integrate_out_v
-        )
-        opt_state = jax.jit(opt.init)(params)
-        print("Opt State:")
-        pprint(jax.tree.map(lambda p: p.shape, opt_state), width=150)
-
-        for _ in range(10):
-            grads = jax.tree.map(lambda p: p * 2, params)
-            updates, opt_state = jax.jit(opt.update)(grads, opt_state)
-            params = jax.tree.map(lambda p, u: p + u, params, updates)
-
-        print("Params:")
-        pprint(jax.tree.map(lambda p: p.shape, params), width=150)
-        pprint(jnp.array([x.mean() for x in jax.tree.leaves(params)]).mean())
