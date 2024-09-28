@@ -79,11 +79,13 @@ def scale_by_kron(
     mu_dtype = canonicalize_dtype(mu_dtype)
     precond_dtype = canonicalize_dtype(precond_dtype)
 
-    precond_init_scale = 0.01
+    # some hardcoded settings
+    precond_init_scale = 0.1
     momentum_into_preconditioner = True
     integrate_out_v = False
 
     def map_fn(do_map, fn, *args):
+        """Maybe map a fn along axes."""
         if do_map:
             if lax_map_scanned_layers:
                 return jax.lax.map(
