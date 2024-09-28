@@ -18,7 +18,7 @@ def precond_update_prob_schedule(
 ):
     """Anneal preconditioner update probability during beginning of training.
 
-    PSGD can benefit from more preconditioner updates at the beginning of training,
+    PSGD benefits from more preconditioner updates at the beginning of training,
     but once the preconditioner is learned the update probability can drop low.
 
     This schedule is an exponential anneal with a flat start. Default settings keep
@@ -50,7 +50,7 @@ def scale_by_kron(
     precision: str = "tensorfloat32",
     scanned_layers: Optional[base.Params] = None,
     lax_map_scanned_layers: bool = False,
-    lax_map_batch_size: int = 4,
+    lax_map_batch_size: int = 8,
 ) -> base.GradientTransformationExtraArgs:
     """
     Implements PSGD Kron from https://github.com/lixilinx/psgd_torch.
@@ -59,8 +59,8 @@ def scale_by_kron(
         b1: float, momentum parameter.
         preconditioner_update_probability: float, probability of updating the
             preconditioner. Default anneals from 1.0 to 0.03 by 4000 steps.
-        max_size_triangular: int, max size for preconditioner to be triangular.
-        max_skew_triangular: int, max skew for preconditioner to be triangular.
+        max_size_triangular: int, max size for dim's preconditioner to be triangular.
+        max_skew_triangular: int, max skew for dim's preconditioner to be triangular.
         precond_lr: float or callable, learning rate for the preconditioner.
         mu_dtype: optional str or jnp.dtype, dtype of the momentum accumulator.
             Defaults to the same dtype as the parameters.
@@ -68,10 +68,10 @@ def scale_by_kron(
         precision: str, precision for matmul during preconditioner update,
              'bfloat16', 'tensorfloat32', 'float32'.
         scanned_layers: optional base.Params, tree of bool same structure as params
-            indicating scanned layers.
+            indicating scanned layers. PSGD will vmap over the first dim.
         lax_map_scanned_layers: bool, whether to use lax.map for scanned layers
             instead of vmap. Useful to save memory with large models.
-        lax_map_batch_size: int, batch size for lax.map, see jax docs for more info.
+        lax_map_batch_size: int, batch size for lax.map, see JAX docs for more info.
 
     Returns:
         optax.GradientTransformationExtraArgs
@@ -247,7 +247,7 @@ def scale_by_kron(
                     )
                 ]
 
-                # balance preconditioners
+                # maybe balance preconditioners (useful for quantization/low precision)
                 def balance_Qs(Qs: List[List[jax.Array]]):
                     def _balance_Q(Q: List[jax.Array]):
                         norms = jnp.array(
@@ -324,7 +324,7 @@ def kron(
     precision: str = "tensorfloat32",
     scanned_layers: Optional[base.Params] = None,
     lax_map_scanned_layers: bool = False,
-    lax_map_batch_size: int = 4,
+    lax_map_batch_size: int = 8,
 ) -> base.GradientTransformationExtraArgs:
     """
     Implements PSGD Kron from https://github.com/lixilinx/psgd_torch.
@@ -336,8 +336,8 @@ def kron(
         mask: optional Any or callable, mask to apply to parameters.
         preconditioner_update_probability: float, probability of updating the
             preconditioner. Default anneals from 1.0 to 0.03 by 4000 steps.
-        max_size_triangular: int, max size for preconditioner to be triangular.
-        max_skew_triangular: int, max skew for preconditioner to be triangular.
+        max_size_triangular: int, max size for dim's preconditioner to be triangular.
+        max_skew_triangular: int, max skew for dim's preconditioner to be triangular.
         precond_lr: float or callable, learning rate for the preconditioner.
         mu_dtype: optional str or jnp.dtype, dtype of the momentum accumulator.
             Defaults to the same dtype as the parameters.
@@ -345,10 +345,10 @@ def kron(
         precision: str, precision for matmul during preconditioner update,
             'bfloat16', 'tensorfloat32', 'float32'.
         scanned_layers: optional base.Params, tree of bool same structure as params
-            indicating scanned layers.
+            indicating scanned layers. PSGD will vmap over the first dim.
         lax_map_scanned_layers: bool, whether to use lax.map for scanned layers
             instead of vmap. Useful to save memory with large models.
-        lax_map_batch_size: int, batch size for lax.map, see jax docs for more info.
+        lax_map_batch_size: int, batch size for lax.map, see JAX docs for more info.
 
     Returns:
         optax.GradientTransformationExtraArgs
