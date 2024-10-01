@@ -90,7 +90,6 @@ nohup python3 main_multihost.py \
     --optimizer.preconditioner_update_probability=0.04 \
     --optimizer.max_size_triangular=8192 \
     --optimizer.max_skew_triangular=10 \
-    --optimizer.precond_lr=0.3 \
     --optimizer.preconditioner_dtype=float32 \
     > nohup.out 2>&1 & 
 PID=\\\$!

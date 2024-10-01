@@ -62,7 +62,6 @@ class OptimizerConfig:
             in PSGD.
         max_skew_triangular: Max skew for preconditioner to be triangular
             in PSGD.
-        precond_lr: Learning rate for the preconditioner in PSGD.
         preconditioner_dtype: Dtype of the preconditioner in PSGD. Has no problem
             being bfloat16.
         lax_map_scanned_layers: Whether to use lax.map for scanned layers instead
@@ -82,7 +81,6 @@ class OptimizerConfig:
     preconditioner_update_probability: float = 0.03
     max_size_triangular: int = 8192
     max_skew_triangular: int = 10
-    precond_lr: float = 0.3
     preconditioner_dtype: str = "float32"
     lax_map_scanned_layers: bool = False
     lax_map_batch_size: int = 8

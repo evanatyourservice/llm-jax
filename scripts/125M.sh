@@ -30,5 +30,4 @@ python3 main.py \
     --optimizer.preconditioner_update_probability=0.03 \
     --optimizer.max_size_triangular=8192 \
     --optimizer.max_skew_triangular=10 \
-    --optimizer.precond_lr=0.3 \
     --optimizer.preconditioner_dtype=float32

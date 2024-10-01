@@ -20,7 +20,6 @@ python3 main.py \
     --optimizer.warmup_steps=20 \
     --optimizer.preconditioner_dtype=float32 \
     --optimizer.preconditioner_update_probability=0.05 \
-    --optimizer.precond_lr=0.1 \
     --optimizer.lax_map_scanned_layers \
     --optimizer.lax_map_batch_size=1 \
     --model.block_size=64 \
