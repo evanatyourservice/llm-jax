@@ -39,25 +39,15 @@ class Embedder(nn.Module):
         self.embedding = self.param(
             "embedding", initializer, (self.vocab_size, self.embed_dim)
         )
-        self.final_norm = RMSNorm()
 
     def encode(self, x: jax.Array) -> jax.Array:
         x = jnp.take(self.embedding, x, axis=0)
         x = constrain(x, self.mesh, P("fsdp"))
-
-        x *= jnp.sqrt(self.embed_dim).astype(x.dtype)
-
         return x
 
     def decode(self, x: jax.Array) -> jax.Array:
-        x = self.final_norm(x)
-
         x = jnp.dot(x, self.embedding.T)
         x = constrain(x, self.mesh, P("fsdp"))
-
-        # gemma style soft cap
-        x = jnp.tanh(x / 30.0) * 30.0
-
         return x
 
 
@@ -185,6 +175,8 @@ class Mistral(nn.Module):
                     self.config.rope_theta,
                     self.mesh,
                 )(x)
+
+        x = RMSNorm()(x)
 
         logits = embedder.decode(x)
 
