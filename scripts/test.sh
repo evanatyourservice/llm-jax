@@ -17,6 +17,9 @@ python3 main.py \
     --wandb.mode=offline \
     --optimizer.type=kron \
     --optimizer.learning_rate=0.001 \
+    --optimizer.flat_lr \
+    --optimizer.ema_momentum \
+    --optimizer.nesterov \
     --optimizer.warmup_steps=20 \
     --optimizer.preconditioner_dtype=float32 \
     --optimizer.preconditioner_update_probability=0.05 \
