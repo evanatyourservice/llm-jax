@@ -82,7 +82,7 @@ class OptimizerConfig:
     nesterov: bool = False
     preconditioner_update_probability: float = 0.03
     max_size_triangular: int = 8192
-    max_skew_triangular: int = int("inf")
+    max_skew_triangular: int = 1000000000
     preconditioner_dtype: str = "float32"
     lax_map_scanned_layers: bool = False
     lax_map_batch_size: int = 8
