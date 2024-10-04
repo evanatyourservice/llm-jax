@@ -42,12 +42,12 @@ class Embedder(nn.Module):
 
     def encode(self, x: jax.Array) -> jax.Array:
         x = jnp.take(self.embedding, x, axis=0)
-        # x = constrain(x, self.mesh, P("fsdp"))
+        x = constrain(x, self.mesh, P("fsdp"))
         return x
 
     def decode(self, x: jax.Array) -> jax.Array:
         x = jnp.dot(x, self.embedding.T)
-        # x = constrain(x, self.mesh, P("fsdp"))
+        x = constrain(x, self.mesh, P("fsdp"))
         return x
 
 
@@ -71,7 +71,7 @@ class MLP(nn.Module):
         x = gate * up
 
         down = jnp.dot(x, down_kernel)
-        # down = constrain(down, self.mesh, P("fsdp"))
+        down = constrain(down, self.mesh, P("fsdp"))
         return down
 
 

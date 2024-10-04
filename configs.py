@@ -78,7 +78,6 @@ class OptimizerConfig:
     b1: float = 0.9
     b2: float = 0.95
     eps: float = 1e-8
-    ema_momentum: bool = True
     nesterov: bool = False
     preconditioner_update_probability: float = 0.03
     max_size_triangular: int = 8192

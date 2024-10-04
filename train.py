@@ -26,7 +26,7 @@ import orbax.checkpoint as ocp
 
 from dataset import prepare_hellaswag, fineweb_edu_dataset, _fw_shard_names
 from configs import TrainConfig
-from optimizers.kron import kron, precond_update_prob_schedule
+from psgd_jax.kron import kron, precond_update_prob_schedule
 from optimizers.tearfree import optimizer as tearfree_opt
 from optimizers.tearfree import shampoo, second_order
 from optimizers.adam import adamw
@@ -155,8 +155,6 @@ def main(config: TrainConfig):
                 kron(
                     lr_schedule,
                     b1=config.optimizer.b1,
-                    ema_momentum=config.optimizer.ema_momentum,
-                    nesterov=config.optimizer.nesterov,
                     weight_decay=config.optimizer.weight_decay,
                     mask=param_decay_mask,
                     preconditioner_update_probability=precond_update_prob_schedule(
