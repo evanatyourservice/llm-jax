@@ -1,4 +1,4 @@
-from typing import Any, List, Optional, Union, Callable, Tuple
+from typing import Any, List, Optional, Union, Callable
 from functools import partial
 
 import jax

@@ -95,19 +95,30 @@ def main(config: TrainConfig):
     # ====== optimizer ======
     write_note("Creating optimizer")
 
-    lr_schedule = optax.join_schedules(
-        schedules=[
-            optax.linear_schedule(
-                0.0, config.optimizer.learning_rate, config.optimizer.warmup_steps
-            ),
-            optax.linear_schedule(
-                config.optimizer.learning_rate,
-                config.optimizer.learning_rate * 0.05,
-                config.train_steps - config.optimizer.warmup_steps,
-            ),
-        ],
-        boundaries=[config.optimizer.warmup_steps],
-    )
+    if config.optimizer.flat_lr:
+        lr_schedule = optax.join_schedules(
+            schedules=[
+                optax.linear_schedule(
+                    0.0, config.optimizer.learning_rate, config.optimizer.warmup_steps
+                ),
+                optax.constant_schedule(config.optimizer.learning_rate),
+            ],
+            boundaries=[config.optimizer.warmup_steps],
+        )
+    else:
+        lr_schedule = optax.join_schedules(
+            schedules=[
+                optax.linear_schedule(
+                    0.0, config.optimizer.learning_rate, config.optimizer.warmup_steps
+                ),
+                optax.linear_schedule(
+                    config.optimizer.learning_rate,
+                    config.optimizer.learning_rate * 0.05,
+                    config.train_steps - config.optimizer.warmup_steps,
+                ),
+            ],
+            boundaries=[config.optimizer.warmup_steps],
+        )
 
     def make_opt(scanned_layers=None):
         write_note(f"Using {config.optimizer.type} optimizer")
