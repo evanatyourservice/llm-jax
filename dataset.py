@@ -24,7 +24,7 @@ datasets.config.STREAMING_READ_MAX_RETRIES = 17280  # 17280 * 5 = 1 day
 datasets.config.STREAMING_READ_RETRY_INTERVAL = 5
 
 OPTIONS = tf.data.Options()
-OPTIONS.deterministic = False
+OPTIONS.deterministic = True
 OPTIONS.threading.private_threadpool_size = 48
 OPTIONS.threading.max_intra_op_parallelism = 1
 # Stop a whole bunch of magic stuff that eats up all RAM:
