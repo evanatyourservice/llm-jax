@@ -31,7 +31,7 @@ OPTIONS.threading.max_intra_op_parallelism = 1
 OPTIONS.experimental_optimization.inject_prefetch = False
 
 
-model_id = "mistralai/Mistral-7B-v0.3"
+TOKENIZER = "mistralai/Mistral-7B-v0.3"
 
 
 def prepare_hellaswag(
@@ -45,7 +45,7 @@ def prepare_hellaswag(
     write_note("preparing hellaswag")
 
     tokenizer = AutoTokenizer.from_pretrained(
-        model_id, trust_remote_code=True, use_fast=True
+        TOKENIZER, trust_remote_code=True, use_fast=True
     )
 
     all_data = []
@@ -137,7 +137,7 @@ def fineweb_edu_dataset(
         cache_dir = None
 
     tokenizer = AutoTokenizer.from_pretrained(
-        model_id, trust_remote_code=True, use_fast=True
+        TOKENIZER, trust_remote_code=True, use_fast=True
     )
 
     def gen():

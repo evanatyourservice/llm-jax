@@ -7,6 +7,8 @@ from typing import Optional
 class ModelConfig:
     """Default model config for 125M.
 
+    Mistral-like model with default arch similar to MobileLLM and SmolLM.
+
     Attributes:
         block_size: Block size.
         sliding_window_size: Sliding window size.
@@ -50,6 +52,7 @@ class OptimizerConfig:
             "schedule_free"]
         learning_rate: Learning rate.
         warmup_steps: Warmup steps.
+        flat_lr: Whether to use a flat learning rate or decay linearly to 0.05x.
         weight_decay: Weight decay.
         grad_clip: Gradient clip.
         b1: Beta 1.
@@ -57,20 +60,19 @@ class OptimizerConfig:
         eps: Epsilon.
         nesterov: Whether to use nesterov momentum.
         preconditioner_update_probability: Probability of updating the
-            preconditioner in PSGD.
+            preconditioner in PSGD. Default for PSGD kron is 0.03.
         max_size_triangular: Max dim size for preconditioner to be triangular
             in PSGD.
         max_skew_triangular: Max skew for preconditioner to be triangular
             in PSGD.
-        preconditioner_dtype: Dtype of the preconditioner in PSGD. Has no problem
-            being bfloat16.
+        preconditioner_dtype: Dtype of the preconditioner in PSGD.
         lax_map_scanned_layers: Whether to use lax.map for scanned layers instead
             of vmap. Useful for large models (>1B) to save memory.
         lax_map_batch_size: Batch size for lax.map, see jax docs for more info.
     """
 
     type: str = "kron"
-    learning_rate: float = 0.003
+    learning_rate: float = 0.001
     warmup_steps: int = 1000
     flat_lr: bool = False
     weight_decay: float = 0.1
@@ -118,7 +120,7 @@ class TrainConfig:
         gradient_accumulation_steps: Number of gradient accumulation steps.
         compute_dtype: Compute dtype.
         params_dtype: Params dtype.
-        profile: Whether to profile the training.
+        profile: Whether to profile the training to tensorboard.
         n_profile_steps: Number of steps to profile.
         optimizer: Optimizer config.
         wandb: Wandb logging config.

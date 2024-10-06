@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Base sharding functions from big vision, changed for our nets and uses."""
+"""Base sharding functions from big vision changed for our nets and optimizers."""
 import numpy as np
 
 import jax
@@ -48,18 +48,8 @@ def infer_sharding(params, mesh, op):
 
 
 def fsdp_sharding(axis, min_size_to_shard_mb=1):
-    """FSDP sharding rule.
-
-    Shards the largest dimension that is not sharded already and is divisible
-    by the total device count.
-
-    Args:
-      axis: mesh axis name for FSDP, or a collection of names.
-      min_size_to_shard_mb: minimal tensor size to bother with sharding.
-
-    Returns:
-      A function that updates the sharding spec.
-    """
+    """Simple FSDP sharding rules."""
+    # TODO consider not overwriting already sharded dims
     axis = axis if isinstance(axis, str) else tuple(axis)
     axis_tuple = axis if isinstance(axis, tuple) else (axis,)
 
@@ -87,25 +77,26 @@ def fsdp_sharding(axis, min_size_to_shard_mb=1):
 
         shape = x.shape
 
-        # Partitioning rules
-        # indexed backwards from last dim for scanned leading dims friendliness
+        # Partitioning rules, simple FSDP
+        # indexed backwards from last dim for friendliness to scanned leading dims
         if (
             np.prod(shape) * x.dtype.itemsize >= min_size_to_shard_mb * (2**20)
             and len(shape) > 1
         ):
             new_sharding = [None for _ in shape]
-            if "scale" in name:
-                # norm layers
+            if "scale" in name or "bias" in name:
                 pass
             elif any(s in name for s in ["embedding", "out_kernel", "down_kernel"]):
+                # shard these on last dim (-1)
                 if shape[-1] % axis_size == 0:
                     new_sharding[-1] = axis
                     print(f"sharding {name}:{shape} to {new_sharding}")
                     return tuple(new_sharding)
                 else:
                     print(
-                        f"WARNING: Parameter {name}:{shape} is not sharded because the "
-                        f"last dimension is not divisible by the axis size {axis_size}"
+                        f"WARNING: Parameter {name}:{shape} is not sharded because "
+                        f"last dimension is not divisible by axis size {axis_size}. "
+                        "Consider changing last dim to be divisible by axis size."
                     )
             elif any(
                 s in name
@@ -124,12 +115,13 @@ def fsdp_sharding(axis, min_size_to_shard_mb=1):
                     return tuple(new_sharding)
                 else:
                     print(
-                        f"WARNING: Parameter {name}:{shape} is not sharded because the "
-                        f"first dimension is not divisible by the axis size {axis_size}"
+                        f"WARNING: Parameter {name}:{shape} is not sharded because "
+                        f"first dimension is not divisible by axis size {axis_size}. "
+                        "Consider changing first dim to be divisible by axis size."
                     )
             else:
-                # Partition along largest axis that is divisible and not taken starting
-                # from last dimension.
+                # If not explicitly sharded above, infer here by partitioning
+                # along largest axis that is divisible and not taken.
                 idx = np.argsort(shape)[::-1]
                 for i in idx:
                     if shape[i] % axis_size == 0:

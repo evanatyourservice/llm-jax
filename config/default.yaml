@@ -17,7 +17,7 @@ optimizer: !dataclass:OptimizerConfig
     type: "adamw"
     learning_rate: 0.001
     warmup_steps: 1000
-    weight_decay: 0.01
+    weight_decay: 0.1
 wandb: !dataclass:WandbConfig
     mode: online
 model: !dataclass:ModelConfig
