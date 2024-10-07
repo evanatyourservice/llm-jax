@@ -26,7 +26,6 @@ nohup python3 main_multihost.py \
     --params_dtype=float32 \
     --profile \
     --model.scan_layers \
-    --model.scan_unroll=1 \
     --model.remat \
     --model.remat_everything \
     --optimizer.type=kron \

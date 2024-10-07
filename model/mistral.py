@@ -151,7 +151,6 @@ class Mistral(nn.Module):
                 variable_axes={True: 0},
                 split_rngs={True: True},
                 length=self.config.num_layers,
-                unroll=self.config.scan_unroll,
             )(
                 self.config.num_heads,
                 self.config.num_kv_heads,

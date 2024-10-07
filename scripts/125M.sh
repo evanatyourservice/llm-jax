@@ -18,7 +18,6 @@ python3 main.py \
     --model.block_size=2048 \
     --model.sliding_window_size=1024 \
     --model.scan_layers \
-    --model.scan_unroll=1 \
     --model.remat \
     --model.remat_everything \
     --optimizer.type=kron \

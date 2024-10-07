@@ -21,7 +21,6 @@ class ModelConfig:
         hidden_dim: Hidden dimension.
         rope_theta: Rotary embedding theta.
         scan_layers: Whether to scan layers.
-        scan_unroll: Scan unroll.
         remat: Whether to use remat. Should be used if scanning layers.
         remat_everything: Whether to remat everything, otherwise only use
             `checkpoint_dots_with_no_batch_dims`.
@@ -38,7 +37,6 @@ class ModelConfig:
     hidden_dim: int = 1536
     rope_theta: float = 1000000.0
     scan_layers: bool = False
-    scan_unroll: int = 1
     remat: bool = False
     remat_everything: bool = False
 
