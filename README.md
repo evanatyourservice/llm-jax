@@ -2,9 +2,6 @@
 
 Pretrain a mistral-style model with fineweb-edu.
 
-Started with [this repo, credit to @jenkspt](https://github.com/jenkspt/gpt-jax). Also pulled some tools 
-from [big_vision](https://github.com/google-research/big_vision) to add simple FSDP rules but adjusted them.
-
 Has various optimizers: PSGD Kron, adamw, schedule-free, shampoo, and CASPR. Shampoo and CASPR probably 
 not good for large nets, compile time problems.
 
@@ -12,9 +9,14 @@ Only set up for pretraining for now, working on inference, conversion to pytorch
 
 Saves checkpoints to out_dir, set same experiment name to resume.
 
-Set --profile to profile training to tensorboard, tensorboard dir is out_dir/profile.
+Set --profile to profile training to tensorboard, tensorboard dir is <out_dir>/profile.
 
 See configs.py for other settings and all hyperparameters.
+
+The research for this repo is made possible by [Google's TRC program](https://sites.research.google/trc/about/).
+
+Started with [this repo, credit to @jenkspt](https://github.com/jenkspt/gpt-jax). Also pulled some tools 
+from [big_vision](https://github.com/google-research/big_vision) to add FSDP sharding.
 
 
 ## Install
