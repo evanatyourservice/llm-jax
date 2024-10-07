@@ -418,8 +418,14 @@ def main(config: TrainConfig):
         begin_lens: jnp.ndarray,
         seq_lens: jnp.ndarray,
     ) -> jnp.ndarray:
+        params_in = state.params
+        if config.optimizer.type == "schedule_free":
+            params_in = optax.contrib.schedule_free_eval_params(
+                state.opt_state, state.params
+            )
+
         logits = state.apply_fn(
-            otu.tree_cast(state.params, config.compute_dtype), tokens[:, :-1]
+            otu.tree_cast(params_in, config.compute_dtype), tokens[:, :-1]
         )
         assert logits.dtype == config.compute_dtype
 
