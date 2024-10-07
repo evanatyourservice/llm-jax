@@ -37,7 +37,7 @@ cd llm-jax && pip install -U pip && pip install -r requirements.txt && pip insta
 
 ## Run
 
-See examples in /scripts like `scripts/mh_125M.sh`.
+See examples in /scripts like `scripts/125M_mh_tpu.sh`.
 
 create TPU using queued-resources
 ```shell
