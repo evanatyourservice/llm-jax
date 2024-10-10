@@ -113,15 +113,15 @@ def _apply_rotary_embedding(q, k, cos, sin):
     kcos = jnp.expand_dims(cos[:klen, :], range(len(k.shape) - 2))
     ksin = jnp.expand_dims(sin[:klen, :], range(len(k.shape) - 2))
 
-    qcos = jnp.swapaxes(qcos, -2, -4)
-    qsin = jnp.swapaxes(qsin, -2, -4)
-    kcos = jnp.swapaxes(kcos, -2, -3)
-    ksin = jnp.swapaxes(ksin, -2, -3)
+    qcos = jnp.swapaxes(qcos, -2, -4).astype(q.dtype)
+    qsin = jnp.swapaxes(qsin, -2, -4).astype(q.dtype)
+    kcos = jnp.swapaxes(kcos, -2, -3).astype(k.dtype)
+    ksin = jnp.swapaxes(ksin, -2, -3).astype(k.dtype)
 
     out_q = q * qcos + _rotate_half(q) * qsin
     out_k = k * kcos + _rotate_half(k) * ksin
 
-    return out_q.astype(q.dtype), out_k.astype(k.dtype)
+    return out_q, out_k
 
 
 class Attention(nn.Module):
