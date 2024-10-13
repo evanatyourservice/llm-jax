@@ -113,7 +113,7 @@ def main(config: TrainConfig):
                 ),
                 optax.linear_schedule(
                     config.optimizer.learning_rate,
-                    config.optimizer.learning_rate * 0.05,
+                    config.optimizer.learning_rate * 0.01,
                     config.train_steps - config.optimizer.warmup_steps,
                 ),
             ],
