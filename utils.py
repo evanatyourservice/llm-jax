@@ -217,23 +217,3 @@ def count_params(params) -> int:
 
 def get_step(state) -> int:
     return jax.device_get(state.step).item()
-
-
-def softmax_cross_entropy_with_integer_labels(
-    logits: chex.Array,
-    labels: chex.Array,
-    axis: Union[int, tuple[int, ...], None] = -1,
-    where: Union[chex.Array, None] = None,
-) -> chex.Array:
-    chex.assert_type([logits], float)
-    chex.assert_type([labels], int)
-    # This is like jnp.take_along_axis(jax.nn.log_softmax(...), ...) except that
-    # we avoid subtracting the normalizer from all values, just from the values
-    # for the correct labels.
-    logits_max = jnp.max(logits, axis, keepdims=True, where=where, initial=-jnp.inf)
-    logits -= jax.lax.stop_gradient(logits_max)
-    label_logits = jnp.take_along_axis(
-        logits, jnp.expand_dims(labels, axis), axis=axis
-    ).take(0, axis=axis)
-    log_normalizers = jnp.log(jnp.sum(jnp.exp(logits), axis=axis, where=where))
-    return log_normalizers - label_logits

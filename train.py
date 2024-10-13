@@ -32,14 +32,7 @@ from optimizers.tearfree import shampoo, second_order
 from optimizers.adam import adamw
 from optimizers.schedule_free import schedule_free, schedule_free_eval_params
 from sharding import infer_sharding, fsdp_sharding
-from utils import (
-    check_dtypes,
-    reshard,
-    write_note,
-    count_params,
-    get_step,
-    softmax_cross_entropy_with_integer_labels,
-)
+from utils import check_dtypes, reshard, write_note, count_params, get_step
 from model.mistral import Mistral
 
 
@@ -353,18 +346,14 @@ def main(config: TrainConfig):
 
             targets = tokens[:, 1:]
 
-            bos_token_id = 1
+            loss = optax.softmax_cross_entropy_with_integer_labels(logits, targets)
+
+            bos_token_id = 1  # mistral tokenizer
             mask = targets != bos_token_id
-            mask = jnp.expand_dims(mask, axis=-1)
 
-            loss = softmax_cross_entropy_with_integer_labels(
-                logits, targets, where=mask
-            )
+            loss = jnp.sum(loss * mask) / jnp.sum(mask)
 
-            z_loss = jax.nn.logsumexp(logits, axis=-1, where=mask)
-            loss += 1e-4 * jnp.square(z_loss)
-
-            return jnp.mean(loss)
+            return loss
 
         before_dtypes = jax.tree.map(lambda x: x.dtype, state)
 
