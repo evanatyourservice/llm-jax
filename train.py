@@ -26,7 +26,7 @@ import orbax.checkpoint as ocp
 
 from dataset import prepare_hellaswag, fineweb_edu_dataset, _fw_shard_names
 from configs import TrainConfig
-from optimizers.kron import kron, precond_update_prob_schedule
+from psgd_jax.kron import kron, precond_update_prob_schedule
 from optimizers.tearfree import optimizer as tearfree_opt
 from optimizers.tearfree import shampoo, second_order
 from optimizers.adam import adamw
@@ -156,7 +156,7 @@ def main(config: TrainConfig):
             optimizer.append(
                 kron(
                     lr_schedule,
-                    b1=0.9 if config.optimizer.schedule_free else config.optimizer.b1,
+                    b1=0.0 if config.optimizer.schedule_free else config.optimizer.b1,
                     weight_decay=config.optimizer.weight_decay,
                     mask=param_decay_mask,
                     preconditioner_update_probability=precond_update_prob_schedule(
@@ -170,7 +170,6 @@ def main(config: TrainConfig):
                     scanned_layers=scanned_layers,
                     lax_map_scanned_layers=config.optimizer.lax_map_scanned_layers,
                     lax_map_batch_size=config.optimizer.lax_map_batch_size,
-                    # raw_grads_update=config.optimizer.schedule_free,
                 )
             )
             optimizer = optax.chain(*optimizer)
