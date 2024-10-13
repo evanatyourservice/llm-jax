@@ -357,12 +357,12 @@ def main(config: TrainConfig):
             mask = targets != bos_token_id
             mask = jnp.expand_dims(mask, axis=-1)
 
-            loss, log_normalizers = softmax_cross_entropy_with_integer_labels(
+            loss = softmax_cross_entropy_with_integer_labels(
                 logits, targets, where=mask
             )
 
-            z_loss = jnp.square(log_normalizers)
-            loss += 1e-4 * z_loss
+            z_loss = jax.nn.logsumexp(logits, axis=-1, where=mask)
+            loss += 1e-4 * jnp.square(z_loss)
 
             return jnp.mean(loss)
 

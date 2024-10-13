@@ -224,58 +224,7 @@ def softmax_cross_entropy_with_integer_labels(
     labels: chex.Array,
     axis: Union[int, tuple[int, ...], None] = -1,
     where: Union[chex.Array, None] = None,
-) -> Tuple[chex.Array, chex.Array]:
-    r"""Computes softmax cross entropy between the logits and integer labels.
-
-    This loss is useful for classification problems with integer labels that are
-    not one-hot encoded. This loss is also known as categorical cross entropy.
-
-    Let :math:`x` denote the ``logits`` array of size ``[batch_size,
-    num_classes]`` and :math:`y` denote the ``labels`` array of size
-    ``[batch_size]``. Then this function returns a vector
-    :math:`\sigma` of size ``[batch_size]`` defined as:
-
-    .. math::
-      \sigma_i =
-      \log\left(\frac{\exp(x_{i y_i})}{\sum_j
-      \exp(x_{i j})}\right)\,.
-
-    Examples:
-      >>> import optax
-      >>> import jax.numpy as jnp
-      >>> # example: batch_size = 2, num_classes = 3
-      >>> logits = jnp.array([[1.2, -0.8, -0.5], [0.9, -1.2, 1.1]])
-      >>> labels = jnp.array([0, 1])
-      >>> print(optax.softmax_cross_entropy_with_integer_labels(logits, labels))
-      [0.2761297 2.951799 ]
-
-    References:
-      `Cross-entropy Loss <https://en.wikipedia.org/wiki/Cross-entropy>`_,
-      Wikipedia
-
-      `Multinomial Logistic Regression
-      <https://en.wikipedia.org/wiki/Multinomial_logistic_regression>`_, Wikipedia
-
-    Args:
-      logits: Unnormalized log probabilities, with shape ``[batch_size,
-        num_classes]``.
-      labels: Integers specifying the correct class for each input, with shape
-        ``[batch_size]``. Class labels are assumed to be between 0 and
-        ``num_classes - 1`` inclusive.
-      axis: Axis or axes along which to compute.
-      where: Elements to include in the computation.
-
-    Returns:
-      Cross-entropy between each prediction and the corresponding target
-      distributions, with shape ``[batch_size]``.
-
-    .. seealso:: This function is similar to
-      :func:`optax.losses.softmax_cross_entropy`, but accepts integer labels
-      instead of one-hot labels.
-
-    .. versionchanged:: 0.2.4
-      Added ``axis`` and ``where`` arguments.
-    """
+) -> chex.Array:
     chex.assert_type([logits], float)
     chex.assert_type([labels], int)
     # This is like jnp.take_along_axis(jax.nn.log_softmax(...), ...) except that
@@ -287,4 +236,4 @@ def softmax_cross_entropy_with_integer_labels(
         logits, jnp.expand_dims(labels, axis), axis=axis
     ).take(0, axis=axis)
     log_normalizers = jnp.log(jnp.sum(jnp.exp(logits), axis=axis, where=where))
-    return log_normalizers - label_logits, log_normalizers
+    return log_normalizers - label_logits
