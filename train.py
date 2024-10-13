@@ -355,6 +355,7 @@ def main(config: TrainConfig):
 
             bos_token_id = 1
             mask = targets != bos_token_id
+            mask = jnp.expand_dims(mask, axis=-1)
 
             loss, log_normalizers = softmax_cross_entropy_with_integer_labels(
                 logits, targets, where=mask
