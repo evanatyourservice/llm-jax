@@ -170,7 +170,7 @@ def main(config: TrainConfig):
                     scanned_layers=scanned_layers,
                     lax_map_scanned_layers=config.optimizer.lax_map_scanned_layers,
                     lax_map_batch_size=config.optimizer.lax_map_batch_size,
-                    raw_grads_update=config.optimizer.schedule_free,
+                    # raw_grads_update=config.optimizer.schedule_free,
                 )
             )
             optimizer = optax.chain(*optimizer)
