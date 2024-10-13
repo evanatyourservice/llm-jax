@@ -46,8 +46,8 @@ class OptimizerConfig:
     """Optimizer configuration.
 
     Attributes:
-        type: Optimizer type, one of ["adamw", "psgd", "shampoo", "caspr",
-            "schedule_free"]
+        type: Optimizer type, one of ["adamw", "kron", "shampoo", "caspr"]
+        schedule_free: Whether to wrap optimizer in schedule-free.
         learning_rate: Learning rate.
         warmup_steps: Warmup steps.
         flat_lr: Whether to use a flat learning rate or decay linearly to 0.05x.
@@ -70,6 +70,7 @@ class OptimizerConfig:
     """
 
     type: str = "kron"
+    schedule_free: bool = False
     learning_rate: float = 0.001
     warmup_steps: int = 1000
     flat_lr: bool = False

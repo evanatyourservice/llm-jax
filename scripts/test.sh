@@ -15,7 +15,8 @@ python3 main.py \
     --gradient_accumulation_steps=2 \
     --profile \
     --wandb.mode=offline \
-    --optimizer.type=schedule_free \
+    --optimizer.type=kron \
+    --optimizer.schedule_free \
     --optimizer.learning_rate=0.001 \
     --optimizer.flat_lr \
     --optimizer.warmup_steps=20 \

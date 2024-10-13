@@ -26,11 +26,11 @@ import orbax.checkpoint as ocp
 
 from dataset import prepare_hellaswag, fineweb_edu_dataset, _fw_shard_names
 from configs import TrainConfig
-from psgd_jax.kron import kron, precond_update_prob_schedule
+from optimizers.kron import kron, precond_update_prob_schedule
 from optimizers.tearfree import optimizer as tearfree_opt
 from optimizers.tearfree import shampoo, second_order
 from optimizers.adam import adamw
-from optimizers.schedule_free import schedule_free
+from optimizers.schedule_free import schedule_free, schedule_free_eval_params
 from sharding import infer_sharding, fsdp_sharding
 from utils import check_dtypes, reshard, write_note, count_params, get_step
 from model.mistral import Mistral
@@ -95,7 +95,7 @@ def main(config: TrainConfig):
     # ====== optimizer ======
     write_note("Creating optimizer")
 
-    if config.optimizer.flat_lr:
+    if config.optimizer.flat_lr or config.optimizer.schedule_free:
         lr_schedule = optax.join_schedules(
             schedules=[
                 optax.linear_schedule(
@@ -133,14 +133,16 @@ def main(config: TrainConfig):
             return out
 
         optimizer = []
-        if config.optimizer.grad_clip > 0.0:
+
+        # only apply grad clipping if not using schedule-free (see schedule-free paper)
+        if config.optimizer.grad_clip > 0.0 and not config.optimizer.schedule_free:
             optimizer.append(optax.clip_by_global_norm(config.optimizer.grad_clip))
 
         if config.optimizer.type in ["adam", "adamw"]:
             optimizer.append(
                 adamw(
                     lr_schedule,
-                    config.optimizer.b1,
+                    0.0 if config.optimizer.schedule_free else config.optimizer.b1,
                     config.optimizer.b2,
                     config.optimizer.eps,
                     weight_decay=config.optimizer.weight_decay,
@@ -154,7 +156,7 @@ def main(config: TrainConfig):
             optimizer.append(
                 kron(
                     lr_schedule,
-                    b1=config.optimizer.b1,
+                    b1=0.9 if config.optimizer.schedule_free else config.optimizer.b1,
                     weight_decay=config.optimizer.weight_decay,
                     mask=param_decay_mask,
                     preconditioner_update_probability=precond_update_prob_schedule(
@@ -168,6 +170,7 @@ def main(config: TrainConfig):
                     scanned_layers=scanned_layers,
                     lax_map_scanned_layers=config.optimizer.lax_map_scanned_layers,
                     lax_map_batch_size=config.optimizer.lax_map_batch_size,
+                    raw_grads_update=config.optimizer.schedule_free,
                 )
             )
             optimizer = optax.chain(*optimizer)
@@ -184,7 +187,11 @@ def main(config: TrainConfig):
                         ),
                         momentum_options=tearfree_opt.momentum.Options(
                             weight_decay=config.optimizer.weight_decay,
-                            momentum_decay=config.optimizer.b1,
+                            momentum_decay=(
+                                0.0
+                                if config.optimizer.schedule_free
+                                else config.optimizer.b1
+                            ),
                             momentum_dtype="bfloat16",
                             nesterov=config.optimizer.nesterov,
                         ),
@@ -192,26 +199,11 @@ def main(config: TrainConfig):
                 )
             )
             optimizer = optax.chain(*optimizer)
-        elif config.optimizer.type == "schedule_free":
-            sf_lr = optax.linear_schedule(
-                0.0, config.optimizer.learning_rate, config.optimizer.warmup_steps
-            )
-            optimizer.append(
-                adamw(
-                    lr_schedule,
-                    0.0,
-                    config.optimizer.b2,
-                    config.optimizer.eps,
-                    weight_decay=config.optimizer.weight_decay,
-                    mask=param_decay_mask,
-                    mu_dtype=jnp.bfloat16,
-                    nesterov=config.optimizer.nesterov,
-                )
-            )
-            optimizer = optax.chain(*optimizer)
-            optimizer = schedule_free(optimizer, sf_lr, b1=config.optimizer.b1)
         else:
             raise ValueError("Unknown optimizer type")
+
+        if config.optimizer.schedule_free:
+            optimizer = schedule_free(optimizer, lr_schedule, b1=config.optimizer.b1)
 
         return optimizer
 
@@ -419,10 +411,8 @@ def main(config: TrainConfig):
         seq_lens: jnp.ndarray,
     ) -> jnp.ndarray:
         params_in = state.params
-        if config.optimizer.type == "schedule_free":
-            params_in = optax.contrib.schedule_free_eval_params(
-                state.opt_state, state.params
-            )
+        if config.optimizer.schedule_free:
+            params_in = schedule_free_eval_params(state.opt_state, state.params)
 
         logits = state.apply_fn(
             otu.tree_cast(params_in, config.compute_dtype), tokens[:, :-1]
