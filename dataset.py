@@ -170,7 +170,7 @@ def fineweb_edu_dataset(
     ds = ds.shuffle(128)  # shuffle dataset examples
     ds = ds.unbatch()
     ds = ds.batch(block_size, drop_remainder=True, num_parallel_calls=tf.data.AUTOTUNE)
-    ds = ds.shuffle(10240)  # shuffle blocks
+    ds = ds.shuffle(20 * 1024)  # shuffle blocks
     ds = ds.batch(
         batch_size // jax.process_count(),
         drop_remainder=True,
