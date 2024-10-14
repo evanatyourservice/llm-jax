@@ -118,6 +118,7 @@ def _apply_rotary_embedding(q, k, cos, sin):
     kcos = jnp.swapaxes(kcos, -2, -3)
     ksin = jnp.swapaxes(ksin, -2, -3)
 
+    # done in float32
     out_q = q * qcos + _rotate_half(q) * qsin
     out_k = k * kcos + _rotate_half(k) * ksin
 
