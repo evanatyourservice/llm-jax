@@ -145,9 +145,9 @@ def main(config: TrainConfig):
                     0.0 if config.optimizer.schedule_free else config.optimizer.b1,
                     config.optimizer.b2,
                     config.optimizer.eps,
+                    mu_dtype=jnp.float32,
                     weight_decay=config.optimizer.weight_decay,
                     mask=param_decay_mask,
-                    mu_dtype=jnp.bfloat16,
                     nesterov=config.optimizer.nesterov,
                 )
             )
@@ -164,7 +164,7 @@ def main(config: TrainConfig):
                     ),
                     max_size_triangular=config.optimizer.max_size_triangular,
                     max_skew_triangular=config.optimizer.max_skew_triangular,
-                    mu_dtype=jnp.bfloat16,
+                    mu_dtype=jnp.float32,
                     precond_dtype=config.optimizer.preconditioner_dtype,
                     precision="tensorfloat32",
                     scanned_layers=scanned_layers,
@@ -191,7 +191,7 @@ def main(config: TrainConfig):
                                 if config.optimizer.schedule_free
                                 else config.optimizer.b1
                             ),
-                            momentum_dtype="bfloat16",
+                            momentum_dtype="float32",
                             nesterov=config.optimizer.nesterov,
                         ),
                     ),
