@@ -23,6 +23,7 @@ import flax.traverse_util
 import optax
 import optax.tree_utils as otu
 import orbax.checkpoint as ocp
+import tensorflow as tf
 
 from dataset import prepare_hellaswag, fineweb_edu_dataset, _fw_shard_names
 from configs import TrainConfig
@@ -56,6 +57,7 @@ def main(config: TrainConfig):
     # set seeds
     random.seed(config.seed)
     np.random.seed(config.seed)
+    tf.random.set_seed(config.seed)
 
     # wandb init
     if jax.process_index() == 0 and config.wandb.mode == "online":
