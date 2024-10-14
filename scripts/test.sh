@@ -24,13 +24,12 @@ python3 main.py \
     --optimizer.preconditioner_update_probability=0.03 \
     --optimizer.lax_map_scanned_layers \
     --optimizer.lax_map_batch_size=1 \
-    --model.block_size=64 \
-    --model.sliding_window_size=32 \
+    --model.block_size=1024 \
+    --model.sliding_window_size=512 \
     --model.num_layers=2 \
     --model.num_heads=4 \
     --model.num_embeds=8 \
     --model.head_dim=4 \
     --model.hidden_dim=8 \
     --model.num_kv_heads=2 \
-    --model.soft_capping \
     --model.scan_layers
