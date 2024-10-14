@@ -33,6 +33,7 @@ class Embedder(nn.Module):
 
     vocab_size: int
     embed_dim: int
+    soft_capping: bool
     mesh: Mesh
 
     def setup(self):
@@ -48,6 +49,9 @@ class Embedder(nn.Module):
     def decode(self, x: jax.Array) -> jax.Array:
         x = jnp.dot(x, self.embedding.T)
         x = constrain(x, self.mesh, P("fsdp"))
+
+        if self.soft_capping:
+            x = jax.nn.tanh(x / 30) * 30
         return x
 
 
@@ -84,6 +88,7 @@ class Block(nn.Module):
     sliding_window_size: int
     hidden_dim: int
     rope_theta: float
+    soft_capping: bool
     mesh: Mesh
     use_scan: bool = False
 
@@ -94,6 +99,7 @@ class Block(nn.Module):
             self.num_kv_heads,
             self.head_dim,
             self.rope_theta,
+            self.soft_capping,
             self.sliding_window_size,
             self.mesh,
         )
@@ -127,10 +133,18 @@ class Mistral(nn.Module):
         if self.config.remat:
             embedder = nn.remat(
                 Embedder, prevent_cse=not self.using_grad_accum, policy=remat_policy
-            )(self.config.vocab_size, self.config.num_embeds, self.mesh)
+            )(
+                self.config.vocab_size,
+                self.config.num_embeds,
+                self.config.soft_capping,
+                self.mesh,
+            )
         else:
             embedder = Embedder(
-                self.config.vocab_size, self.config.num_embeds, self.mesh
+                self.config.vocab_size,
+                self.config.num_embeds,
+                self.config.soft_capping,
+                self.mesh,
             )
 
         x = embedder.encode(tokens)
@@ -156,6 +170,7 @@ class Mistral(nn.Module):
                 self.config.sliding_window_size,
                 self.config.hidden_dim,
                 self.config.rope_theta,
+                self.config.soft_capping,
                 self.mesh,
                 use_scan=True,
             )(
@@ -170,6 +185,7 @@ class Mistral(nn.Module):
                     self.config.sliding_window_size,
                     self.config.hidden_dim,
                     self.config.rope_theta,
+                    self.config.soft_capping,
                     self.mesh,
                 )(x)
 

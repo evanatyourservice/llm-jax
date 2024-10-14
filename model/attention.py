@@ -68,10 +68,19 @@ def _apply_masks(logits, mask, is_causal, q_seqlen, kv_seqlen, local_window_size
     return padded_logits
 
 
-def _dot_product_attention_core(query, key, value, is_causal, local_window_size):
-    logits = jnp.einsum("BTNH,BSNH->BNTS", query, key)
+def _dot_product_attention_core(
+    query, key, value, is_causal, local_window_size, soft_capping
+):
     head_dim = query.shape[-1]
-    logits *= jax.lax.rsqrt(jnp.array(head_dim, dtype=jnp.float32)).astype(logits.dtype)
+    scale = jax.lax.rsqrt(jnp.array(head_dim, dtype=jnp.float32)).astype(query.dtype)
+
+    if soft_capping:
+        query *= scale
+        logits = jnp.einsum("BTNH,BSNH->BNTS", query, key)
+        logits = jax.nn.tanh(logits / 50) * 50
+    else:
+        logits = jnp.einsum("BTNH,BSNH->BNTS", query, key)
+        logits *= scale
 
     padded_logits = _apply_masks(logits, None, is_causal, None, None, local_window_size)
 
@@ -133,6 +142,7 @@ class Attention(nn.Module):
     num_kv_heads: int
     head_dim: int
     rope_theta: float
+    soft_capping: bool
     sliding_window_size: int
     mesh: Mesh
 
@@ -162,9 +172,13 @@ class Attention(nn.Module):
             q, k = _apply_rotary_embedding(q, k, cos, sin)
 
         vmapped_fn = jax.vmap(
-            _dot_product_attention_core, in_axes=(3, None, None, None, None), out_axes=3
+            _dot_product_attention_core,
+            in_axes=(3, None, None, None, None, None),
+            out_axes=3,
         )
-        encoded = vmapped_fn(q, k, v, True, (self.sliding_window_size, 0))
+        encoded = vmapped_fn(
+            q, k, v, True, (self.sliding_window_size, 0), self.soft_capping
+        )
 
         encoded = jnp.reshape(encoded, (B, T, N * H))
 

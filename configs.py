@@ -20,6 +20,7 @@ class ModelConfig:
         num_embeds: Number of embeddings.
         hidden_dim: Hidden dimension.
         rope_theta: Rotary embedding theta.
+        soft_capping: Whether to use gemma style soft capping.
         scan_layers: Whether to scan layers.
         remat: Whether to use remat. Should be used if scanning layers.
         remat_everything: Whether to remat everything, otherwise only use
@@ -36,6 +37,7 @@ class ModelConfig:
     num_embeds: int = 576
     hidden_dim: int = 1536
     rope_theta: float = 1000000.0
+    soft_capping: bool = False
     scan_layers: bool = False
     remat: bool = False
     remat_everything: bool = False
