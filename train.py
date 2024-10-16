@@ -27,7 +27,7 @@ import tensorflow as tf
 
 from dataset import prepare_hellaswag, fineweb_edu_dataset, _fw_shard_names
 from configs import TrainConfig
-from psgd_jax.kron import kron, precond_update_prob_schedule
+from optimizers.kron_experimental import kron, precond_update_prob_schedule
 from optimizers.tearfree import optimizer as tearfree_opt
 from optimizers.tearfree import shampoo, second_order
 from optimizers.adam import adamw
@@ -168,7 +168,7 @@ def main(config: TrainConfig):
                     max_skew_triangular=config.optimizer.max_skew_triangular,
                     mu_dtype=jnp.float32,
                     precond_dtype=config.optimizer.preconditioner_dtype,
-                    precision="tensorfloat32",
+                    precision="float32",
                     scanned_layers=scanned_layers,
                     lax_map_scanned_layers=config.optimizer.lax_map_scanned_layers,
                     lax_map_batch_size=config.optimizer.lax_map_batch_size,

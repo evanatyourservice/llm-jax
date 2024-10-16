@@ -42,12 +42,14 @@ class Embedder(nn.Module):
 
     def encode(self, x: jax.Array) -> jax.Array:
         x = jnp.take(self.embedding, x, axis=0)
-        x = constrain(x, self.mesh, P("fsdp"))
+        if self.mesh is not None:
+            x = constrain(x, self.mesh, P("fsdp"))
         return x
 
     def decode(self, x: jax.Array) -> jax.Array:
         x = jnp.dot(x, self.embedding.T)
-        x = constrain(x, self.mesh, P("fsdp"))
+        if self.mesh is not None:
+            x = constrain(x, self.mesh, P("fsdp"))
         return x
 
 
@@ -71,7 +73,8 @@ class MLP(nn.Module):
         x = gate * up
 
         down = jnp.dot(x, down_kernel)
-        down = constrain(down, self.mesh, P("fsdp"))
+        if self.mesh is not None:
+            down = constrain(down, self.mesh, P("fsdp"))
         return down
 
 
@@ -115,7 +118,7 @@ class Mistral(nn.Module):
     """Mistral model."""
 
     config: ModelConfig
-    mesh: Mesh
+    mesh: Mesh = None
     using_grad_accum: bool = False
 
     @nn.compact

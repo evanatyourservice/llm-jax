@@ -170,5 +170,6 @@ class Attention(nn.Module):
         encoded = jnp.reshape(encoded, (B, T, N * H))
 
         out = jnp.dot(encoded, out_params)
-        out = constrain(out, self.mesh, P("fsdp"))
+        if self.mesh is not None:
+            out = constrain(out, self.mesh, P("fsdp"))
         return out
