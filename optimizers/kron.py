@@ -41,6 +41,8 @@ def precond_update_prob_schedule(
 
 def scale_by_kron(
     b1: float = 0.9,
+    weight_decay: float = 0.0,
+    weight_decay_mask: Optional[Union[Any, Callable[[base.Params], Any]]] = None,
     preconditioner_update_probability: Union[
         float, Callable[[int], float]
     ] = precond_update_prob_schedule(),
@@ -59,6 +61,9 @@ def scale_by_kron(
 
     Args:
         b1: float, momentum parameter.
+        weight_decay: float, weight decay. PSGD does not need high weight decay.
+        weight_decay_mask: optional Any or callable, pytree of bool indicating which
+            parameters to apply weight decay to.
         preconditioner_update_probability: float, probability of updating the
             preconditioner. Default anneals from 1.0 to 0.03 by 4000 steps.
         max_size_triangular: int, max size for dim's preconditioner to be triangular.
@@ -84,7 +89,7 @@ def scale_by_kron(
 
     # some hardcoded settings
     precond_lr = 0.1
-    precond_init_scale = 1.0
+    precond_init_scale = 1e-6
     momentum_into_preconditioner = True
 
     def map_fn(do_map, fn, *args):
@@ -168,7 +173,8 @@ def scale_by_kron(
         return dict(count=jnp.zeros([], jnp.int32), mu=mu, Qs_preconditioners=Qs)
 
     def update_fn(updates: base.Updates, state: dict, params: base.Params = None):
-        del params
+        if params is None:
+            raise ValueError(base.NO_PARAMS_MSG)
         count_inc = safe_int32_increment(state["count"])
         key = jax.random.fold_in(jax.random.PRNGKey(5318008), state["count"])
 
@@ -181,6 +187,12 @@ def scale_by_kron(
             flax_partitioned = True
             updates = [u.unbox() for u in boxed_updates]
             updates = grads_structure.unflatten(updates)
+        boxed_params, params_structure = jax.tree.flatten(
+            params, is_leaf=lambda v: isinstance(v, (chex.Array, nn.Partitioned))
+        )
+        if isinstance(boxed_params[0], nn.Partitioned):
+            params = [u.unbox() for u in boxed_params]
+            params = params_structure.unflatten(params)
 
         scanned_layers_ = scanned_layers
         if scanned_layers is None:
@@ -203,6 +215,7 @@ def scale_by_kron(
 
         # flatten pytrees
         updates, grads_structure = jax.tree.flatten(updates)
+        params = grads_structure.flatten_up_to(params)
         momentum_updates = grads_structure.flatten_up_to(momentum_updates)
         Qs = grads_structure.flatten_up_to(state["Qs_preconditioners"])
         scanned_layers_ = grads_structure.flatten_up_to(scanned_layers_)
@@ -298,6 +311,20 @@ def scale_by_kron(
             lambda x: jnp.sign(x) * jnp.log(jnp.abs(x) + 1.0), precond_gs
         )
 
+        # weight decay
+        if weight_decay > 0:
+            precond_gs = jax.tree.map(
+                lambda x, p, m: x + weight_decay * p if m else x,
+                precond_gs,
+                params,
+                weight_decay_mask,
+            )
+
+        # scale by clipped trust ratio
+        # precond_gs = scale_by_trust_ratio(
+        #     precond_gs, params, trust_ratio_min=0.01, trust_ratio_max=1.0
+        # )
+
         # box preconditioned grads
         if flax_partitioned:
             precond_gs = [
@@ -365,10 +392,12 @@ def kron(
     Returns:
         optax.GradientTransformationExtraArgs
     """
-    opt = [
+    return chain(
         scale_by_kron(
             preconditioner_update_probability=preconditioner_update_probability,
             b1=b1,
+            weight_decay=weight_decay,
+            weight_decay_mask=weight_decay_mask,
             max_size_triangular=max_size_triangular,
             max_skew_triangular=max_skew_triangular,
             min_ndim_triangular=min_ndim_triangular,
@@ -380,11 +409,7 @@ def kron(
             lax_map_batch_size=lax_map_batch_size,
         ),
         transform.scale_by_learning_rate(learning_rate),
-    ]
-    if weight_decay > 0:
-        opt.append(transform.add_decayed_weights(weight_decay, weight_decay_mask))
-    opt.append(transform.scale_by_learning_rate(learning_rate))
-    return chain(*opt)
+    )
 
 
 def _add_eps(x):
