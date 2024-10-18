@@ -84,7 +84,7 @@ def scale_by_kron(
 
     # some hardcoded settings
     precond_lr = 0.1
-    precond_init_scale = 1e-6
+    precond_init_scale = 0.1
     momentum_into_preconditioner = True
 
     def map_fn(do_map, fn, *args):
