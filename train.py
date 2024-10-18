@@ -168,7 +168,6 @@ def main(config: TrainConfig):
                     max_skew_triangular=config.optimizer.max_skew_triangular,
                     mu_dtype=jnp.float32,
                     precond_dtype=config.optimizer.preconditioner_dtype,
-                    precision="float32",
                     scanned_layers=scanned_layers,
                     lax_map_scanned_layers=config.optimizer.lax_map_scanned_layers,
                     lax_map_batch_size=config.optimizer.lax_map_batch_size,

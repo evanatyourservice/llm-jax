@@ -41,17 +41,18 @@ def precond_update_prob_schedule(
 
 def scale_by_kron(
     b1: float = 0.9,
-    weight_decay: float = 0.0,
-    weight_decay_mask: Optional[Union[Any, Callable[[base.Params], Any]]] = None,
     preconditioner_update_probability: Union[
         float, Callable[[int], float]
     ] = precond_update_prob_schedule(),
     max_size_triangular: int = 8192,
     max_skew_triangular: float = float("inf"),
     min_ndim_triangular: int = 2,
+    preconditioner_lr: float = 0.1,
+    preconditioner_init_scale: float = 1.0,
     mu_dtype: Optional[Union[str, jnp.dtype]] = None,
     precond_dtype: Optional[Union[str, jnp.dtype]] = None,
-    precision: str = "float32",
+    precond_update_precision: str = "float32",
+    precond_grads_precision: str = "tensorfloat32",
     scanned_layers: Optional[base.Params] = None,
     lax_map_scanned_layers: bool = False,
     lax_map_batch_size: int = 8,
@@ -61,19 +62,20 @@ def scale_by_kron(
 
     Args:
         b1: float, momentum parameter.
-        weight_decay: float, weight decay. PSGD does not need high weight decay.
-        weight_decay_mask: optional Any or callable, pytree of bool indicating which
-            parameters to apply weight decay to.
         preconditioner_update_probability: float, probability of updating the
             preconditioner. Default anneals from 1.0 to 0.03 by 4000 steps.
         max_size_triangular: int, max size for dim's preconditioner to be triangular.
         max_skew_triangular: float, max skew for dim's preconditioner to be triangular.
         min_ndim_triangular: int, minimum number of dimensions a layer needs to have
             triangular preconditioners.
+        preconditioner_lr: float, learning rate for the preconditioner.
+        preconditioner_init_scale: float, initial scale for the preconditioner.
         mu_dtype: optional str or jnp.dtype, dtype of the momentum accumulator.
             Defaults to the same dtype as the parameters.
         precond_dtype: optional str or jnp.dtype, dtype of the preconditioner.
-        precision: str, precision for matmul during preconditioner update,
+        precond_update_precision: str, precision for matmul during preconditioner update,
+             'bfloat16', 'tensorfloat32', 'float32'.
+        precond_grads_precision: str, precision for matmul during preconditioning grads,
              'bfloat16', 'tensorfloat32', 'float32'.
         scanned_layers: optional base.Params, tree of bool same structure as params
             indicating scanned layers. PSGD will vmap over the first dim.
@@ -87,10 +89,7 @@ def scale_by_kron(
     mu_dtype = canonicalize_dtype(mu_dtype)
     precond_dtype = canonicalize_dtype(precond_dtype)
 
-    # some hardcoded settings
-    precond_lr = 0.1
-    precond_init_scale = 1e-6
-    momentum_into_preconditioner = True
+    momentum_before_precond_update = True
 
     def map_fn(do_map, fn, *args):
         """Maybe map a fn along first axis."""
@@ -126,7 +125,7 @@ def scale_by_kron(
         Qs = [
             _init_Q_exprs(
                 t[0] if s else t,
-                precond_init_scale,
+                preconditioner_init_scale,
                 max_size_triangular,
                 max_skew_triangular,
                 min_ndim_triangular,
@@ -173,8 +172,7 @@ def scale_by_kron(
         return dict(count=jnp.zeros([], jnp.int32), mu=mu, Qs_preconditioners=Qs)
 
     def update_fn(updates: base.Updates, state: dict, params: base.Params = None):
-        if params is None:
-            raise ValueError(base.NO_PARAMS_MSG)
+        del params
         count_inc = safe_int32_increment(state["count"])
         key = jax.random.fold_in(jax.random.PRNGKey(5318008), state["count"])
 
@@ -187,12 +185,6 @@ def scale_by_kron(
             flax_partitioned = True
             updates = [u.unbox() for u in boxed_updates]
             updates = grads_structure.unflatten(updates)
-        boxed_params, params_structure = jax.tree.flatten(
-            params, is_leaf=lambda v: isinstance(v, (chex.Array, nn.Partitioned))
-        )
-        if isinstance(boxed_params[0], nn.Partitioned):
-            params = [u.unbox() for u in boxed_params]
-            params = params_structure.unflatten(params)
 
         scanned_layers_ = scanned_layers
         if scanned_layers is None:
@@ -201,10 +193,6 @@ def scale_by_kron(
         update_prob_in = preconditioner_update_probability
         if isinstance(preconditioner_update_probability, Callable):
             update_prob_in = preconditioner_update_probability(count_inc)
-
-        precond_lr_in = precond_lr
-        if isinstance(precond_lr, Callable):
-            precond_lr_in = precond_lr(count_inc)
 
         # momentum
         mu = None
@@ -215,20 +203,15 @@ def scale_by_kron(
 
         # flatten pytrees
         updates, grads_structure = jax.tree.flatten(updates)
-        params = grads_structure.flatten_up_to(params)
         momentum_updates = grads_structure.flatten_up_to(momentum_updates)
         Qs = grads_structure.flatten_up_to(state["Qs_preconditioners"])
         scanned_layers_ = grads_structure.flatten_up_to(scanned_layers_)
-        if weight_decay_mask is None:
-            decay_mask = [True] * len(updates)
-        else:
-            decay_mask = grads_structure.flatten_up_to(weight_decay_mask)
 
         # get einsum expressions
         expressions = [
             _init_Q_exprs(
                 t[0] if s else t,
-                precond_init_scale,
+                preconditioner_init_scale,
                 max_size_triangular,
                 max_skew_triangular,
                 min_ndim_triangular,
@@ -240,8 +223,8 @@ def scale_by_kron(
 
         # maybe update preconditioner
         def update_preconditioner(key, Qs):
-            with jax.default_matmul_precision(precision):
-                if momentum_into_preconditioner:
+            with jax.default_matmul_precision(precond_update_precision):
+                if momentum_before_precond_update:
                     precond_updates_in = momentum_updates
                 else:
                     precond_updates_in = updates
@@ -282,7 +265,9 @@ def scale_by_kron(
                 new_Qs = [
                     map_fn(
                         s,
-                        partial(_update_precond, exprs=exprs, precond_lr=precond_lr_in),
+                        partial(
+                            _update_precond, exprs=exprs, precond_lr=preconditioner_lr
+                        ),
                         Q,
                         g,
                         c_or_i,
@@ -303,31 +288,18 @@ def scale_by_kron(
         )
 
         # precondition gradients
-        precond_gs = [
-            map_fn(s, partial(_precond_grad, exprs=exprs), Q, g)
-            for s, exprs, Q, g in zip(
-                scanned_layers_, expressions, Qs, momentum_updates
-            )
-        ]
+        with jax.default_matmul_precision(precond_grads_precision):
+            precond_gs = [
+                map_fn(s, partial(_precond_grad, exprs=exprs), Q, g)
+                for s, exprs, Q, g in zip(
+                    scanned_layers_, expressions, Qs, momentum_updates
+                )
+            ]
 
         # trust region
         precond_gs = jax.tree.map(
             lambda x: jnp.sign(x) * jnp.log(jnp.abs(x) + 1.0), precond_gs
         )
-
-        # weight decay
-        if weight_decay > 0:
-            precond_gs = jax.tree.map(
-                lambda x, p, m: x + weight_decay * p if m else x,
-                precond_gs,
-                params,
-                decay_mask,
-            )
-
-        # scale by clipped trust ratio
-        # precond_gs = scale_by_trust_ratio(
-        #     precond_gs, params, trust_ratio_min=0.01, trust_ratio_max=1.0
-        # )
 
         # box preconditioned grads
         if flax_partitioned:
@@ -360,9 +332,12 @@ def kron(
     max_size_triangular: int = 8192,
     max_skew_triangular: int = float("inf"),
     min_ndim_triangular: int = 2,
+    preconditioner_lr: float = 0.1,
+    preconditioner_init_scale: float = 1.0,
     mu_dtype: Optional[Union[str, jnp.dtype]] = None,
     precond_dtype: Optional[Union[str, jnp.dtype]] = None,
-    precision: str = "float32",
+    precond_update_precision: str = "float32",
+    precond_grads_precision: str = "tensorfloat32",
     scanned_layers: Optional[base.Params] = None,
     lax_map_scanned_layers: bool = False,
     lax_map_batch_size: int = 8,
@@ -373,19 +348,23 @@ def kron(
     Args:
         learning_rate: float or callable, learning rate.
         b1: float, momentum parameter.
-        weight_decay: float, weight decay. PSGD does not need high weight decay.
-        weight_decay_mask: optional Any or callable, pytree of bool indicating which
-            parameters to apply weight decay to.
+        weight_decay: float, weight decay.
+        weight_decay_mask: optional Any or callable, pytree of bool same structure
+            as params with weight decay applied to True elements.
         preconditioner_update_probability: float, probability of updating the
             preconditioner. Default anneals from 1.0 to 0.03 by 4000 steps.
         max_size_triangular: int, max size for dim's preconditioner to be triangular.
         max_skew_triangular: int, max skew for dim's preconditioner to be triangular.
         min_ndim_triangular: int, minimum number of dimensions a layer needs to have
             triangular preconditioners.
+        preconditioner_lr: float, learning rate for the preconditioner.
+        preconditioner_init_scale: float, initial scale for the preconditioner.
         mu_dtype: optional str or jnp.dtype, dtype of the momentum accumulator.
             Defaults to the same dtype as the parameters.
         precond_dtype: optional str or jnp.dtype, dtype of the preconditioner.
-        precision: str, precision for matmul during preconditioner update,
+        precond_update_precision: str, precision for matmul during preconditioner update,
+            'bfloat16', 'tensorfloat32', 'float32'.
+        precond_grads_precision: str, precision for matmul during preconditioning grads,
             'bfloat16', 'tensorfloat32', 'float32'.
         scanned_layers: optional base.Params, tree of bool same structure as params
             indicating scanned layers. PSGD will vmap over the first dim.
@@ -396,24 +375,28 @@ def kron(
     Returns:
         optax.GradientTransformationExtraArgs
     """
-    return chain(
+    optimizer = [
         scale_by_kron(
             preconditioner_update_probability=preconditioner_update_probability,
             b1=b1,
-            weight_decay=weight_decay,
-            weight_decay_mask=weight_decay_mask,
             max_size_triangular=max_size_triangular,
             max_skew_triangular=max_skew_triangular,
             min_ndim_triangular=min_ndim_triangular,
+            preconditioner_lr=preconditioner_lr,
+            preconditioner_init_scale=preconditioner_init_scale,
             mu_dtype=mu_dtype,
             precond_dtype=precond_dtype,
-            precision=precision,
+            precond_update_precision=precond_update_precision,
+            precond_grads_precision=precond_grads_precision,
             scanned_layers=scanned_layers,
             lax_map_scanned_layers=lax_map_scanned_layers,
             lax_map_batch_size=lax_map_batch_size,
-        ),
-        transform.scale_by_learning_rate(learning_rate),
-    )
+        )
+    ]
+    if weight_decay > 0.0:
+        optimizer.append(transform.add_decayed_weights(weight_decay, weight_decay_mask))
+    optimizer.append(transform.scale_by_learning_rate(learning_rate))
+    return chain(*optimizer)
 
 
 def _add_eps(x):
@@ -638,26 +621,3 @@ def _precond_grad(Q, G, exprs):
     """Precondition gradient G with preconditioner Q."""
     exprP = exprs[-1]
     return jnp.einsum(exprP, *[q.conj() for q in Q], *Q, G)
-
-
-def scale_by_trust_ratio(
-    updates,
-    params,
-    trust_ratio_min: Optional[float] = None,
-    trust_ratio_max: Optional[float] = None,
-):
-    def _scale_update(update, param):
-        param_norm = jnp.linalg.norm(param)
-        update_norm = jnp.linalg.norm(update)
-        trust_ratio = param_norm / jnp.where(update_norm == 0.0, 1.0, update_norm)
-
-        # zero_norm = jnp.logical_or(param_norm == 0.0, update_norm == 0.0)
-        # safe_trust_ratio = jnp.where(
-        #     zero_norm, jnp.array(1.0, dtype=param.dtype), trust_ratio
-        # )
-
-        trust_ratio = jnp.clip(trust_ratio, trust_ratio_min, trust_ratio_max)
-
-        return update * trust_ratio
-
-    return jax.tree.map(_scale_update, updates, params)
