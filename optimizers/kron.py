@@ -219,8 +219,9 @@ def scale_by_kron(
         momentum_updates = grads_structure.flatten_up_to(momentum_updates)
         Qs = grads_structure.flatten_up_to(state["Qs_preconditioners"])
         scanned_layers_ = grads_structure.flatten_up_to(scanned_layers_)
-        decay_mask = None
-        if weight_decay_mask is not None:
+        if weight_decay_mask is None:
+            decay_mask = jax.tree.map(lambda _: True, params)
+        else:
             decay_mask = grads_structure.flatten_up_to(weight_decay_mask)
 
         # get einsum expressions
