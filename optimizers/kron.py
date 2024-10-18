@@ -9,7 +9,6 @@ import jax.numpy as jnp
 import flax.linen as nn
 from optax import tree_utils as otu
 from optax._src import base, transform
-from optax._src.linear_algebra import global_norm
 from optax._src.numerics import safe_int32_increment
 from optax._src.utils import canonicalize_dtype
 from optax._src.combine import chain
@@ -47,8 +46,6 @@ def scale_by_kron(
     max_size_triangular: int = 8192,
     max_skew_triangular: float = float("inf"),
     min_ndim_triangular: int = 2,
-    preconditioner_lr: float = 0.1,
-    preconditioner_init_scale: float = 1.0,
     mu_dtype: Optional[Union[str, jnp.dtype]] = None,
     precond_dtype: Optional[Union[str, jnp.dtype]] = None,
     precond_update_precision: str = "float32",
@@ -68,8 +65,6 @@ def scale_by_kron(
         max_skew_triangular: float, max skew for dim's preconditioner to be triangular.
         min_ndim_triangular: int, minimum number of dimensions a layer needs to have
             triangular preconditioners.
-        preconditioner_lr: float, learning rate for the preconditioner.
-        preconditioner_init_scale: float, initial scale for the preconditioner.
         mu_dtype: optional str or jnp.dtype, dtype of the momentum accumulator.
             Defaults to the same dtype as the parameters.
         precond_dtype: optional str or jnp.dtype, dtype of the preconditioner.
@@ -89,6 +84,8 @@ def scale_by_kron(
     mu_dtype = canonicalize_dtype(mu_dtype)
     precond_dtype = canonicalize_dtype(precond_dtype)
 
+    preconditioner_lr = 0.1
+    preconditioner_init_scale = 1.0
     momentum_before_precond_update = True
 
     def map_fn(do_map, fn, *args):
@@ -299,7 +296,7 @@ def scale_by_kron(
         # trust region
         precond_gs = jax.tree.map(
             lambda x: jnp.sign(x) * jnp.log(jnp.abs(x) + 1.0), precond_gs
-        )  # symlog
+        )
         precond_gs = jax.tree.map(lambda x: jnp.clip(x, -3, 3), precond_gs)
 
         # box preconditioned grads
@@ -333,8 +330,6 @@ def kron(
     max_size_triangular: int = 8192,
     max_skew_triangular: int = float("inf"),
     min_ndim_triangular: int = 2,
-    preconditioner_lr: float = 0.1,
-    preconditioner_init_scale: float = 1.0,
     mu_dtype: Optional[Union[str, jnp.dtype]] = None,
     precond_dtype: Optional[Union[str, jnp.dtype]] = None,
     precond_update_precision: str = "float32",
@@ -358,8 +353,6 @@ def kron(
         max_skew_triangular: int, max skew for dim's preconditioner to be triangular.
         min_ndim_triangular: int, minimum number of dimensions a layer needs to have
             triangular preconditioners.
-        preconditioner_lr: float, learning rate for the preconditioner.
-        preconditioner_init_scale: float, initial scale for the preconditioner.
         mu_dtype: optional str or jnp.dtype, dtype of the momentum accumulator.
             Defaults to the same dtype as the parameters.
         precond_dtype: optional str or jnp.dtype, dtype of the preconditioner.
@@ -383,8 +376,6 @@ def kron(
             max_size_triangular=max_size_triangular,
             max_skew_triangular=max_skew_triangular,
             min_ndim_triangular=min_ndim_triangular,
-            preconditioner_lr=preconditioner_lr,
-            preconditioner_init_scale=preconditioner_init_scale,
             mu_dtype=mu_dtype,
             precond_dtype=precond_dtype,
             precond_update_precision=precond_update_precision,
