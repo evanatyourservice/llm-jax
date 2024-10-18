@@ -220,7 +220,7 @@ def scale_by_kron(
         Qs = grads_structure.flatten_up_to(state["Qs_preconditioners"])
         scanned_layers_ = grads_structure.flatten_up_to(scanned_layers_)
         if weight_decay_mask is None:
-            decay_mask = jax.tree.map(lambda _: True, params)
+            decay_mask = [True] * len(updates)
         else:
             decay_mask = grads_structure.flatten_up_to(weight_decay_mask)
 
