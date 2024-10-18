@@ -219,8 +219,9 @@ def scale_by_kron(
         momentum_updates = grads_structure.flatten_up_to(momentum_updates)
         Qs = grads_structure.flatten_up_to(state["Qs_preconditioners"])
         scanned_layers_ = grads_structure.flatten_up_to(scanned_layers_)
+        decay_mask = None
         if weight_decay_mask is not None:
-            weight_decay_mask = grads_structure.flatten_up_to(weight_decay_mask)
+            decay_mask = grads_structure.flatten_up_to(weight_decay_mask)
 
         # get einsum expressions
         expressions = [
@@ -319,7 +320,7 @@ def scale_by_kron(
                 lambda x, p, m: x + weight_decay * p if m else x,
                 precond_gs,
                 params,
-                weight_decay_mask,
+                decay_mask,
             )
 
         # scale by clipped trust ratio
