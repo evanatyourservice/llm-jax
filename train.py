@@ -160,7 +160,7 @@ def main(config: TrainConfig):
                     lr_schedule,
                     b1=0.0 if config.optimizer.schedule_free else config.optimizer.b1,
                     weight_decay=config.optimizer.weight_decay,
-                    mask=param_decay_mask,
+                    weight_decay_mask=param_decay_mask,
                     preconditioner_update_probability=precond_update_prob_schedule(
                         min_prob=config.optimizer.preconditioner_update_probability
                     ),
