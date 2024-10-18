@@ -233,7 +233,7 @@ def scale_by_kron(
                 key, subkey = jax.random.split(key)
                 Vs_keys = jax.random.split(subkey, len(precond_updates_in))
                 Vs = [
-                    jax.random.normal(k, shape=g.shape, dtype=g.dtype)
+                    jax.random.rademacher(k, shape=g.shape, dtype=g.dtype)
                     for k, g in zip(Vs_keys, precond_updates_in)
                 ]
 
@@ -297,12 +297,12 @@ def scale_by_kron(
             ]
 
         # trust region
-        # precond_gs = jax.tree.map(
-        #     lambda x: jnp.sign(x) * jnp.log(jnp.abs(x) + 1.0), precond_gs
-        # )  # symlog
         precond_gs = jax.tree.map(
-            lambda x: jnp.sign(x) * jnp.sqrt(jnp.abs(x)), precond_gs
-        )  # sqrt
+            lambda x: jnp.sign(x) * jnp.log(jnp.abs(x) + 1.0), precond_gs
+        )  # symlog
+        # precond_gs = jax.tree.map(
+        #     lambda x: jnp.sign(x) * jnp.sqrt(jnp.abs(x)), precond_gs
+        # )  # sqrt
 
         # box preconditioned grads
         if flax_partitioned:
