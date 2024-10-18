@@ -166,6 +166,7 @@ def main(config: TrainConfig):
                     ),
                     max_size_triangular=config.optimizer.max_size_triangular,
                     max_skew_triangular=config.optimizer.max_skew_triangular,
+                    preconditioner_init_scale = 0.1,  # lower than default for LLM
                     mu_dtype=jnp.float32,
                     precond_dtype=config.optimizer.preconditioner_dtype,
                     scanned_layers=scanned_layers,
