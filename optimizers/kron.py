@@ -196,7 +196,7 @@ def scale_by_kron(
         momentum_updates = updates
         if state["mu"] is not None:
             mu = otu.tree_update_moment(updates, state["mu"], b1, 1)
-            momentum_updates = mu
+            momentum_updates = otu.tree_bias_correction(mu, b1, count_inc)
 
         # flatten pytrees
         updates, grads_structure = jax.tree.flatten(updates)
@@ -230,7 +230,7 @@ def scale_by_kron(
                 key, subkey = jax.random.split(key)
                 Vs_keys = jax.random.split(subkey, len(precond_updates_in))
                 Vs = [
-                    jax.random.rademacher(k, shape=g.shape, dtype=g.dtype)
+                    jax.random.normal(k, shape=g.shape, dtype=g.dtype)
                     for k, g in zip(Vs_keys, precond_updates_in)
                 ]
 
@@ -245,7 +245,8 @@ def scale_by_kron(
                         return [q * x.astype(q.dtype) for q, x in zip(Q, to_mul)]
 
                     return [
-                        map_fn(s, _balance_Q, Q) for Q, s in zip(Qs, scanned_layers_)
+                        map_fn(s, _balance_Q, Q) if len(Q) > 1 else Q
+                        for Q, s in zip(Qs, scanned_layers_)
                     ]
 
                 key, subkey = jax.random.split(key)
@@ -267,9 +268,9 @@ def scale_by_kron(
                         ),
                         Q,
                         g,
-                        c_or_i,
+                        conjb,
                     )
-                    for s, exprs, Q, g, c_or_i in zip(
+                    for s, exprs, Q, g, conjb in zip(
                         scanned_layers_, expressions, Qs, precond_updates_in, conjBs
                     )
                 ]
@@ -294,18 +295,20 @@ def scale_by_kron(
             ]
 
         # print metrics
-        u_max = jnp.array([jnp.max(jnp.abs(x)) for x in precond_gs]).max()
-        u_mean = jnp.array([jnp.mean(jnp.abs(x)) for x in precond_gs]).mean()
-        u_std = jnp.array([jnp.std(x) for x in precond_gs]).mean()
-        jax.debug.print(
-            "max {max:.8e} mean {mean:.8e} std {std:.8e}",
-            max=u_max,
-            mean=u_mean,
-            std=u_std,
+        jax.lax.cond(
+            count_inc % 25 == 0,
+            lambda: jax.debug.print(
+                "abs(x) {abs:.8e} x^2 {x2:.8e} x^4 {x4:.8e} max {max:.8e}",
+                abs=jnp.array([jnp.mean(jnp.abs(x)) for x in precond_gs]).mean(),
+                x2=jnp.array([jnp.mean(jnp.abs(x) ** 2) for x in precond_gs]).mean(),
+                x4=jnp.array([jnp.mean(jnp.abs(x) ** 4) for x in precond_gs]).mean(),
+                max=jnp.array([jnp.max(jnp.abs(x)) for x in precond_gs]).max(),
+            ),
+            lambda: None,
         )
 
         # trust region
-        precond_gs = jax.tree.map(lambda x: jnp.tanh(x / 3) * 3, precond_gs)
+        # precond_gs = jax.tree.map(lambda x: jnp.tanh(x / 3) * 3, precond_gs)
 
         # box preconditioned grads
         if flax_partitioned:
@@ -499,7 +502,7 @@ def _init_Q_exprs(
 
                 piece1 = "".join(
                     [
-                        (letters[j + 13] if j == i else letters[j])
+                        (letters[i + 13] if j == i else letters[j])
                         for j in range(len(shape))
                     ]
                 )
@@ -522,13 +525,13 @@ def _init_Q_exprs(
 
                 piece1 = "".join(
                     [
-                        (letters[j + 13] if j == i else letters[j])
+                        (letters[i + 13] if j == i else letters[j])
                         for j in range(len(shape))
                     ]
                 )
                 piece2 = "".join(
                     [
-                        (letters[j + 26] if j == i else letters[j])
+                        (letters[i + 26] if j == i else letters[j])
                         for j in range(len(shape))
                     ]
                 )
@@ -549,28 +552,28 @@ def _init_Q_exprs(
     return [Q, (exprA, exprGs, exprP)]
 
 
-def _solve_triangular(A, B, upper, left=True):
-    """A triangular solve has roughly the same complexity as a matmul."""
-    dtype_in = jnp.promote_types(A.dtype, B.dtype)
-    A, B = A.astype(dtype_in), B.astype(dtype_in)
-    leading_dims = 0
-    if B.ndim > 2:
-        leading_dims = B.ndim - 2
-    solve_fn = partial(jax.lax.linalg.triangular_solve, left_side=left, lower=not upper)
-    for _ in range(leading_dims):
-        solve_fn = vmap(solve_fn, in_axes=(None, 0))
-    return solve_fn(A, B)
-
-
 def _solve_triangular_right(X, A):
     """Compute X @ inv(A).
 
     A triangular solve has roughly the same complexity as a matmul.
     """
-    if X.ndim > 1:
-        return _solve_triangular(A, X, upper=True, left=False)
-    else:
-        return _solve_triangular(A, X[None, :], upper=True, left=False)[0]
+    X_ndim = X.ndim
+    if X_ndim < 2:
+        X = X[None, :]
+
+    dtype_in = jnp.promote_types(A.dtype, X.dtype)
+    A, X = A.astype(dtype_in), X.astype(dtype_in)
+    leading_dims = 0
+    if X.ndim > 2:
+        leading_dims = X.ndim - 2
+    solve_fn = partial(jax.lax.linalg.triangular_solve, left_side=False, lower=False)
+    for _ in range(leading_dims):
+        solve_fn = vmap(solve_fn, in_axes=(None, 0))
+    solution = solve_fn(A, X)
+
+    if X_ndim < 2:
+        return solution[0]
+    return solution
 
 
 def _conjB(Q, G, V):
