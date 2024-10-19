@@ -1,6 +1,6 @@
 # llm-jax
 
-Pretrain a mistral-style model with fineweb-edu.
+Pretrain a language model with fineweb-edu.
 
 Has various optimizers: PSGD Kron, adamw, shampoo, and CASPR. Shampoo and CASPR probably not good for large nets, 
 compile time problems. Any optimizer can be wrapped in schedule-free, see configs.py for more details.

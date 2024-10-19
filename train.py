@@ -34,7 +34,7 @@ from optimizers.adam import adamw
 from optimizers.schedule_free import schedule_free, schedule_free_eval_params
 from sharding import infer_sharding, fsdp_sharding
 from utils import check_dtypes, reshard, write_note, count_params, get_step
-from model.mistral import Mistral
+from model.model import Transformer
 
 
 # hack to allow pickling of bfloat16 arrays
@@ -215,7 +215,7 @@ def main(config: TrainConfig):
     def init_train_state(key):
         """Initialize the train state."""
         # make model
-        model = Mistral(config.model, mesh, config.gradient_accumulation_steps > 1)
+        model = Transformer(config.model, mesh, config.gradient_accumulation_steps > 1)
 
         # init params
         dummy_tokens = jnp.zeros(
@@ -353,6 +353,10 @@ def main(config: TrainConfig):
             mask = targets != bos_token_id
 
             loss = jnp.sum(loss * mask) / jnp.sum(mask)
+
+            z_loss = jax.scipy.special.logsumexp(logits) ** 2
+            z_loss = jnp.sum(z_loss * mask) / jnp.sum(mask)
+            loss += 1e-4 * z_loss
 
             return loss
 

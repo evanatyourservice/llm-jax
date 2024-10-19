@@ -7,8 +7,6 @@ from typing import Optional
 class ModelConfig:
     """Default model config for 125M.
 
-    Mistral-like model with default arch similar to MobileLLM and SmolLM.
-
     Attributes:
         block_size: Block size.
         sliding_window_size: Sliding window size.
