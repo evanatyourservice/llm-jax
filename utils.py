@@ -1,14 +1,12 @@
 import collections
 import itertools
 from multiprocessing.pool import ThreadPool
-from typing import Mapping, Union, Tuple
+from typing import Mapping
 import dataclasses
 import numpy as np
 
 import jax
-import jax.numpy as jnp
 import flax
-import chex
 
 
 def _traverse_with_names(tree, with_inner_nodes=False):

@@ -15,3 +15,4 @@ orbax-checkpoint
 sentencepiece
 torchinfo
 tensorboard-plugin-profile
+gcsfs
