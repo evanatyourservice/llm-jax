@@ -7,6 +7,7 @@ import jax
 from jax import vmap
 import jax.numpy as jnp
 import flax.linen as nn
+import optax
 from optax import tree_utils as otu
 from optax._src import base, transform
 from optax._src.numerics import safe_int32_increment
@@ -15,7 +16,7 @@ from optax._src.combine import chain
 
 
 def precond_update_prob_schedule(
-    max_prob=1.0, min_prob=0.03, decay=0.001, flat_start=200
+    max_prob=1.0, min_prob=0.03, decay=0.001, flat_start=250
 ):
     """Anneal preconditioner update probability during beginning of training.
 
@@ -23,8 +24,8 @@ def precond_update_prob_schedule(
     but once the preconditioner is learned the update probability can drop low.
 
     This schedule is an exponential anneal with a flat start. Default settings keep
-    update probability at 1.0 for 200 steps then exponentially anneal down to
-    `min_prob` by 4000 steps. Default settings work very well for most models and
+    update probability at 1.0 for 250 steps then exponentially anneal down to
+    `min_prob` by 4000 steps. Default settings work well for most models and
     training regimes.
     """
 
@@ -48,8 +49,8 @@ def scale_by_kron(
     min_ndim_triangular: int = 2,
     mu_dtype: Optional[Union[str, jnp.dtype]] = None,
     precond_dtype: Optional[Union[str, jnp.dtype]] = None,
-    precond_update_precision: str = "float32",
-    precond_grads_precision: str = "tensorfloat32",
+    precond_update_precision: str = "tensorfloat32",
+    precond_grads_precision: str = "bfloat16",
     scanned_layers: Optional[base.Params] = None,
     lax_map_scanned_layers: bool = False,
     lax_map_batch_size: int = 8,
@@ -226,7 +227,7 @@ def scale_by_kron(
                 else:
                     precond_updates_in = updates
 
-                # random vectors
+                # create random vectors
                 key, subkey = jax.random.split(key)
                 Vs_keys = jax.random.split(subkey, len(precond_updates_in))
                 Vs = [
@@ -234,7 +235,7 @@ def scale_by_kron(
                     for k, g in zip(Vs_keys, precond_updates_in)
                 ]
 
-                # maybe balance preconditioners (useful for quantization/low precision)
+                # balance preconditioners about every 100 updates
                 def balance_Qs(Qs: List[List[jax.Array]]):
                     def _balance_Q(Q: List[jax.Array]):
                         norms = jnp.array(
@@ -294,23 +295,7 @@ def scale_by_kron(
                 )
             ]
 
-        # print metrics
-        jax.lax.cond(
-            count_inc % 25 == 0,
-            lambda: jax.debug.print(
-                "abs(x) {abs:.8e} x^2 {x2:.8e} x^4 {x4:.8e} max {max:.8e}",
-                abs=jnp.array([jnp.mean(jnp.abs(x)) for x in precond_gs]).mean(),
-                x2=jnp.array([jnp.mean(jnp.abs(x) ** 2) for x in precond_gs]).mean(),
-                x4=jnp.array([jnp.mean(jnp.abs(x) ** 4) for x in precond_gs]).mean(),
-                max=jnp.array([jnp.max(jnp.abs(x)) for x in precond_gs]).max(),
-            ),
-            lambda: None,
-        )
-
         # trust region
-        # precond_gs = jax.tree.map(
-        #     lambda x: jnp.sign(x) * jnp.log(jnp.abs(x) + 1), precond_gs
-        # )
         precond_gs = jax.tree.map(lambda x: jnp.tanh(x / 2) * 2, precond_gs)
 
         # box preconditioned grads
@@ -346,8 +331,8 @@ def kron(
     min_ndim_triangular: int = 2,
     mu_dtype: Optional[Union[str, jnp.dtype]] = None,
     precond_dtype: Optional[Union[str, jnp.dtype]] = None,
-    precond_update_precision: str = "float32",
-    precond_grads_precision: str = "tensorfloat32",
+    precond_update_precision: str = "tensorfloat32",
+    precond_grads_precision: str = "bfloat16",
     scanned_layers: Optional[base.Params] = None,
     lax_map_scanned_layers: bool = False,
     lax_map_batch_size: int = 8,
@@ -385,8 +370,8 @@ def kron(
     """
     optimizer = [
         scale_by_kron(
-            preconditioner_update_probability=preconditioner_update_probability,
             b1=b1,
+            preconditioner_update_probability=preconditioner_update_probability,
             max_size_triangular=max_size_triangular,
             max_skew_triangular=max_skew_triangular,
             min_ndim_triangular=min_ndim_triangular,
@@ -397,7 +382,7 @@ def kron(
             scanned_layers=scanned_layers,
             lax_map_scanned_layers=lax_map_scanned_layers,
             lax_map_batch_size=lax_map_batch_size,
-        )
+        ),
     ]
     if weight_decay > 0.0:
         optimizer.append(transform.add_decayed_weights(weight_decay, weight_decay_mask))
@@ -405,8 +390,8 @@ def kron(
     return chain(*optimizer)
 
 
-def _add_eps(x):
-    return jnp.clip(x, 1e-30, None)
+def _add_tiny(x):
+    return x + jnp.finfo(x.dtype).tiny
 
 
 def _norm_lower_bound(A: jax.Array):
@@ -607,14 +592,14 @@ def _update_precond(Q, G, conjB, exprs, precond_lr):
         if q.ndim < 2:
             q -= (
                 precond_lr
-                / _add_eps(jnp.max(jnp.abs(term1 + term2)))
+                / _add_tiny(jnp.max(jnp.abs(term1 + term2)))
                 * (term1 - term2)
                 * q
             )
         else:
             q -= (
                 precond_lr
-                / _add_eps(_norm_lower_bound(term1 + term2))
+                / _add_tiny(_norm_lower_bound(term1 + term2))
                 * jnp.triu(term1 - term2)
                 @ q
             )

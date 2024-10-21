@@ -7,7 +7,7 @@ python3 main.py \
     --no_attempt_to_load_checkpoint \
     --compute_dtype=float32 \
     --params_dtype=float32 \
-    --min_size_to_shard_mb=0 \
+    --model.min_size_to_shard_mb=0 \
     --train_steps=100 \
     --hellaswag_eval_interval=20 \
     --checkpoint_interval=20 \

@@ -22,6 +22,7 @@ class ModelConfig:
         remat: Whether to use remat. Should be used if scanning layers.
         remat_everything: Whether to remat everything, otherwise only use
             `checkpoint_dots_with_no_batch_dims`.
+        min_size_to_shard_mb: Minimum size of shards to create.
     """
 
     block_size: int = 2048
@@ -37,6 +38,7 @@ class ModelConfig:
     scan_layers: bool = False
     remat: bool = False
     remat_everything: bool = False
+    min_size_to_shard_mb: int = 0.1
 
 
 @dataclass(frozen=True)
@@ -104,10 +106,12 @@ class TrainConfig:
 
     Attributes:
         experiment_name: Name of the experiment.
+        data_dir: Directory for the dataset (can be gcs path). See
+            data/download_smollm_corpus.py for more info. If None, the dataset
+            is streamed from Huggingface.
         out_dir: Output directory for checkpoints (can be gcs path).
         attempt_to_load_checkpoint: Whether to attempt to load a checkpoint.
         only_print_model: Whether to only print the model then quit.
-        min_size_to_shard_mb: Minimum size of shards to create.
         hellaswag_eval_interval: Interval to evaluate hellaswag.
         checkpoint_interval: Interval to save checkpoints.
         checkpoint_milestone: Milestone to save checkpoints.
@@ -126,10 +130,10 @@ class TrainConfig:
 
     seed: int = 10
     experiment_name: str = f"run_{date_and_time}"
+    data_dir: Optional[str] = "gs://optimizertesting/smollm-corpus"
     out_dir: str = "gs://optimizertesting/llm-jax"
     attempt_to_load_checkpoint: bool = True
     only_print_model: bool = False
-    min_size_to_shard_mb: int = 0.1
     hellaswag_eval_interval: int = 1000
     checkpoint_interval: int = 1000
     keep_checkpoints: int = 1

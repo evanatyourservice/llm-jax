@@ -254,7 +254,7 @@ def main(config: TrainConfig):
     # get train state shapes and shardings
     train_state_shapes = jax.eval_shape(init_train_state, rng)
 
-    op = fsdp_sharding("fsdp", min_size_to_shard_mb=config.min_size_to_shard_mb)
+    op = fsdp_sharding("fsdp", min_size_to_shard_mb=config.model.min_size_to_shard_mb)
     train_state_sharding, _ = infer_sharding(
         params=train_state_shapes, mesh=mesh, op=op
     )
