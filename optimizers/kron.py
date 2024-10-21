@@ -296,6 +296,7 @@ def scale_by_kron(
             ]
 
         # trust region
+        # (psgd centers x^2 at 1 so we pull >1 down to be less aggressive in reality)
         precond_gs = jax.tree.map(lambda x: jnp.tanh(x / 2) * 2, precond_gs)
 
         # box preconditioned grads
@@ -382,7 +383,7 @@ def kron(
             scanned_layers=scanned_layers,
             lax_map_scanned_layers=lax_map_scanned_layers,
             lax_map_batch_size=lax_map_batch_size,
-        ),
+        )
     ]
     if weight_decay > 0.0:
         optimizer.append(transform.add_decayed_weights(weight_decay, weight_decay_mask))
