@@ -61,8 +61,8 @@ class OptimizerConfig:
             preconditioner in PSGD. Default for PSGD kron is 0.03.
         max_size_triangular: Max dim size for preconditioner to be triangular
             in PSGD.
-        max_skew_triangular: Max skew for preconditioner to be triangular
-            in PSGD.
+        memory_save_mode: Memory save mode for kron, one of
+            [None, "one_diag", "all_diag"].
         preconditioner_dtype: Dtype of the preconditioner in PSGD.
         lax_map_scanned_layers: Whether to use lax.map for scanned layers instead
             of vmap. Useful for large models (>1B) to save memory.
@@ -82,7 +82,7 @@ class OptimizerConfig:
     nesterov: bool = False
     preconditioner_update_probability: float = 0.03
     max_size_triangular: int = 8192
-    max_skew_triangular: float = 1000000000.0
+    memory_save_mode: Optional[str] = None
     preconditioner_dtype: str = "float32"
     lax_map_scanned_layers: bool = False
     lax_map_batch_size: int = 8

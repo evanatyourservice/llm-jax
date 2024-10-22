@@ -165,7 +165,7 @@ def main(config: TrainConfig):
                         min_prob=config.optimizer.preconditioner_update_probability
                     ),
                     max_size_triangular=config.optimizer.max_size_triangular,
-                    max_skew_triangular=config.optimizer.max_skew_triangular,
+                    memory_save_mode=config.optimizer.memory_save_mode,
                     mu_dtype=jnp.float32,
                     precond_dtype=config.optimizer.preconditioner_dtype,
                     scanned_layers=scanned_layers,
