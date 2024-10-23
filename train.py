@@ -25,7 +25,7 @@ import optax.tree_utils as otu
 import orbax.checkpoint as ocp
 import tensorflow as tf
 
-from dataset import prepare_hellaswag, fineweb_edu_dataset, _fw_shard_names
+from dataset import prepare_hellaswag, fineweb_edu_dataset
 from configs import TrainConfig
 from optimizers.kron import kron, precond_update_prob_schedule
 from optimizers.tearfree import optimizer as tearfree_opt
@@ -317,6 +317,7 @@ def main(config: TrainConfig):
 
     make_train_ds = partial(
         fineweb_edu_dataset,
+        data_dir=config.data_dir,
         batch_size=config.batch_size,
         block_size=config.model.block_size + 1,
         flat_devices=devices_flat,
