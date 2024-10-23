@@ -136,7 +136,12 @@ def fineweb_edu_dataset(
 
     def gen():
         files = tf.io.gfile.glob(f"{data_dir}/fineweb-edu-dedup/*.parquet")
-        hf_ds: Dataset = load_dataset("fineweb-edu-dedup", data_files=files)
+        hf_ds: Dataset = load_dataset(
+            "HuggingFaceTB/smollm-corpus",
+            "fineweb-edu-dedup",
+            split="train",
+            data_files=files,
+        )
 
         def tokenize(example):
             # mistral tokenizer adds bos token to beginning
