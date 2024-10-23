@@ -135,22 +135,17 @@ def fineweb_edu_dataset(
         TOKENIZER, trust_remote_code=True, use_fast=True
     )
 
-    files = tf.io.gfile.glob(f"{data_dir}/fineweb-edu-dedup/*.parquet")
-    np.random.shuffle(files)
-
-    ds = tf.data.Dataset.from_tensor_slices(files)
-    ds = ds.shuffle(128)
-
+    ds = tf.data.Dataset.list_files(
+        f"{data_dir}/fineweb-edu-dedup/*.parquet", shuffle=True
+    )
 
     columns = {
         "text": tf.TensorSpec(tf.TensorShape((None,)), tf.string),
         "id": tf.TensorSpec(tf.TensorShape((None,)), tf.string),
         "metadata": tf.TensorSpec(tf.TensorShape((None,)), tf.string),
     }
-    ds = ds.interleave(
+    ds = ds.map(
         map_func=lambda f: tfio.IOTensor.from_parquet(f, columns=columns),
-        cycle_length=2,
-        block_length=2,
         num_parallel_calls=tf.data.AUTOTUNE,
     )
 
