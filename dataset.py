@@ -138,7 +138,10 @@ def fineweb_edu_dataset(
     files = tf.io.gfile.glob(f"{data_dir}/fineweb-edu-dedup/*.parquet")
     np.random.shuffle(files)
 
-    ds: tf.data.Dataset = tf.data.Dataset.interleave(
+    ds = tf.data.Dataset.from_tensor_slices(files)
+    ds = ds.shuffle(128)
+
+    ds = ds.interleave(
         map_func=lambda f: tfio.IOTensor.from_parquet(f),
         cycle_length=16,
         num_parallel_calls=tf.data.AUTOTUNE,
