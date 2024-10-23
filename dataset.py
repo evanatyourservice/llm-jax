@@ -6,6 +6,7 @@ from tqdm import tqdm
 
 import jax
 import tensorflow as tf
+import tensorflow_io as tfio
 import datasets
 from datasets import load_dataset, Dataset
 import datasets.config
@@ -134,33 +135,25 @@ def fineweb_edu_dataset(
         TOKENIZER, trust_remote_code=True, use_fast=True
     )
 
-    def gen():
-        files = tf.io.gfile.glob(f"{data_dir}/fineweb-edu-dedup/*.parquet")
-        hf_ds: Dataset = load_dataset(
-            "HuggingFaceTB/smollm-corpus",
-            "fineweb-edu-dedup",
-            split="train",
-            data_files=files,
-        )
+    files = tf.io.gfile.glob(f"{data_dir}/fineweb-edu-dedup/*.parquet")
+    np.random.shuffle(files)
 
-        def tokenize(example):
-            # mistral tokenizer adds bos token to beginning
-            tokenized = tokenizer(example)["input_ids"]
-            # cap tokenized lengths to 10 * block_size to prevent too much
-            # similarity between blocks in a batch or group of batches
-            tokenized = [t[: 10 * block_size] for t in tokenized]
-            return {"tokens": tokenized}
-
-        hf_ds = hf_ds.map(tokenize, input_columns="text", batched=True, batch_size=128)
-
-        hf_ds = hf_ds.with_format("numpy")
-
-        for example in hf_ds:
-            yield example["tokens"].astype(np.uint16)
-
-    ds = tf.data.Dataset.from_generator(
-        gen, output_signature=tf.TensorSpec(shape=(None,), dtype=tf.uint16)
+    ds: tf.data.Dataset = tf.data.Dataset.interleave(
+        lambda f: tfio.IOTensor.from_parquet(f),
+        cycle_length=16,
+        num_parallel_calls=tf.data.AUTOTUNE,
     )
+
+    def tokenize(example):
+        # mistral tokenizer adds bos token to beginning
+        tokenized = tokenizer(example["text"])["input_ids"]
+        # cap tokenized lengths to 10 * block_size to prevent too much
+        # similarity between blocks in a batch or group of batches
+        tokenized = [t[: 10 * block_size] for t in tokenized]
+        return tokenized
+
+    ds = ds.map(tokenize)
+
     ds = ds.shuffle(128)  # shuffle dataset examples
     ds = ds.unbatch()
     ds = ds.batch(block_size, drop_remainder=True, num_parallel_calls=tf.data.AUTOTUNE)
