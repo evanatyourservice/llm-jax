@@ -142,12 +142,19 @@ def fineweb_edu_dataset(
     columns = {
         "text": tf.TensorSpec(tf.TensorShape((None,)), tf.string),
         "id": tf.TensorSpec(tf.TensorShape((None,)), tf.string),
-        "metadata": tf.TensorSpec(tf.TensorShape((None,)), tf.string),
+        "metadata": {
+            "dump": tf.TensorSpec(tf.TensorShape((None,)), tf.string),
+            "url": tf.TensorSpec(tf.TensorShape((None,)), tf.string),
+            "date": tf.TensorSpec(tf.TensorShape((None,)), tf.string),
+            "file_path": tf.TensorSpec(tf.TensorShape((None,)), tf.string),
+            "language": tf.TensorSpec(tf.TensorShape((None,)), tf.string),
+            "language_score": tf.TensorSpec(tf.TensorShape((None,)), tf.float32),
+            "token_count": tf.TensorSpec(tf.TensorShape((None,)), tf.int32),
+            "score": tf.TensorSpec(tf.TensorShape((None,)), tf.float32),
+            "int_score": tf.TensorSpec(tf.TensorShape((None,)), tf.int32),
+        },
     }
-    ds = ds.map(
-        map_func=lambda f: tfio.IOTensor.from_parquet(f, columns=columns),
-        num_parallel_calls=tf.data.AUTOTUNE,
-    )
+    ds = ds.map(map_func=lambda f: tfio.IOTensor.from_parquet(f, columns=columns))
 
     def tokenize(example):
         # mistral tokenizer adds bos token to beginning
