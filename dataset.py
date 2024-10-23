@@ -139,7 +139,7 @@ def fineweb_edu_dataset(
     np.random.shuffle(files)
 
     ds: tf.data.Dataset = tf.data.Dataset.interleave(
-        lambda f: tfio.IOTensor.from_parquet(f),
+        map_func=lambda f: tfio.IOTensor.from_parquet(f),
         cycle_length=16,
         num_parallel_calls=tf.data.AUTOTUNE,
     )
