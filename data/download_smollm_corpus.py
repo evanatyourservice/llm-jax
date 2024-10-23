@@ -18,10 +18,9 @@ builder = load_dataset_builder(
     "HuggingFaceTB/smollm-corpus", "fineweb-edu-dedup", cache_dir="/hf"
 )
 builder.download_and_prepare(
-    output_dir=output_dir + "/fineweb-edu-dedup/train",
+    output_dir=output_dir + "/fineweb-edu-dedup",
     storage_options=storage_options,
     file_format="parquet",
-    num_proc=4,
     max_shard_size="300MB",
 )
 
@@ -31,10 +30,9 @@ builder = load_dataset_builder(
     "HuggingFaceTB/smollm-corpus", "cosmopedia-v2", cache_dir="/hf"
 )
 builder.download_and_prepare(
-    output_dir=output_dir + "/cosmopedia-v2/train",
+    output_dir=output_dir + "/cosmopedia-v2",
     storage_options=storage_options,
     file_format="parquet",
-    num_proc=4,
     max_shard_size="300MB",
 )
 
