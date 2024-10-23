@@ -23,4 +23,5 @@ python3 main.py \
     --optimizer.learning_rate=0.001 \
     --optimizer.warmup_steps=1000 \
     --optimizer.weight_decay=0.1 \
-    --optimizer.grad_clip=0.0
+    --optimizer.grad_clip=0.0 \
+    --optimizer.memory_save_mode=one_diag
