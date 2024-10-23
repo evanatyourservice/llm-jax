@@ -141,9 +141,16 @@ def fineweb_edu_dataset(
     ds = tf.data.Dataset.from_tensor_slices(files)
     ds = ds.shuffle(128)
 
+
+    columns = {
+        "text": tf.TensorSpec(tf.TensorShape((None,)), tf.string),
+        "id": tf.TensorSpec(tf.TensorShape((None,)), tf.string),
+        "metadata": tf.TensorSpec(tf.TensorShape((None,)), tf.string),
+    }
     ds = ds.interleave(
-        map_func=lambda f: tfio.IOTensor.from_parquet(f, columns=["text", "id", "metadata"]),
-        cycle_length=16,
+        map_func=lambda f: tfio.IOTensor.from_parquet(f, columns=columns),
+        cycle_length=2,
+        block_length=2,
         num_parallel_calls=tf.data.AUTOTUNE,
     )
 
