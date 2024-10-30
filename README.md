@@ -2,8 +2,8 @@
 
 Pretrain a language model with fineweb-edu.
 
-Has various optimizers: PSGD Kron, adamw, shampoo, and CASPR. Shampoo and CASPR probably not good for large nets, 
-compile time problems. Any optimizer can be wrapped in schedule-free, see configs.py for more details.
+Has various optimizers: PSGD Kron, adamw, shampoo, CASPR, and schedule-free. Any optimizer can be wrapped in 
+schedule-free, see configs.py for more details.
 
 Only set up for pretraining for now, working on inference, conversion to pytorch and uploading to huggingface hub.
 
