@@ -127,7 +127,6 @@ class Attention(nn.Module):
     num_kv_heads: int
     head_dim: int
     rope_theta: float
-    sliding_window_size: int
     mesh: Mesh
 
     @nn.compact
@@ -141,7 +140,7 @@ class Attention(nn.Module):
         q_params = self.param("q_kernel", initializer, (C, N * H))
         k_params = self.param("k_kernel", initializer, (C, K * H))
         v_params = self.param("v_kernel", initializer, (C, K * H))
-        out_params = self.param("out_kernel", initializer, (N * H, C))
+        out_params = self.param("out_kernel", nn.initializers.zeros_init(), (N * H, C))
 
         q = jnp.dot(x, q_params)
         k = jnp.dot(x, k_params)
@@ -182,7 +181,9 @@ class MLP(nn.Module):
         gate_kernel = self.param("gate_kernel", initializer, (C, self.hidden_dim))
         up_kernel = self.param("up_kernel", initializer, (C, self.hidden_dim))
 
-        down_kernel = self.param("down_kernel", initializer, (self.hidden_dim, C))
+        down_kernel = self.param(
+            "down_kernel", nn.initializers.zeros_init(), (self.hidden_dim, C)
+        )
 
         gate = jnp.dot(x, gate_kernel)
         gate = nn.silu(gate)
@@ -191,6 +192,7 @@ class MLP(nn.Module):
         x = gate * up
 
         down = jnp.dot(x, down_kernel)
+
         if self.mesh is not None:
             down = constrain(down, self.mesh, P("fsdp"))
         return down
@@ -202,7 +204,6 @@ class Block(nn.Module):
     num_heads: int
     num_kv_heads: int
     head_dim: int
-    sliding_window_size: int
     hidden_dim: int
     rope_theta: float
     mesh: Mesh
@@ -211,12 +212,7 @@ class Block(nn.Module):
     @nn.compact
     def __call__(self, x):
         attn_layer = Attention(
-            self.num_heads,
-            self.num_kv_heads,
-            self.head_dim,
-            self.rope_theta,
-            self.sliding_window_size,
-            self.mesh,
+            self.num_heads, self.num_kv_heads, self.head_dim, self.rope_theta, self.mesh
         )
 
         attn_in = RMSNorm()(x)
@@ -272,7 +268,6 @@ class Transformer(nn.Module):
                 self.config.num_heads,
                 self.config.num_kv_heads,
                 self.config.head_dim,
-                self.config.sliding_window_size,
                 self.config.hidden_dim,
                 self.config.rope_theta,
                 self.mesh,
@@ -286,7 +281,6 @@ class Transformer(nn.Module):
                     self.config.num_heads,
                     self.config.num_kv_heads,
                     self.config.head_dim,
-                    self.config.sliding_window_size,
                     self.config.hidden_dim,
                     self.config.rope_theta,
                     self.mesh,

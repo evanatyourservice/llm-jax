@@ -9,7 +9,6 @@ class ModelConfig:
 
     Attributes:
         block_size: Block size.
-        sliding_window_size: Sliding window size.
         vocab_size: Vocabulary size.
         num_layers: Number of layers.
         num_heads: Number of attention heads.
@@ -26,7 +25,6 @@ class ModelConfig:
     """
 
     block_size: int = 2048
-    sliding_window_size: int = 1024
     vocab_size: int = 32768
     num_layers: int = 30
     num_heads: int = 9

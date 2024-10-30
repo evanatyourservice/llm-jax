@@ -22,5 +22,4 @@ wandb: !dataclass:WandbConfig
     mode: online
 model: !dataclass:ModelConfig
     block_size: 2048
-    sliding_window_size: 1024
     scan_layers: False

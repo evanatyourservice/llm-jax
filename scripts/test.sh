@@ -25,7 +25,6 @@ python3 main.py \
     --optimizer.lax_map_scanned_layers \
     --optimizer.lax_map_batch_size=1 \
     --model.block_size=1024 \
-    --model.sliding_window_size=512 \
     --model.num_layers=2 \
     --model.num_heads=4 \
     --model.num_embeds=8 \
