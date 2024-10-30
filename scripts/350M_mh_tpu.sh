@@ -19,22 +19,26 @@ nohup python3 main_multihost.py \
     --attempt_to_load_checkpoint \
     --hellaswag_eval_interval=1000 \
     --checkpoint_interval=1000 \
-    --train_steps=100000 \
+    --train_steps=250000 \
     --batch_size=512 \
     --gradient_accumulation_steps=1 \
     --compute_dtype=bfloat16 \
-    --params_dtype=float32 \
     --profile \
+    --model.num_layers=32 \
+    --model.num_heads=15 \
+    --model.num_kv_heads=5 \
+    --model.head_dim=64 \
+    --model.num_embeds=960 \
+    --model.hidden_dim=2560 \
     --model.scan_layers \
     --model.remat \
-    --model.remat_everything \
+    --model.no_remat_everything \
     --optimizer.type=kron \
     --optimizer.learning_rate=0.001 \
     --optimizer.warmup_steps=1000 \
     --optimizer.weight_decay=0.1 \
     --optimizer.grad_clip=1.0 \
-    --optimizer.preconditioner_update_probability=0.03 \
-    --optimizer.preconditioner_dtype=float32 \
+    --optimizer.preconditioner_update_probability=0.05 \
     > nohup.out 2>&1 & 
 PID=\\\$!
 echo 'Background process started with PID '\\\$PID
