@@ -104,9 +104,6 @@ class TrainConfig:
 
     Attributes:
         experiment_name: Name of the experiment.
-        data_dir: Directory for the dataset (can be gcs path). See
-            data/download_smollm_corpus.py for more info. If None, the dataset
-            is streamed from Huggingface.
         out_dir: Output directory for checkpoints (can be gcs path).
         attempt_to_load_checkpoint: Whether to attempt to load a checkpoint.
         only_print_model: Whether to only print the model then quit.
@@ -128,7 +125,6 @@ class TrainConfig:
 
     seed: int = 10
     experiment_name: str = f"run_{date_and_time}"
-    data_dir: Optional[str] = "gs://optimizertesting/smollm-corpus"
     out_dir: str = "gs://optimizertesting/llm-jax"
     attempt_to_load_checkpoint: bool = True
     only_print_model: bool = False
