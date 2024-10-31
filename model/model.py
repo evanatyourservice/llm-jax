@@ -6,7 +6,7 @@ import flax.linen as nn
 from configs import ModelConfig
 
 
-initializer = nn.initializers.normal(0.02)
+initializer = nn.initializers.normal(0.01)
 constrain = lambda x, mesh, spec: jax.lax.with_sharding_constraint(x, NS(mesh, spec))
 
 
