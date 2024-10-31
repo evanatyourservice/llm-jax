@@ -65,6 +65,8 @@ class OptimizerConfig:
         lax_map_scanned_layers: Whether to use lax.map for scanned layers instead
             of vmap. Useful for large models (>1B) to save memory.
         lax_map_batch_size: Batch size for lax.map, see jax docs for more info.
+        trust_region_scale: Scale for trust region in PSGD. see PSGD docstring
+            for more info.
     """
 
     type: str = "kron"
@@ -84,6 +86,7 @@ class OptimizerConfig:
     preconditioner_dtype: str = "float32"
     lax_map_scanned_layers: bool = False
     lax_map_batch_size: int = 8
+    trust_region_scale: float = 2.0
 
 
 @dataclass(frozen=True)
