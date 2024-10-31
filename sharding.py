@@ -59,8 +59,7 @@ def fsdp_sharding(axis, min_size_to_shard_mb=1):
         if isinstance(x, list):
             # Preconditioners for PSGD and tearfree shampoo kept in lists
             precond_specs = []
-            # sharding psgd on first dim, shampoo on last
-            shard_dim = -2 if "Qs_preconditioners" in name else -1
+            shard_dim = -2
             for precond in x:
                 shape = precond.shape
                 new_sharding = [None for _ in shape]
