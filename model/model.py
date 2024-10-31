@@ -1,3 +1,6 @@
+from typing import Optional
+import numpy as np
+
 import jax
 import jax.numpy as jnp
 from jax.sharding import Mesh, NamedSharding as NS, PartitionSpec as P
@@ -6,7 +9,6 @@ import flax.linen as nn
 from configs import ModelConfig
 
 
-initializer = nn.initializers.normal(0.01)
 constrain = lambda x, mesh, spec: jax.lax.with_sharding_constraint(x, NS(mesh, spec))
 
 
@@ -32,23 +34,58 @@ class Embedder(nn.Module):
 
     vocab_size: int
     embed_dim: int
+    scale_embedding: Optional[str]
+    tie_embeddings: bool
+    soft_cap_logits: bool
     mesh: Mesh
 
     def setup(self):
-        self.embedding = self.param(
-            "embedding", initializer, (self.vocab_size, self.embed_dim)
-        )
+        if self.scale_embedding == "norm":
+            initializer = nn.initializers.normal(1.0)
+            self.embedding = self.param(
+                "embedding", initializer, (self.vocab_size, self.embed_dim)
+            )
+            self.emb_norm = RMSNorm()
+        elif self.scale_embedding == "scale":
+            initializer = nn.initializers.truncated_normal(0.02 / np.sqrt(self.embed_dim))
+            self.embedding = self.param(
+                "embedding", initializer, (self.vocab_size, self.embed_dim)
+            )
+        else:
+            initializer = nn.initializers.truncated_normal(0.02)
+            self.embedding = self.param(
+                "embedding", initializer, (self.vocab_size, self.embed_dim)
+            )
+
+        if not self.tie_embeddings:
+            self.lm_head = self.param(
+                "lm_head", nn.initializers.zeros_init(), (self.embed_dim, self.vocab_size)
+            )
 
     def encode(self, x: jax.Array) -> jax.Array:
         x = jnp.take(self.embedding, x, axis=0)
         if self.mesh is not None:
             x = constrain(x, self.mesh, P("fsdp"))
+
+        if self.scale_embedding == "norm":
+            x = self.emb_norm(x)
+        elif self.scale_embedding == "scale":
+            x *= jnp.sqrt(self.embed_dim).astype(x.dtype)
+
         return x
 
     def decode(self, x: jax.Array) -> jax.Array:
-        x = jnp.dot(x, self.embedding.T)
+        if not self.tie_embeddings:
+            x = jnp.dot(x, self.lm_head)
+        else:
+            x = jnp.dot(x, self.embedding.T)
+
         if self.mesh is not None:
             x = constrain(x, self.mesh, P("fsdp"))
+
+        if self.soft_cap_logits:
+            x = jnp.tanh(x / 30) * 30
+
         return x
 
 
@@ -62,10 +99,13 @@ def _get_causal_mask(T, S):
     return mask[None, None, :, :]
 
 
-def _dot_product_attention_core(query, key, value):
+def _dot_product_attention_core(query, key, value, soft_cap_attn):
     head_dim = query.shape[-1]
     query *= jax.lax.rsqrt(jnp.array(head_dim, dtype=jnp.float32)).astype(query.dtype)
     logits = jnp.einsum("BTNH,BSNH->BNTS", query, key)
+
+    if soft_cap_attn:
+        logits = jnp.tanh(logits / 50) * 50
 
     causal_mask = _get_causal_mask(logits.shape[-2], logits.shape[-1])
     logits = jnp.where(causal_mask, logits, _get_large_negative(logits.dtype))
@@ -127,6 +167,8 @@ class Attention(nn.Module):
     num_kv_heads: int
     head_dim: int
     rope_theta: float
+    qk_norm: bool
+    soft_cap_attn: bool
     mesh: Mesh
 
     @nn.compact
@@ -137,6 +179,7 @@ class Attention(nn.Module):
         G = N // K
         H = self.head_dim
 
+        initializer = nn.initializers.truncated_normal(0.02 / np.sqrt(C))
         q_params = self.param("q_kernel", initializer, (C, N * H))
         k_params = self.param("k_kernel", initializer, (C, K * H))
         v_params = self.param("v_kernel", initializer, (C, K * H))
@@ -150,17 +193,17 @@ class Attention(nn.Module):
         k = jnp.reshape(k, (B, T, K, H))
         v = jnp.reshape(v, (B, T, K, H))
 
-        # qk norm
-        q = RMSNorm()(q)
-        k = RMSNorm()(k)
+        if self.qk_norm:
+            q = RMSNorm()(q)
+            k = RMSNorm()(k)
 
         sin, cos = _sine_table(H, T, max_timescale=self.rope_theta)
         q, k = _apply_rotary_embedding(q, k, cos, sin)
 
         vmapped_fn = jax.vmap(
-            _dot_product_attention_core, in_axes=(3, None, None), out_axes=3
+            _dot_product_attention_core, in_axes=(3, None, None, None), out_axes=3
         )
-        encoded = vmapped_fn(q, k, v)
+        encoded = vmapped_fn(q, k, v, self.soft_cap_attn)
 
         encoded = jnp.reshape(encoded, (B, T, N * H))
 
@@ -178,6 +221,7 @@ class MLP(nn.Module):
     def __call__(self, x):
         C = x.shape[-1]
 
+        initializer = nn.initializers.truncated_normal(0.02 / np.sqrt(C))
         gate_kernel = self.param("gate_kernel", initializer, (C, self.hidden_dim))
         up_kernel = self.param("up_kernel", initializer, (C, self.hidden_dim))
 
@@ -192,7 +236,6 @@ class MLP(nn.Module):
         x = gate * up
 
         down = jnp.dot(x, down_kernel)
-
         if self.mesh is not None:
             down = constrain(down, self.mesh, P("fsdp"))
         return down
@@ -206,21 +249,35 @@ class Block(nn.Module):
     head_dim: int
     hidden_dim: int
     rope_theta: float
+    qk_norm: bool
+    soft_cap_attn: bool
+    post_attn_norm: bool
+    post_mlp_norm: bool
     mesh: Mesh
     use_scan: bool = False
 
     @nn.compact
     def __call__(self, x):
         attn_layer = Attention(
-            self.num_heads, self.num_kv_heads, self.head_dim, self.rope_theta, self.mesh
+            self.num_heads,
+            self.num_kv_heads,
+            self.head_dim,
+            self.rope_theta,
+            self.qk_norm,
+            self.soft_cap_attn,
+            self.mesh,
         )
 
         attn_in = RMSNorm()(x)
         attn_out = attn_layer(attn_in)
+        if self.post_attn_norm:
+            attn_out = RMSNorm()(attn_out)
         x = x + attn_out
 
         mlp_in = RMSNorm()(x)
         mlp_out = MLP(self.hidden_dim, self.mesh)(mlp_in)
+        if self.post_mlp_norm:
+            mlp_out = RMSNorm()(mlp_out)
         x = x + mlp_out
 
         if self.use_scan:
@@ -241,11 +298,25 @@ class Transformer(nn.Module):
 
         if self.config.remat:
             embedder = nn.remat(
-                Embedder, prevent_cse=not self.using_grad_accum, policy=remat_policy
-            )(self.config.vocab_size, self.config.num_embeds, self.mesh)
+                Embedder,
+                prevent_cse=not self.using_grad_accum,
+                policy=remat_policy,
+            )(
+                self.config.vocab_size,
+                self.config.num_embeds,
+                self.config.scale_embedding,
+                self.config.tie_embeddings,
+                self.config.soft_cap_logits,
+                self.mesh,
+            )
         else:
             embedder = Embedder(
-                self.config.vocab_size, self.config.num_embeds, self.mesh
+                self.config.vocab_size,
+                self.config.num_embeds,
+                self.config.scale_embedding,
+                self.config.tie_embeddings,
+                self.config.soft_cap_logits,
+                self.mesh,
             )
 
         x = embedder.encode(tokens)
@@ -270,6 +341,10 @@ class Transformer(nn.Module):
                 self.config.head_dim,
                 self.config.hidden_dim,
                 self.config.rope_theta,
+                self.config.qk_norm,
+                self.config.soft_cap_attn,
+                self.config.post_attn_norm,
+                self.config.post_mlp_norm,
                 self.mesh,
                 use_scan=True,
             )(
@@ -283,6 +358,10 @@ class Transformer(nn.Module):
                     self.config.head_dim,
                     self.config.hidden_dim,
                     self.config.rope_theta,
+                    self.config.qk_norm,
+                    self.config.soft_cap_attn,
+                    self.config.post_attn_norm,
+                    self.config.post_mlp_norm,
                     self.mesh,
                 )(x)
 

@@ -17,6 +17,13 @@ class ModelConfig:
         num_embeds: Number of embeddings.
         hidden_dim: Hidden dimension.
         rope_theta: Rotary embedding theta.
+        scale_embedding: Whether to scale embeddings, one of [None, "scale", "norm"].
+        tie_embeddings: Whether to tie embeddings.
+        qk_norm: Whether to normalize qk in attn.
+        soft_cap_attn: Whether to soft cap attention gemma style.
+        soft_cap_logits: Whether to soft cap logits gemma style.
+        post_attn_norm: Whether to normalize after attn.
+        post_mlp_norm: Whether to normalize after mlp.
         scan_layers: Whether to scan layers.
         remat: Whether to use remat. Should be used if scanning layers.
         remat_everything: Whether to remat everything, otherwise only use
@@ -33,6 +40,13 @@ class ModelConfig:
     num_embeds: int = 576
     hidden_dim: int = 1536
     rope_theta: float = 1000000.0
+    scale_embedding: Optional[str] = None
+    tie_embeddings: bool = True
+    qk_norm: bool = True
+    soft_cap_attn: bool = False
+    soft_cap_logits: bool = False
+    post_attn_norm: bool = False
+    post_mlp_norm: bool = False
     scan_layers: bool = False
     remat: bool = False
     remat_everything: bool = False
@@ -119,6 +133,7 @@ class TrainConfig:
         gradient_accumulation_steps: Number of gradient accumulation steps.
         compute_dtype: Compute dtype.
         params_dtype: Params dtype.
+        z_loss: Whether to use palm style z-loss for stability.
         profile: Whether to profile the training to tensorboard.
         n_profile_steps: Number of steps to profile.
         optimizer: Optimizer config.
@@ -140,6 +155,7 @@ class TrainConfig:
     gradient_accumulation_steps: int = 1
     compute_dtype: str = "float32"
     params_dtype: str = "float32"
+    z_loss: bool = True
     profile: bool = False
     n_profile_steps: int = 5
     optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)

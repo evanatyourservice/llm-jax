@@ -355,9 +355,10 @@ def main(config: TrainConfig):
 
             loss = jnp.sum(loss * mask) / jnp.sum(mask)
 
-            z_loss = jax.scipy.special.logsumexp(logits) ** 2
-            z_loss = jnp.sum(z_loss * mask) / jnp.sum(mask)
-            loss += 1e-4 * z_loss
+            if config.z_loss:
+                z_loss = jax.scipy.special.logsumexp(logits) ** 2
+                z_loss = jnp.sum(z_loss * mask) / jnp.sum(mask)
+                loss += 1e-4 * z_loss
 
             return loss
 
