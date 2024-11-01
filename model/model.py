@@ -9,6 +9,7 @@ import flax.linen as nn
 from configs import ModelConfig
 
 
+init_fn = lambda dim: nn.initializers.truncated_normal(jnp.sqrt(2 / (5 * dim)))
 constrain = lambda x, mesh, spec: jax.lax.with_sharding_constraint(x, NS(mesh, spec))
 
 
@@ -41,25 +42,22 @@ class Embedder(nn.Module):
 
     def setup(self):
         if self.scale_embedding == "norm":
-            initializer = nn.initializers.normal(1.0)
             self.embedding = self.param(
-                "embedding", initializer, (self.vocab_size, self.embed_dim)
+                "embedding",
+                nn.initializers.normal(1.0),
+                (self.vocab_size, self.embed_dim),
             )
             self.emb_norm = RMSNorm()
-        elif self.scale_embedding == "scale":
-            initializer = nn.initializers.truncated_normal(0.02 / np.sqrt(self.embed_dim))
-            self.embedding = self.param(
-                "embedding", initializer, (self.vocab_size, self.embed_dim)
-            )
         else:
-            initializer = nn.initializers.truncated_normal(0.02)
             self.embedding = self.param(
-                "embedding", initializer, (self.vocab_size, self.embed_dim)
+                "embedding", init_fn(self.embed_dim), (self.vocab_size, self.embed_dim)
             )
 
         if not self.tie_embeddings:
             self.lm_head = self.param(
-                "lm_head", nn.initializers.zeros_init(), (self.embed_dim, self.vocab_size)
+                "lm_head",
+                nn.initializers.zeros_init(),
+                (self.embed_dim, self.vocab_size),
             )
 
     def encode(self, x: jax.Array) -> jax.Array:
@@ -179,10 +177,9 @@ class Attention(nn.Module):
         G = N // K
         H = self.head_dim
 
-        initializer = nn.initializers.truncated_normal(0.02 / np.sqrt(C))
-        q_params = self.param("q_kernel", initializer, (C, N * H))
-        k_params = self.param("k_kernel", initializer, (C, K * H))
-        v_params = self.param("v_kernel", initializer, (C, K * H))
+        q_params = self.param("q_kernel", init_fn(C), (C, N * H))
+        k_params = self.param("k_kernel", init_fn(C), (C, K * H))
+        v_params = self.param("v_kernel", init_fn(C), (C, K * H))
         out_params = self.param("out_kernel", nn.initializers.zeros_init(), (N * H, C))
 
         q = jnp.dot(x, q_params)
@@ -221,10 +218,8 @@ class MLP(nn.Module):
     def __call__(self, x):
         C = x.shape[-1]
 
-        initializer = nn.initializers.truncated_normal(0.02 / np.sqrt(C))
-        gate_kernel = self.param("gate_kernel", initializer, (C, self.hidden_dim))
-        up_kernel = self.param("up_kernel", initializer, (C, self.hidden_dim))
-
+        gate_kernel = self.param("gate_kernel", init_fn(C), (C, self.hidden_dim))
+        up_kernel = self.param("up_kernel", init_fn(C), (C, self.hidden_dim))
         down_kernel = self.param(
             "down_kernel", nn.initializers.zeros_init(), (self.hidden_dim, C)
         )
@@ -298,9 +293,7 @@ class Transformer(nn.Module):
 
         if self.config.remat:
             embedder = nn.remat(
-                Embedder,
-                prevent_cse=not self.using_grad_accum,
-                policy=remat_policy,
+                Embedder, prevent_cse=not self.using_grad_accum, policy=remat_policy
             )(
                 self.config.vocab_size,
                 self.config.num_embeds,
