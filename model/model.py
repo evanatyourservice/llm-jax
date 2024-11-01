@@ -55,9 +55,7 @@ class Embedder(nn.Module):
 
         if not self.tie_embeddings:
             self.lm_head = self.param(
-                "lm_head",
-                nn.initializers.zeros_init(),
-                (self.embed_dim, self.vocab_size),
+                "lm_head", init_fn(self.embed_dim), (self.embed_dim, self.vocab_size)
             )
 
     def encode(self, x: jax.Array) -> jax.Array:
@@ -180,7 +178,7 @@ class Attention(nn.Module):
         q_params = self.param("q_kernel", init_fn(C), (C, N * H))
         k_params = self.param("k_kernel", init_fn(C), (C, K * H))
         v_params = self.param("v_kernel", init_fn(C), (C, K * H))
-        out_params = self.param("out_kernel", nn.initializers.zeros_init(), (N * H, C))
+        out_params = self.param("out_kernel", init_fn(N * H), (N * H, C))
 
         q = jnp.dot(x, q_params)
         k = jnp.dot(x, k_params)
@@ -221,7 +219,7 @@ class MLP(nn.Module):
         gate_kernel = self.param("gate_kernel", init_fn(C), (C, self.hidden_dim))
         up_kernel = self.param("up_kernel", init_fn(C), (C, self.hidden_dim))
         down_kernel = self.param(
-            "down_kernel", nn.initializers.zeros_init(), (self.hidden_dim, C)
+            "down_kernel", init_fn(self.hidden_dim), (self.hidden_dim, C)
         )
 
         gate = jnp.dot(x, gate_kernel)
