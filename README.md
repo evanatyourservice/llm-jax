@@ -1,11 +1,11 @@
 # llm-jax
 
-Pretrain a language model with fineweb-edu.
+Pretrain a SmolLM-style language model with fineweb-edu.
 
 Has various optimizers: PSGD Kron, adamw, shampoo, CASPR, and schedule-free. Any optimizer can be wrapped in 
 schedule-free, see configs.py for more details.
 
-Only set up for pretraining for now, working on inference, conversion to pytorch and uploading to huggingface hub.
+Only set up for pretraining right now, working on inference, conversion to pytorch, and uploading to huggingface hub.
 
 Saves checkpoints to out_dir, set same experiment name to resume.
 
@@ -13,10 +13,12 @@ Set --profile to profile training to tensorboard, tensorboard dir is <out_dir>/p
 
 See configs.py for other settings and all hyperparameters.
 
-The research for this repo is made possible by [Google's TRC program](https://sites.research.google/trc/about/).
+This repo is made possible by [Google's TRC program](https://sites.research.google/trc/about/).
 
 Started with [this repo, credit to @jenkspt](https://github.com/jenkspt/gpt-jax). Also pulled some tools 
 from [big_vision](https://github.com/google-research/big_vision) to add FSDP sharding.
+
+Shoutout to @Grad62304977 for sharing model tips to improve training stability.
 
 
 ## Install
