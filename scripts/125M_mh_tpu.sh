@@ -27,10 +27,11 @@ nohup python3 main_multihost.py \
     --profile \
     --model.scan_layers \
     --model.remat \
-    --model.remat_everything \
+    --model.no_remat_everything \
     --optimizer.type=kron \
     --optimizer.learning_rate=0.001 \
     --optimizer.warmup_steps=1000 \
+    --optimizer.b1=0.95 \
     --optimizer.weight_decay=0.1 \
     --optimizer.grad_clip=1.0 \
     --optimizer.preconditioner_update_probability=0.03 \

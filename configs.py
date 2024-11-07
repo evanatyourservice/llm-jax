@@ -100,7 +100,7 @@ class OptimizerConfig:
     preconditioner_dtype: str = "float32"
     lax_map_scanned_layers: bool = False
     lax_map_batch_size: int = 8
-    trust_region_scale: float = 2.0
+    trust_region_scale: float = 1.5
 
 
 @dataclass(frozen=True)
