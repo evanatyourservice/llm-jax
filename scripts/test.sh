@@ -8,10 +8,10 @@ python3 main.py \
     --compute_dtype=float32 \
     --params_dtype=float32 \
     --model.min_size_to_shard_mb=0 \
-    --train_steps=100 \
+    --train_steps=1000 \
     --hellaswag_eval_interval=20 \
     --checkpoint_interval=20 \
-    --batch_size=2 \
+    --batch_size=4 \
     --gradient_accumulation_steps=2 \
     --profile \
     --wandb.mode=offline \
@@ -21,10 +21,9 @@ python3 main.py \
     --optimizer.flat_lr \
     --optimizer.warmup_steps=20 \
     --optimizer.preconditioner_dtype=float32 \
-    --optimizer.preconditioner_update_probability=0.03 \
-    --optimizer.lax_map_scanned_layers \
+    --optimizer.no_lax_map_scanned_layers \
     --optimizer.lax_map_batch_size=1 \
-    --model.block_size=1024 \
+    --model.block_size=64 \
     --model.num_layers=2 \
     --model.num_heads=4 \
     --model.num_embeds=8 \

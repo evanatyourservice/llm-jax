@@ -171,7 +171,6 @@ def main(config: TrainConfig):
                     scanned_layers=scanned_layers,
                     lax_map_scanned_layers=config.optimizer.lax_map_scanned_layers,
                     lax_map_batch_size=config.optimizer.lax_map_batch_size,
-                    trust_region_scale=config.optimizer.trust_region_scale,
                 )
             )
             optimizer = optax.chain(*optimizer)
@@ -354,11 +353,6 @@ def main(config: TrainConfig):
             mask = targets != bos_token_id
 
             loss = jnp.sum(loss * mask) / jnp.sum(mask)
-
-            if config.z_loss:
-                z_loss = jax.scipy.special.logsumexp(logits) ** 2
-                z_loss = jnp.sum(z_loss * mask) / jnp.sum(mask)
-                loss += 1e-4 * z_loss
 
             return loss
 
