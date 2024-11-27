@@ -76,7 +76,7 @@ class LSTMBlock(nn.Module):
 
     @nn.compact
     def __call__(self, x):
-        C = x.shape[-1]
+        B, T, C = x.shape
 
         rnn = nn.RNN(
             nn.OptimizedLSTMCell(features=C, kernel_init=init_fn, dtype=x.dtype),
@@ -84,7 +84,8 @@ class LSTMBlock(nn.Module):
             unroll=128,
         )
 
-        x += rnn(RMSNorm()(x))
+        carry = (jnp.zeros((B, C), dtype=x.dtype), jnp.zeros((B, C), dtype=x.dtype))
+        x += rnn(RMSNorm()(x), initial_carry=carry)
         x += MLP(self.hidden_dim, self.mesh)(RMSNorm()(x))
 
         if self.use_scan:
