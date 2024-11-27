@@ -5,7 +5,7 @@ export XLA_FLAGS="--xla_force_host_platform_device_count=2"
 python3 main.py \
     --out_dir=/Users/evanwalters/llm_testing \
     --no_attempt_to_load_checkpoint \
-    --compute_dtype=float32 \
+    --compute_dtype=bfloat16 \
     --params_dtype=float32 \
     --model.min_size_to_shard_mb=0 \
     --train_steps=1000 \

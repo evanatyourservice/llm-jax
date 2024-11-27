@@ -79,7 +79,7 @@ class LSTMBlock(nn.Module):
         C = x.shape[-1]
 
         rnn = nn.RNN(
-            nn.OptimizedLSTMCell(features=C, kernel_init=init_fn),
+            nn.OptimizedLSTMCell(features=C, kernel_init=init_fn, dtype=x.dtype),
             time_major=False,
             unroll=128,
         )
@@ -106,16 +106,10 @@ class LSTM(nn.Module):
         if self.config.remat:
             embedder = nn.remat(
                 Embedder, prevent_cse=not self.using_grad_accum, policy=remat_policy
-            )(
-                self.config.vocab_size,
-                self.config.num_embeds,
-                self.mesh,
-            )
+            )(self.config.vocab_size, self.config.num_embeds, self.mesh)
         else:
             embedder = Embedder(
-                self.config.vocab_size,
-                self.config.num_embeds,
-                self.mesh,
+                self.config.vocab_size, self.config.num_embeds, self.mesh
             )
 
         x = embedder.encode(tokens)
@@ -124,7 +118,9 @@ class LSTM(nn.Module):
             prevent_cse = True
             if self.using_grad_accum or self.config.scan_layers:
                 prevent_cse = False
-            LSTMBlockModule = nn.remat(LSTMBlock, prevent_cse=prevent_cse, policy=remat_policy)
+            LSTMBlockModule = nn.remat(
+                LSTMBlock, prevent_cse=prevent_cse, policy=remat_policy
+            )
         else:
             LSTMBlockModule = LSTMBlock
 
@@ -134,66 +130,11 @@ class LSTM(nn.Module):
                 variable_axes={True: 0},
                 split_rngs={True: True},
                 length=self.config.num_layers,
-            )(
-                self.config.hidden_dim,
-                self.mesh,
-                use_scan=True,
-            )(
-                x
-            )
+            )(self.config.hidden_dim, self.mesh, use_scan=True)(x)
         else:
             for _ in range(self.config.num_layers):
-                x = LSTMBlockModule(
-                    self.config.hidden_dim,
-                    self.mesh,
-                )(x)
+                x = LSTMBlockModule(self.config.hidden_dim, self.mesh)(x)
 
         x = RMSNorm()(x)
         logits = embedder.decode(x)
         return logits
-
-def test_lstm():
-    """Simple test to verify LSTM functionality."""
-    import numpy as np
-    from configs import ModelConfig
-    
-    config = ModelConfig(
-        vocab_size=100,
-        num_embeds=32,
-        hidden_dim=64,
-        num_layers=2,
-        remat=False,
-        remat_everything=False,
-        scan_layers=True,
-    )
-    
-    model = LSTM(config)
-    
-    batch_size, seq_len = 2, 16
-    tokens = jnp.array(np.random.randint(0, config.vocab_size, (batch_size, seq_len)))
-    
-    key = jax.random.PRNGKey(0)
-    params = model.init(key, tokens)
-    
-    print("\nTest Configuration:")
-    print(f"Batch size: {batch_size}")
-    print(f"Sequence length: {seq_len}")
-    print(f"Model config: {config}")
-    
-    logits = model.apply(params, tokens)
-    
-    expected_shape = (batch_size, seq_len, config.vocab_size)
-    assert logits.shape == expected_shape, f"Expected shape {expected_shape}, got {logits.shape}"
-    
-    print("\nModel Output Statistics:")
-    print(f"Logits shape: {logits.shape}")
-    print(f"Logits mean: {jnp.mean(logits):.4f}")
-    print(f"Logits std: {jnp.std(logits):.4f}")
-    print(f"Logits min: {jnp.min(logits):.4f}")
-    print(f"Logits max: {jnp.max(logits):.4f}")
-    print("\n✓ LSTM test passed!")
-    
-    return logits
-
-if __name__ == "__main__":
-    test_lstm()

@@ -27,7 +27,11 @@ import tensorflow as tf
 
 from dataset import prepare_hellaswag, fineweb_edu_dataset, _fw_shard_names
 from configs import TrainConfig
-from optimizers.kron_dist import kron, precond_update_prob_schedule, get_opt_state_partition_specs
+from optimizers.kron_dist import (
+    kron,
+    precond_update_prob_schedule,
+    get_opt_state_partition_specs,
+)
 from optimizers.tearfree import optimizer as tearfree_opt
 from optimizers.tearfree import shampoo, second_order
 from optimizers.adam import adamw
@@ -226,7 +230,9 @@ def main(config: TrainConfig):
         """Initialize the model parameters."""
 
         if config.model.model_type == "transformer":
-            model = Transformer(config.model, mesh, config.gradient_accumulation_steps > 1)
+            model = Transformer(
+                config.model, mesh, config.gradient_accumulation_steps > 1
+            )
         else:
             model = LSTM(config.model, mesh, config.gradient_accumulation_steps > 1)
 
@@ -252,7 +258,9 @@ def main(config: TrainConfig):
     )
     train_state_shapes = jax.eval_shape(init_params, rng)
     op = fsdp_sharding("fsdp", min_size_to_shard_mb=config.model.min_size_to_shard_mb)
-    train_state_sharding, _ = infer_sharding(params=train_state_shapes, mesh=mesh, op=op)
+    train_state_sharding, _ = infer_sharding(
+        params=train_state_shapes, mesh=mesh, op=op
+    )
 
     rng_init = reshard(rng, repl_sharding)
     train_state = jax.jit(init_params, out_shardings=train_state_sharding)(rng_init)
@@ -297,7 +305,9 @@ def main(config: TrainConfig):
     )
     if config.optimizer.type in ["psgd", "psgd_kron", "kron"]:
         with mesh:
-            kron_specs = get_opt_state_partition_specs(train_state.params, **kron_kwargs)
+            kron_specs = get_opt_state_partition_specs(
+                train_state.params, **kron_kwargs
+            )
         kron_sharding = jax.tree.map(
             lambda x: NamedSharding(mesh, x),
             kron_specs,
@@ -639,7 +649,9 @@ def main(config: TrainConfig):
                         and config.model.block_size >= 1024
                     ):
                         hs_accs = []
-                        for _ in range(10 if platform == "cpu" else 10042 // hs_batch_size):
+                        for _ in range(
+                            10 if platform == "cpu" else 10042 // hs_batch_size
+                        ):
                             hs_batch = next(hellaswag_ds)
                             hs_acc = eval_hellaswag_jit(train_state, *hs_batch)
                             hs_accs.append(jax.device_get(hs_acc).item())
@@ -650,12 +662,16 @@ def main(config: TrainConfig):
                         if wandb.run is not None and jax.process_index() == 0:
                             wandb.summary["max_hellaswag_acc"] = max_hellaswag_acc
 
-                        write_note(f"step: {curr_step}, hellaswag_acc: {hellaswag_acc:.4f}")
+                        write_note(
+                            f"step: {curr_step}, hellaswag_acc: {hellaswag_acc:.4f}"
+                        )
 
                         jax.block_until_ready(hs_acc)
 
                     # check train state dtypes are consistent
-                    check_dtypes(orig_dtypes, jax.tree.map(lambda x: x.dtype, train_state))
+                    check_dtypes(
+                        orig_dtypes, jax.tree.map(lambda x: x.dtype, train_state)
+                    )
 
                     start_time = time.time()
 

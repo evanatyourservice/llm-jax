@@ -174,7 +174,9 @@ class MLP(nn.Module):
 
         gate_kernel = self.param("gate_kernel", init_fn(C), (C, self.hidden_dim))
         up_kernel = self.param("up_kernel", init_fn(C), (C, self.hidden_dim))
-        down_kernel = self.param("down_kernel", init_fn(self.hidden_dim), (self.hidden_dim, C))
+        down_kernel = self.param(
+            "down_kernel", init_fn(self.hidden_dim), (self.hidden_dim, C)
+        )
 
         gate = jnp.dot(x, gate_kernel)
         gate = nn.silu(gate)
@@ -202,11 +204,7 @@ class Block(nn.Module):
     @nn.compact
     def __call__(self, x):
         attn_layer = Attention(
-            self.num_heads,
-            self.num_kv_heads,
-            self.head_dim,
-            self.rope_theta,
-            self.mesh,
+            self.num_heads, self.num_kv_heads, self.head_dim, self.rope_theta, self.mesh
         )
         x += attn_layer(RMSNorm()(x))
         x += MLP(self.hidden_dim, self.mesh)(RMSNorm()(x))
@@ -229,16 +227,10 @@ class Transformer(nn.Module):
         if self.config.remat:
             embedder = nn.remat(
                 Embedder, prevent_cse=not self.using_grad_accum, policy=remat_policy
-            )(
-                self.config.vocab_size,
-                self.config.num_embeds,
-                self.mesh,
-            )
+            )(self.config.vocab_size, self.config.num_embeds, self.mesh)
         else:
             embedder = Embedder(
-                self.config.vocab_size,
-                self.config.num_embeds,
-                self.mesh,
+                self.config.vocab_size, self.config.num_embeds, self.mesh
             )
 
         x = embedder.encode(tokens)
