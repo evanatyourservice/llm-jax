@@ -8,6 +8,7 @@ class ModelConfig:
     """Default model config for 125M.
 
     Attributes:
+        model_type: either 'transformer' or 'lstm'
         block_size: Block size.
         vocab_size: Vocabulary size.
         num_layers: Number of layers.
@@ -24,6 +25,7 @@ class ModelConfig:
         min_size_to_shard_mb: Minimum size of shards to create.
     """
 
+    model_type: str = "transformer"
     block_size: int = 2048
     vocab_size: int = 32768
     num_layers: int = 30

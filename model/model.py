@@ -1,6 +1,3 @@
-from typing import Optional
-import numpy as np
-
 import jax
 import jax.numpy as jnp
 from jax.sharding import Mesh, NamedSharding as NS, PartitionSpec as P

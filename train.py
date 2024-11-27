@@ -27,7 +27,7 @@ import tensorflow as tf
 
 from dataset import prepare_hellaswag, fineweb_edu_dataset, _fw_shard_names
 from configs import TrainConfig
-from psgd_jax.kron import kron, precond_update_prob_schedule
+from optimizers.kron_dist import kron, precond_update_prob_schedule, get_opt_state_partition_specs
 from optimizers.tearfree import optimizer as tearfree_opt
 from optimizers.tearfree import shampoo, second_order
 from optimizers.adam import adamw
@@ -35,6 +35,7 @@ from optimizers.schedule_free import schedule_free, schedule_free_eval_params
 from sharding import infer_sharding, fsdp_sharding
 from utils import check_dtypes, reshard, write_note, count_params, get_step
 from model.model import Transformer
+from model.lstm_model import LSTM
 
 
 # hack to allow pickling of bfloat16 arrays
@@ -122,7 +123,7 @@ def main(config: TrainConfig):
             boundaries=[config.optimizer.warmup_steps],
         )
 
-    def make_opt(scanned_layers=None):
+    def make_opt(scanned_layers=None, params_sharding=None):
         write_note(f"Using {config.optimizer.type} optimizer")
 
         def param_decay_mask(params):
@@ -140,6 +141,7 @@ def main(config: TrainConfig):
         if config.optimizer.grad_clip > 0.0 and not config.optimizer.schedule_free:
             optimizer.append(optax.clip_by_global_norm(config.optimizer.grad_clip))
 
+        kron_kwargs = None
         if config.optimizer.type in ["adam", "adamw"]:
             optimizer.append(
                 adamw(
@@ -155,25 +157,33 @@ def main(config: TrainConfig):
             )
             optimizer = optax.chain(*optimizer)
         elif config.optimizer.type in ["psgd", "psgd_kron", "kron"]:
-            optimizer.append(
-                kron(
-                    lr_schedule,
-                    b1=0.0 if config.optimizer.schedule_free else config.optimizer.b1,
-                    weight_decay=config.optimizer.weight_decay,
-                    weight_decay_mask=param_decay_mask,
-                    preconditioner_update_probability=precond_update_prob_schedule(
-                        min_prob=config.optimizer.preconditioner_update_probability
-                    ),
-                    max_size_triangular=config.optimizer.max_size_triangular,
-                    memory_save_mode=config.optimizer.memory_save_mode,
-                    mu_dtype=jnp.float32,
-                    precond_dtype=config.optimizer.preconditioner_dtype,
-                    scanned_layers=scanned_layers,
-                    lax_map_scanned_layers=config.optimizer.lax_map_scanned_layers,
-                    lax_map_batch_size=config.optimizer.lax_map_batch_size,
-                )
+            if config.optimizer.schedule_free:
+                raise NotImplementedError("Schedule-free Kron not implemented")
+            kron_kwargs = dict(
+                learning_rate=lr_schedule,
+                b1=0.0 if config.optimizer.schedule_free else config.optimizer.b1,
+                weight_decay=config.optimizer.weight_decay,
+                weight_decay_mask=param_decay_mask,
+                normalize_grads=True,
+                preconditioner_update_probability=precond_update_prob_schedule(
+                    min_prob=config.optimizer.preconditioner_update_probability
+                ),
+                max_size_triangular=config.optimizer.max_size_triangular,
+                memory_save_mode=config.optimizer.memory_save_mode,
+                mu_dtype=jnp.float32,
+                precond_dtype=config.optimizer.preconditioner_dtype,
+                scanned_layers=scanned_layers,
+                lax_map_scanned_layers=config.optimizer.lax_map_scanned_layers,
+                lax_map_batch_size=config.optimizer.lax_map_batch_size,
+                merge_small_dims=True,
+                target_merged_dim_size=4096,
+                partition_grads_into_blocks=True,
+                block_size=256,
+                buffer_qq=False,
+                params_sharding=params_sharding,
+                preconditioner_sharding=P("fsdp", None),
             )
-            optimizer = optax.chain(*optimizer)
+            optimizer = kron(**kron_kwargs)
         elif config.optimizer.type in ["shampoo", "caspr"]:
             optimizer.append(
                 tearfree_opt.tearfree(
@@ -205,37 +215,57 @@ def main(config: TrainConfig):
         if config.optimizer.schedule_free:
             optimizer = schedule_free(optimizer, lr_schedule, b1=config.optimizer.b1)
 
-        return optimizer
+        return optimizer, kron_kwargs
 
     # ====== train state and sharding ======
     write_note("Creating and sharding train state")
     repl_sharding = NamedSharding(mesh, P())
     data_sharding = NamedSharding(mesh, P("fsdp"))
 
-    def init_train_state(key):
-        """Initialize the train state."""
-        # make model
+    if config.model.model_type == "transformer":
         model = Transformer(config.model, mesh, config.gradient_accumulation_steps > 1)
+    else:
+        model = LSTM(config.model, mesh, config.gradient_accumulation_steps > 1)
 
+    def init_params(key):
+        """Initialize the model parameters."""
         # init params
         dummy_tokens = jnp.zeros(
             (config.batch_size, config.model.block_size), dtype=jnp.uint16
         )
         params = model.init(key, dummy_tokens)
         params = otu.tree_cast(params, config.params_dtype)
+        return params
 
-        # which layers are scanned
-        if config.model.scan_layers:
-            all_false = jax.tree.map(lambda _: False, params)
-            scanned_layers = flax.traverse_util.ModelParamTraversal(
-                lambda p, _: "scan" in p or "Scan" in p
-            ).update(lambda _: True, all_false)
-        else:
-            scanned_layers = None
+    rng = jax.random.PRNGKey(
+        jax.device_put(config.seed, jax.local_devices(backend="cpu")[0])
+    )
+    params_shapes = jax.eval_shape(init_params, rng)
+    op = fsdp_sharding("fsdp", min_size_to_shard_mb=config.model.min_size_to_shard_mb)
+    params_sharding, _ = infer_sharding(params=params_shapes, mesh=mesh, op=op)
 
-        # make optimizer
-        optimizer = make_opt(scanned_layers=scanned_layers)
+    rng_init = reshard(rng, repl_sharding)
+    params = jax.jit(init_params, out_shardings=params_sharding)(rng_init)
 
+    # which layers are scanned
+    if config.model.scan_layers:
+        all_false = jax.tree.map(lambda _: False, params)
+        scanned_layers = flax.traverse_util.ModelParamTraversal(
+            lambda p, _: "scan" in p or "Scan" in p
+        ).update(lambda _: True, all_false)
+    else:
+        scanned_layers = None
+
+    # kron only needs the partition specs
+    params_specs = jax.tree.map(lambda x: x.spec, params_sharding)
+
+    # make optimizer
+    optimizer, kron_kwargs = make_opt(
+        scanned_layers=scanned_layers, params_sharding=params_specs
+    )
+
+    def init_train_state():
+        """Initialize the train state."""
         # make train state
         train_state = TrainState(
             step=0,
@@ -247,23 +277,27 @@ def main(config: TrainConfig):
         )
         return train_state
 
-    rng = jax.random.PRNGKey(
-        jax.device_put(config.seed, jax.local_devices(backend="cpu")[0])
-    )
-
     # get train state shapes and shardings
-    train_state_shapes = jax.eval_shape(init_train_state, rng)
+    with mesh:
+        train_state_shapes = jax.eval_shape(init_train_state)
 
     op = fsdp_sharding("fsdp", min_size_to_shard_mb=config.model.min_size_to_shard_mb)
     train_state_sharding, _ = infer_sharding(
         params=train_state_shapes, mesh=mesh, op=op
     )
+    if config.optimizer.type in ["psgd", "psgd_kron", "kron"]:
+        with mesh:
+            kron_specs = get_opt_state_partition_specs(params, **kron_kwargs)
+        kron_sharding = jax.tree.map(
+            lambda x: NamedSharding(mesh, x),
+            kron_specs,
+            is_leaf=lambda x: isinstance(x, P),
+        )
+        train_state_sharding = train_state_sharding.replace(opt_state=kron_sharding)
 
     # make train state
-    rng_init = reshard(rng, repl_sharding)
-    train_state = jax.jit(init_train_state, out_shardings=train_state_sharding)(
-        rng_init
-    )
+    with mesh:
+        train_state = jax.jit(init_train_state, out_shardings=train_state_sharding)()
 
     # load checkpoint
     with jax.transfer_guard("allow"):
@@ -484,145 +518,146 @@ def main(config: TrainConfig):
     # ======= train ========
     write_note(f"Starting training at step {curr_step}")
 
-    orig_dtypes = jax.tree.map(lambda x: x.dtype, train_state)
-    effective_batch_size = config.batch_size * config.gradient_accumulation_steps
-    min_loss = float("inf")
-    max_hellaswag_acc = 0.0
-    train_losses = []
-    grad_norms = []
-    start_time = None  # skip first loop for compile
-    while curr_step < config.train_steps:
-        with jax.profiler.StepTraceAnnotation("train", step_num=curr_step):
-            batch = []
-            for _ in range(config.gradient_accumulation_steps):
-                try:
-                    batch.append(next(train_ds))
-                except StopIteration:
-                    print(
-                        f"Current dataset subshard exhausted on process "
-                        f"{jax.process_index()}, loading next subshard"
-                    )
-                    del train_ds
-
-                    # delete huggingface datasets cache to save space
-                    if platform == "tpu":
-                        hf_cache_dir = "/dev/shm/huggingface_cache"
-                    else:
-                        hf_cache_dir = os.path.expanduser(
-                            "~/.cache/huggingface/datasets"
+    with mesh:
+        orig_dtypes = jax.tree.map(lambda x: x.dtype, train_state)
+        effective_batch_size = config.batch_size * config.gradient_accumulation_steps
+        min_loss = float("inf")
+        max_hellaswag_acc = 0.0
+        train_losses = []
+        grad_norms = []
+        start_time = None  # skip first loop for compile
+        while curr_step < config.train_steps:
+            with jax.profiler.StepTraceAnnotation("train", step_num=curr_step):
+                batch = []
+                for _ in range(config.gradient_accumulation_steps):
+                    try:
+                        batch.append(next(train_ds))
+                    except StopIteration:
+                        print(
+                            f"Current dataset subshard exhausted on process "
+                            f"{jax.process_index()}, loading next subshard"
                         )
-                    if os.path.exists(hf_cache_dir):
-                        print(f"Removing {hf_cache_dir} to save space")
-                        try:
-                            shutil.rmtree(hf_cache_dir)
-                        except Exception as e:
-                            print(f"Error removing {hf_cache_dir}: {e}")
+                        del train_ds
 
-                    # start next subshard or restart whole dataset
-                    shard_idx += 1
-                    if jax.process_count() == 1:
-                        ds_name = None
-                    else:
-                        ds_name = process_shard[shard_idx % len(process_shard)]
-                    train_ds = make_train_ds(fineweb_edu_name=ds_name)
+                        # delete huggingface datasets cache to save space
+                        if platform == "tpu":
+                            hf_cache_dir = "/dev/shm/huggingface_cache"
+                        else:
+                            hf_cache_dir = os.path.expanduser(
+                                "~/.cache/huggingface/datasets"
+                            )
+                        if os.path.exists(hf_cache_dir):
+                            print(f"Removing {hf_cache_dir} to save space")
+                            try:
+                                shutil.rmtree(hf_cache_dir)
+                            except Exception as e:
+                                print(f"Error removing {hf_cache_dir}: {e}")
 
-                    batch.append(next(train_ds))
+                        # start next subshard or restart whole dataset
+                        shard_idx += 1
+                        if jax.process_count() == 1:
+                            ds_name = None
+                        else:
+                            ds_name = process_shard[shard_idx % len(process_shard)]
+                        train_ds = make_train_ds(fineweb_edu_name=ds_name)
 
-            if curr_step == 0:
-                write_note(
-                    f"Batch info: {jax.tree.map(lambda x: (x.shape, x.dtype), batch)}"
-                )
+                        batch.append(next(train_ds))
 
-            loss, train_state, g_norm, lr = train_step_jit(train_state, batch)
-            train_losses.append(jax.device_get(loss).item())
-            grad_norms.append(jax.device_get(g_norm).item())
-
-        curr_step = get_step(train_state)
-
-        # save checkpoint
-        with jax.transfer_guard("allow"):
-            if curr_step > 0:
-                async_checkpoint_manager.save(curr_step, train_state)
-
-        if config.profile and curr_step == 10:
-            jax.profiler.start_trace(config.out_dir + "/profile")
-        if config.profile and curr_step == 10 + config.n_profile_steps:
-            jax.profiler.stop_trace()
-
-        # logging
-        if curr_step % 10 == 0 and curr_step > 0:
-            train_loss = np.mean(train_losses)
-            min_loss = min(min_loss, train_loss)
-            grad_norm = np.mean(grad_norms)
-            curr_lr = jax.device_get(lr).item()
-            curr_tokens = (
-                (curr_step + 1) * effective_batch_size * config.model.block_size
-            )
-            to_log = {
-                "train_loss": train_loss,
-                "grad_norm": grad_norm,
-                "lr": curr_lr,
-                "tokens": curr_tokens,
-            }
-
-            if curr_step % 100 == 0:
-                # add performance metrics
-                jax.block_until_ready(train_state.params)
-                if start_time is not None:
-                    end_time = time.time()
-
-                    seconds_per_step = (end_time - start_time) / 100
-                    tokens_per_second = (
-                        effective_batch_size
-                        * config.model.block_size
-                        / seconds_per_step
+                if curr_step == 0:
+                    write_note(
+                        f"Batch info: {jax.tree.map(lambda x: (x.shape, x.dtype), batch)}"
                     )
-                    to_log["seconds_per_step"] = seconds_per_step
-                    to_log["tokens_per_second"] = tokens_per_second
 
-                write_note(
-                    f"step: {curr_step}, loss: {train_loss:.4f}, "
-                    f"grad_norm: {grad_norm:.4f}, "
-                    f"lr: {curr_lr:.4f}, tokens: {curr_tokens:.4f}"
+                loss, train_state, g_norm, lr = train_step_jit(train_state, batch)
+                train_losses.append(jax.device_get(loss).item())
+                grad_norms.append(jax.device_get(g_norm).item())
+
+            curr_step = get_step(train_state)
+
+            # save checkpoint
+            with jax.transfer_guard("allow"):
+                if curr_step > 0:
+                    async_checkpoint_manager.save(curr_step, train_state)
+
+            if config.profile and curr_step == 10:
+                jax.profiler.start_trace(config.out_dir + "/profile")
+            if config.profile and curr_step == 10 + config.n_profile_steps:
+                jax.profiler.stop_trace()
+
+            # logging
+            if curr_step % 10 == 0 and curr_step > 0:
+                train_loss = np.mean(train_losses)
+                min_loss = min(min_loss, train_loss)
+                grad_norm = np.mean(grad_norms)
+                curr_lr = jax.device_get(lr).item()
+                curr_tokens = (
+                    (curr_step + 1) * effective_batch_size * config.model.block_size
                 )
+                to_log = {
+                    "train_loss": train_loss,
+                    "grad_norm": grad_norm,
+                    "lr": curr_lr,
+                    "tokens": curr_tokens,
+                }
 
-                # eval hellaswag
-                if (
-                    curr_step % config.hellaswag_eval_interval == 0
-                    and config.model.block_size >= 1024
-                ):
-                    hs_accs = []
-                    for _ in range(10 if platform == "cpu" else 10042 // hs_batch_size):
-                        hs_batch = next(hellaswag_ds)
-                        hs_acc = eval_hellaswag_jit(train_state, *hs_batch)
-                        hs_accs.append(jax.device_get(hs_acc).item())
-                    hellaswag_acc = np.mean(hs_accs)
-                    max_hellaswag_acc = max(max_hellaswag_acc, hellaswag_acc)
+                if curr_step % 100 == 0:
+                    # add performance metrics
+                    jax.block_until_ready(train_state.params)
+                    if start_time is not None:
+                        end_time = time.time()
 
-                    to_log["hellaswag_acc"] = hellaswag_acc
-                    if wandb.run is not None and jax.process_index() == 0:
-                        wandb.summary["max_hellaswag_acc"] = max_hellaswag_acc
+                        seconds_per_step = (end_time - start_time) / 100
+                        tokens_per_second = (
+                            effective_batch_size
+                            * config.model.block_size
+                            / seconds_per_step
+                        )
+                        to_log["seconds_per_step"] = seconds_per_step
+                        to_log["tokens_per_second"] = tokens_per_second
 
-                    write_note(f"step: {curr_step}, hellaswag_acc: {hellaswag_acc:.4f}")
+                    write_note(
+                        f"step: {curr_step}, loss: {train_loss:.4f}, "
+                        f"grad_norm: {grad_norm:.4f}, "
+                        f"lr: {curr_lr:.4f}, tokens: {curr_tokens:.4f}"
+                    )
 
-                    jax.block_until_ready(hs_acc)
+                    # eval hellaswag
+                    if (
+                        curr_step % config.hellaswag_eval_interval == 0
+                        and config.model.block_size >= 1024
+                    ):
+                        hs_accs = []
+                        for _ in range(10 if platform == "cpu" else 10042 // hs_batch_size):
+                            hs_batch = next(hellaswag_ds)
+                            hs_acc = eval_hellaswag_jit(train_state, *hs_batch)
+                            hs_accs.append(jax.device_get(hs_acc).item())
+                        hellaswag_acc = np.mean(hs_accs)
+                        max_hellaswag_acc = max(max_hellaswag_acc, hellaswag_acc)
 
-                # check train state dtypes are consistent
-                check_dtypes(orig_dtypes, jax.tree.map(lambda x: x.dtype, train_state))
+                        to_log["hellaswag_acc"] = hellaswag_acc
+                        if wandb.run is not None and jax.process_index() == 0:
+                            wandb.summary["max_hellaswag_acc"] = max_hellaswag_acc
 
-                start_time = time.time()
+                        write_note(f"step: {curr_step}, hellaswag_acc: {hellaswag_acc:.4f}")
 
-            # log to wandb
-            if wandb.run is not None and jax.process_index() == 0:
-                wandb.log(to_log, step=curr_step)
-                wandb.summary["min_train_loss"] = min_loss
+                        jax.block_until_ready(hs_acc)
 
-            # reset metrics lists
-            train_losses = []
-            grad_norms = []
+                    # check train state dtypes are consistent
+                    check_dtypes(orig_dtypes, jax.tree.map(lambda x: x.dtype, train_state))
 
-    with jax.transfer_guard("allow"):
-        async_checkpoint_manager.save(curr_step, train_state)
-        async_checkpoint_manager.wait_until_finished()
+                    start_time = time.time()
+
+                # log to wandb
+                if wandb.run is not None and jax.process_index() == 0:
+                    wandb.log(to_log, step=curr_step)
+                    wandb.summary["min_train_loss"] = min_loss
+
+                # reset metrics lists
+                train_losses = []
+                grad_norms = []
+
+        with jax.transfer_guard("allow"):
+            async_checkpoint_manager.save(curr_step, train_state)
+            async_checkpoint_manager.wait_until_finished()
 
     wandb.finish()

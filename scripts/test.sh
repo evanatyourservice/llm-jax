@@ -16,13 +16,13 @@ python3 main.py \
     --profile \
     --wandb.mode=offline \
     --optimizer.type=kron \
-    --optimizer.schedule_free \
     --optimizer.learning_rate=0.001 \
     --optimizer.flat_lr \
     --optimizer.warmup_steps=20 \
     --optimizer.preconditioner_dtype=float32 \
     --optimizer.no_lax_map_scanned_layers \
     --optimizer.lax_map_batch_size=1 \
+    --model.model_type=lstm \
     --model.block_size=64 \
     --model.num_layers=2 \
     --model.num_heads=4 \
@@ -30,4 +30,6 @@ python3 main.py \
     --model.head_dim=4 \
     --model.hidden_dim=8 \
     --model.num_kv_heads=2 \
-    --model.scan_layers
+    --model.scan_layers \
+    --model.remat \
+    --model.no_remat_everything
