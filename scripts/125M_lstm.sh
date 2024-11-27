@@ -10,19 +10,19 @@ python3 main.py \
     --hellaswag_eval_interval=1000 \
     --checkpoint_interval=1000 \
     --train_steps=10000 \
-    --batch_size=512 \
-    --gradient_accumulation_steps=1 \
+    --batch_size=256 \
+    --gradient_accumulation_steps=2 \
     --compute_dtype=bfloat16 \
     --params_dtype=float32 \
     --profile \
     --model.model_type=lstm \
     --model.block_size=2048 \
-    --model.num_layers=30 \
+    --model.num_layers=24 \
     --model.num_embeds=512 \
-    --model.hidden_dim=1280 \
+    --model.hidden_dim=1024 \
     --model.scan_layers \
     --model.remat \
-    --model.no_remat_everything \
+    --model.remat_everything \
     --optimizer.type=kron \
     --optimizer.learning_rate=0.001 \
     --optimizer.flat_lr \

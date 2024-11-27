@@ -81,7 +81,7 @@ class LSTMBlock(nn.Module):
         rnn = nn.RNN(
             nn.OptimizedLSTMCell(features=C, kernel_init=init_fn, dtype=x.dtype),
             time_major=False,
-            unroll=128,
+            unroll=32,
         )
 
         carry = (jnp.zeros((B, C), dtype=x.dtype), jnp.zeros((B, C), dtype=x.dtype))
