@@ -222,34 +222,44 @@ def main(config: TrainConfig):
     repl_sharding = NamedSharding(mesh, P())
     data_sharding = NamedSharding(mesh, P("fsdp"))
 
-    if config.model.model_type == "transformer":
-        model = Transformer(config.model, mesh, config.gradient_accumulation_steps > 1)
-    else:
-        model = LSTM(config.model, mesh, config.gradient_accumulation_steps > 1)
-
     def init_params(key):
         """Initialize the model parameters."""
+
+        if config.model.model_type == "transformer":
+            model = Transformer(config.model, mesh, config.gradient_accumulation_steps > 1)
+        else:
+            model = LSTM(config.model, mesh, config.gradient_accumulation_steps > 1)
+
         # init params
         dummy_tokens = jnp.zeros(
             (config.batch_size, config.model.block_size), dtype=jnp.uint16
         )
         params = model.init(key, dummy_tokens)
         params = otu.tree_cast(params, config.params_dtype)
-        return params
+
+        train_state = TrainState(
+            step=0,
+            apply_fn=model.apply,
+            params=params,
+            tx=None,
+            opt_state=None,
+            lr_fn=None,
+        )
+        return train_state
 
     rng = jax.random.PRNGKey(
         jax.device_put(config.seed, jax.local_devices(backend="cpu")[0])
     )
-    params_shapes = jax.eval_shape(init_params, rng)
+    train_state_shapes = jax.eval_shape(init_params, rng)
     op = fsdp_sharding("fsdp", min_size_to_shard_mb=config.model.min_size_to_shard_mb)
-    params_sharding, _ = infer_sharding(params=params_shapes, mesh=mesh, op=op)
+    train_state_sharding, _ = infer_sharding(params=train_state_shapes, mesh=mesh, op=op)
 
     rng_init = reshard(rng, repl_sharding)
-    params = jax.jit(init_params, out_shardings=params_sharding)(rng_init)
+    train_state = jax.jit(init_params, out_shardings=train_state_sharding)(rng_init)
 
     # which layers are scanned
     if config.model.scan_layers:
-        all_false = jax.tree.map(lambda _: False, params)
+        all_false = jax.tree.map(lambda _: False, train_state.params)
         scanned_layers = flax.traverse_util.ModelParamTraversal(
             lambda p, _: "scan" in p or "Scan" in p
         ).update(lambda _: True, all_false)
@@ -257,29 +267,29 @@ def main(config: TrainConfig):
         scanned_layers = None
 
     # kron only needs the partition specs
-    params_specs = jax.tree.map(lambda x: x.spec, params_sharding)
+    params_specs = jax.tree.map(lambda x: x.spec, train_state_sharding.params)
 
     # make optimizer
     optimizer, kron_kwargs = make_opt(
         scanned_layers=scanned_layers, params_sharding=params_specs
     )
 
-    def init_train_state():
+    def init_train_state(train_state):
         """Initialize the train state."""
         # make train state
         train_state = TrainState(
-            step=0,
-            apply_fn=model.apply,
-            params=params,
+            step=train_state.step,
+            apply_fn=train_state.apply_fn,
+            params=train_state.params,
             tx=optimizer,
-            opt_state=optimizer.init(params),
+            opt_state=optimizer.init(train_state.params),
             lr_fn=lr_schedule,
         )
         return train_state
 
     # get train state shapes and shardings
     with mesh:
-        train_state_shapes = jax.eval_shape(init_train_state)
+        train_state_shapes = jax.eval_shape(init_train_state, train_state)
 
     op = fsdp_sharding("fsdp", min_size_to_shard_mb=config.model.min_size_to_shard_mb)
     train_state_sharding, _ = infer_sharding(
@@ -287,7 +297,7 @@ def main(config: TrainConfig):
     )
     if config.optimizer.type in ["psgd", "psgd_kron", "kron"]:
         with mesh:
-            kron_specs = get_opt_state_partition_specs(params, **kron_kwargs)
+            kron_specs = get_opt_state_partition_specs(train_state.params, **kron_kwargs)
         kron_sharding = jax.tree.map(
             lambda x: NamedSharding(mesh, x),
             kron_specs,
@@ -297,7 +307,9 @@ def main(config: TrainConfig):
 
     # make train state
     with mesh:
-        train_state = jax.jit(init_train_state, out_shardings=train_state_sharding)()
+        train_state = jax.jit(init_train_state, out_shardings=train_state_sharding)(
+            train_state
+        )
 
     # load checkpoint
     with jax.transfer_guard("allow"):
