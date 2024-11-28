@@ -97,7 +97,7 @@ class mLSTMCell(Module):
         k = jnp.swapaxes(k, -3, -2)
         v = jnp.swapaxes(v, -3, -2)
 
-        h_state = vmap(jax.lax.map(parallel_stabilized_simple))(
+        h_state = vmap(vmap(parallel_stabilized_simple))(
             queries=q,
             keys=k,
             values=v,
