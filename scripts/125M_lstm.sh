@@ -10,8 +10,8 @@ python3 main.py \
     --hellaswag_eval_interval=1000 \
     --checkpoint_interval=1000 \
     --train_steps=20000 \
-    --batch_size=512 \
-    --gradient_accumulation_steps=1 \
+    --batch_size=128 \
+    --gradient_accumulation_steps=4 \
     --compute_dtype=bfloat16 \
     --params_dtype=float32 \
     --profile \
