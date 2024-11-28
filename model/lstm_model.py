@@ -1,3 +1,5 @@
+import numpy as np
+
 import jax
 import jax.numpy as jnp
 from jax.sharding import Mesh, NamedSharding as NS, PartitionSpec as P
@@ -78,7 +80,6 @@ class MLP(nn.Module):
 
 
 class mLSTMBlock(nn.Module):
-    hidden_dim: int
     block_size: int
     num_heads: int
     num_blocks: int
@@ -91,13 +92,13 @@ class mLSTMBlock(nn.Module):
 
         lstm_out = mLSTMLayer(
             embedding_dim=C,
-            hidden_dim=self.hidden_dim,
+            hidden_dim=calculate_proj_up_dim(C),
             num_heads=self.num_heads,
             context_length=self.block_size,
         )(RMSNorm()(x))
         lstm_out = constrain(lstm_out, self.mesh, P("fsdp"))
         x += lstm_out
-        x += MLP(self.hidden_dim, self.num_blocks, self.mesh)(RMSNorm()(x))
+        x += MLP(calculate_proj_up_dim(C), self.num_blocks, self.mesh)(RMSNorm()(x))
 
         if self.use_scan:
             return (x, None)
@@ -143,7 +144,6 @@ class mLSTM(nn.Module):
                 split_rngs={True: True},
                 length=self.config.num_layers,
             )(
-                self.config.hidden_dim,
                 self.config.block_size,
                 self.config.num_heads,
                 self.config.num_layers,
@@ -155,7 +155,6 @@ class mLSTM(nn.Module):
         else:
             for _ in range(self.config.num_layers):
                 x = mLSTMBlockModule(
-                    self.config.hidden_dim,
                     self.config.block_size,
                     self.config.num_heads,
                     self.config.num_layers,
@@ -165,3 +164,20 @@ class mLSTM(nn.Module):
         x = RMSNorm()(x)
         logits = embedder.decode(x)
         return logits
+
+
+def calculate_proj_up_dim(
+    embedding_dim: int,
+    proj_factor: float = 1.3,
+    round_up: bool = True,
+    multiple_of: int = 64,
+) -> int:
+    proj_up_dim = proj_factor * embedding_dim
+    multiple_of_multiplier = proj_up_dim / multiple_of
+    
+    if round_up:
+        multiple_of_multiplier = np.ceil(multiple_of_multiplier)
+    else:
+        multiple_of_multiplier = np.floor(multiple_of_multiplier)
+        
+    return int(multiple_of_multiplier * multiple_of)

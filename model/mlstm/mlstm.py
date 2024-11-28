@@ -26,16 +26,20 @@ def bias_linspace_init(start: float = 3.0, end: float = 6.0):
 
 
 class RMSNorm(nn.Module):
-    epsilon: float = 1e-6
+    """RMSNorm layer.
+
+    Upcasts to float32 and back."""
 
     @nn.compact
     def __call__(self, x):
-        orig_dtype = x.dtype
-        x = x.astype(jnp.float32)
-        x *= jax.lax.rsqrt(
-            jnp.mean(jnp.square(x), axis=-1, keepdims=True) + self.epsilon
-        )
-        return x.astype(orig_dtype)
+        var = jnp.mean(jnp.square(x.astype(jnp.float32)), axis=-1, keepdims=True)
+        normed_inputs = x * jax.lax.rsqrt(var + 1e-06)
+        normed_inputs = normed_inputs.astype(x.dtype)
+
+        scale = self.param("scale", nn.initializers.zeros_init(), (x.shape[-1]))
+        scale = jnp.expand_dims(scale, axis=range(len(x.shape) - 1))
+        normed_inputs = normed_inputs * (1 + scale)
+        return normed_inputs
 
 
 class mLSTMCell(Module):
@@ -66,7 +70,6 @@ class mLSTMCell(Module):
         B, S, _ = q.shape
         head_dim = self.embedding_dim // self.num_heads
 
-        # Gate layers should be initialized before reshape operations
         igate = Dense(
             features=self.num_heads,
             name="igate",
@@ -80,14 +83,12 @@ class mLSTMCell(Module):
             bias_init=bias_linspace_init(),
         )
 
-        # Vectorized gate computation across batch dimension
-        def gate_fn(x):
-            if_gate_input = jnp.concatenate(x, axis=-1)
-            return igate(if_gate_input), fgate(if_gate_input)
+        if_gate_input = jnp.concatenate((q, k, v), axis=-1)
+        igate_preact = igate(if_gate_input)  # (B, S, NH)
+        igate_preact = igate_preact.mT[..., None]  # (B, NH, S, 1)
+        fgate_preact = fgate(if_gate_input)  # (B, S, NH)
+        fgate_preact = fgate_preact.mT[..., None]  # (B, NH, S, 1)
 
-        igate_preact, fgate_preact = vmap(gate_fn)((q, k, v))  # (B, S, NH)
-
-        # First reshape, then use einsum for transpose
         q = q.reshape(B, S, self.num_heads, head_dim)
         k = k.reshape(B, S, self.num_heads, head_dim)
         v = v.reshape(B, S, self.num_heads, head_dim)
@@ -96,11 +97,7 @@ class mLSTMCell(Module):
         k = jnp.swapaxes(k, -3, -2)
         v = jnp.swapaxes(v, -3, -2)
 
-        # Reshape gate preactivations using swapaxes like qkv
-        igate_preact = jnp.swapaxes(igate_preact, -2, -1)[..., None]  # (B, NH, S, 1)
-        fgate_preact = jnp.swapaxes(fgate_preact, -2, -1)[..., None]  # (B, NH, S, 1)
-
-        h_state = vmap(vmap(parallel_stabilized_simple))(
+        h_state = vmap(jax.lax.map(parallel_stabilized_simple))(
             queries=q,
             keys=k,
             values=v,
@@ -115,7 +112,3 @@ class mLSTMCell(Module):
         h_state = h_state.reshape(B, S, self.embedding_dim)  # (B, S, H)
 
         return h_state
-
-    @property
-    def num_feature_axes(self) -> int:
-        return 1
