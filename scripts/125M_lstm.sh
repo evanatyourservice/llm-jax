@@ -17,6 +17,9 @@ python3 main.py \
     --profile \
     --model.model_type=lstm \
     --model.block_size=1024 \
+    --model.num_layers=30 \
+    --model.num_heads=8 \
+    --model.num_embeds=512 \
     --model.hidden_dim=1024 \
     --model.scan_layers \
     --model.remat \

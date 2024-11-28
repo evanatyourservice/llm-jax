@@ -25,10 +25,10 @@ python3 main.py \
     --model.model_type=lstm \
     --model.block_size=32 \
     --model.num_layers=2 \
-    --model.num_heads=4 \
+    --model.num_heads=2 \
     --model.num_embeds=8 \
     --model.head_dim=4 \
-    --model.hidden_dim=8 \
+    --model.hidden_dim=16 \
     --model.num_kv_heads=2 \
     --model.scan_layers \
     --model.remat \
