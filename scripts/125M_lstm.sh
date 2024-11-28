@@ -16,17 +16,17 @@ python3 main.py \
     --params_dtype=float32 \
     --profile \
     --model.model_type=lstm \
-    --model.block_size=2048 \
+    --model.block_size=1024 \
     --model.num_layers=24 \
     --model.num_embeds=512 \
     --model.hidden_dim=1024 \
     --model.scan_layers \
     --model.remat \
-    --model.remat_everything \
+    --model.no_remat_everything \
     --optimizer.type=kron \
-    --optimizer.learning_rate=0.001 \
+    --optimizer.learning_rate=0.0003 \
     --optimizer.flat_lr \
     --optimizer.warmup_steps=1000 \
     --optimizer.b1=0.9 \
-    --optimizer.weight_decay=0.1 \
+    --optimizer.weight_decay=0.01 \
     --optimizer.grad_clip=1.0

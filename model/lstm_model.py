@@ -4,20 +4,27 @@ from jax.sharding import Mesh, NamedSharding as NS, PartitionSpec as P
 import flax.linen as nn
 
 from configs import ModelConfig
+from model.mlstm.mlstm_layer import mLSTMLayer
+from model.mlstm.mlstm import RMSNorm
 
 
-init_fn = nn.initializers.he_normal()
 constrain = lambda x, mesh, spec: jax.lax.with_sharding_constraint(x, NS(mesh, spec))
 
 
-class RMSNorm(nn.Module):
-    epsilon: float = 1e-6
+def small_init():
+    def init(key, shape, *args):
+        std = jnp.sqrt(2.0 / (5.0 * shape[-1]))
+        return jax.random.normal(key, shape) * std
 
-    @nn.compact
-    def __call__(self, x):
-        return x * jax.lax.rsqrt(
-            jnp.mean(jnp.square(x), axis=-1, keepdims=True) + self.epsilon
-        )
+    return init
+
+
+def wang_init(num_blocks: int):
+    def init(key, shape, *args):
+        std = 2.0 / num_blocks / jnp.sqrt(shape[-1])
+        return jax.random.normal(key, shape) * std
+
+    return init
 
 
 class Embedder(nn.Module):
@@ -27,7 +34,7 @@ class Embedder(nn.Module):
 
     def setup(self):
         self.embedding = self.param(
-            "embedding", init_fn, (self.vocab_size, self.embed_dim)
+            "embedding", small_init(), (self.vocab_size, self.embed_dim)
         )
 
     def encode(self, x):
@@ -47,15 +54,16 @@ class Embedder(nn.Module):
 
 class MLP(nn.Module):
     hidden_dim: int
+    num_blocks: int
     mesh: Mesh
 
     @nn.compact
     def __call__(self, x):
         C = x.shape[-1]
 
-        gate_kernel = self.param("gate_kernel", init_fn, (C, self.hidden_dim))
-        up_kernel = self.param("up_kernel", init_fn, (C, self.hidden_dim))
-        down_kernel = self.param("down_kernel", init_fn, (self.hidden_dim, C))
+        gate_kernel = self.param("gate_kernel", small_init(), (C, self.hidden_dim))
+        up_kernel = self.param("up_kernel", small_init(), (C, self.hidden_dim))
+        down_kernel = self.param("down_kernel", wang_init(self.num_blocks), (self.hidden_dim, C))
 
         gate = jnp.dot(x, gate_kernel)
         gate = nn.silu(gate)
@@ -69,8 +77,11 @@ class MLP(nn.Module):
         return down
 
 
-class LSTMBlock(nn.Module):
+class mLSTMBlock(nn.Module):
     hidden_dim: int
+    block_size: int
+    num_heads: int
+    num_blocks: int
     mesh: Mesh
     use_scan: bool = False
 
@@ -78,22 +89,22 @@ class LSTMBlock(nn.Module):
     def __call__(self, x):
         B, T, C = x.shape
 
-        rnn = nn.RNN(
-            nn.OptimizedLSTMCell(features=C, kernel_init=init_fn, dtype=x.dtype),
-            time_major=False,
-            unroll=32,
-        )
-
-        carry = (jnp.zeros((B, C), dtype=x.dtype), jnp.zeros((B, C), dtype=x.dtype))
-        x += rnn(RMSNorm()(x), initial_carry=carry)
-        x += MLP(self.hidden_dim, self.mesh)(RMSNorm()(x))
+        lstm_out = mLSTMLayer(
+            embedding_dim=C,
+            hidden_dim=self.hidden_dim,
+            num_heads=self.num_heads,
+            context_length=self.block_size,
+        )(RMSNorm()(x))
+        lstm_out = constrain(lstm_out, self.mesh, P("fsdp"))
+        x += lstm_out
+        x += MLP(self.hidden_dim, self.num_blocks, self.mesh)(RMSNorm()(x))
 
         if self.use_scan:
             return (x, None)
         return x
 
 
-class LSTM(nn.Module):
+class mLSTM(nn.Module):
     config: ModelConfig
     mesh: Mesh = None
     using_grad_accum: bool = False
@@ -119,22 +130,37 @@ class LSTM(nn.Module):
             prevent_cse = True
             if self.using_grad_accum or self.config.scan_layers:
                 prevent_cse = False
-            LSTMBlockModule = nn.remat(
-                LSTMBlock, prevent_cse=prevent_cse, policy=remat_policy
+            mLSTMBlockModule = nn.remat(
+                mLSTMBlock, prevent_cse=prevent_cse, policy=remat_policy
             )
         else:
-            LSTMBlockModule = LSTMBlock
+            mLSTMBlockModule = mLSTMBlock
 
         if self.config.scan_layers:
             x, _ = nn.scan(
-                LSTMBlockModule,
+                mLSTMBlockModule,
                 variable_axes={True: 0},
                 split_rngs={True: True},
                 length=self.config.num_layers,
-            )(self.config.hidden_dim, self.mesh, use_scan=True)(x)
+            )(
+                self.config.hidden_dim,
+                self.config.block_size,
+                self.config.num_heads,
+                self.config.num_layers,
+                self.mesh,
+                use_scan=True,
+            )(
+                x
+            )
         else:
             for _ in range(self.config.num_layers):
-                x = LSTMBlockModule(self.config.hidden_dim, self.mesh)(x)
+                x = mLSTMBlockModule(
+                    self.config.hidden_dim,
+                    self.config.block_size,
+                    self.config.num_heads,
+                    self.config.num_layers,
+                    self.mesh,
+                )(x)
 
         x = RMSNorm()(x)
         logits = embedder.decode(x)

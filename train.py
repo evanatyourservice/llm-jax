@@ -39,7 +39,7 @@ from optimizers.schedule_free import schedule_free, schedule_free_eval_params
 from sharding import infer_sharding, fsdp_sharding
 from utils import check_dtypes, reshard, write_note, count_params, get_step
 from model.model import Transformer
-from model.lstm_model import LSTM
+from model.lstm_model import mLSTM
 
 
 # hack to allow pickling of bfloat16 arrays
@@ -234,7 +234,7 @@ def main(config: TrainConfig):
                 config.model, mesh, config.gradient_accumulation_steps > 1
             )
         else:
-            model = LSTM(config.model, mesh, config.gradient_accumulation_steps > 1)
+            model = mLSTM(config.model, mesh, config.gradient_accumulation_steps > 1)
 
         # init params
         dummy_tokens = jnp.zeros(

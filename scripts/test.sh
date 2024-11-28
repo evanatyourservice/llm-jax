@@ -23,7 +23,7 @@ python3 main.py \
     --optimizer.no_lax_map_scanned_layers \
     --optimizer.lax_map_batch_size=1 \
     --model.model_type=lstm \
-    --model.block_size=64 \
+    --model.block_size=32 \
     --model.num_layers=2 \
     --model.num_heads=4 \
     --model.num_embeds=8 \
