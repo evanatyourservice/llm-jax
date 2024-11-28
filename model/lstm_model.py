@@ -7,7 +7,7 @@ import flax.linen as nn
 
 from configs import ModelConfig
 from model.mlstm.mlstm_layer import mLSTMLayer
-from model.mlstm.mlstm import RMSNorm
+from model.mlstm.mlstm_cell import RMSNorm
 
 
 constrain = lambda x, mesh, spec: jax.lax.with_sharding_constraint(x, NS(mesh, spec))

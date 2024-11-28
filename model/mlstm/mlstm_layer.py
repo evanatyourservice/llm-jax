@@ -4,7 +4,7 @@ import flax.linen as nn
 from flax.linen.linear import Dense
 from flax.typing import Array
 
-from model.mlstm.mlstm import mLSTMCell
+from model.mlstm.mlstm_cell import mLSTMCell
 
 
 def small_init():
