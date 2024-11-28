@@ -30,4 +30,4 @@ python3 main.py \
     --optimizer.warmup_steps=1000 \
     --optimizer.b1=0.9 \
     --optimizer.weight_decay=0.1 \
-    --optimizer.grad_clip=1.0
+    --optimizer.grad_clip=0.0
