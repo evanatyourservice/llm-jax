@@ -19,7 +19,7 @@ python3 main.py \
     --model.block_size=1024 \
     --model.num_layers=24 \
     --model.num_heads=8 \
-    --model.num_embeds=1024 \
+    --model.num_embeds=640 \
     --model.hidden_dim=1024 \
     --model.scan_layers \
     --model.remat \
