@@ -27,7 +27,7 @@ import tensorflow as tf
 
 from dataset import prepare_hellaswag, fineweb_edu_dataset, _fw_shard_names
 from configs import TrainConfig
-from psgd_jax.kron import kron, precond_update_prob_schedule
+from optimizers.kron import kron, precond_update_prob_schedule
 from optimizers.tearfree import optimizer as tearfree_opt
 from optimizers.tearfree import shampoo, second_order
 from optimizers.adam import adamw
@@ -135,10 +135,6 @@ def main(config: TrainConfig):
             return out
 
         optimizer = []
-
-        # only apply grad clipping if not using schedule-free (see schedule-free paper)
-        if config.optimizer.grad_clip > 0.0 and not config.optimizer.schedule_free:
-            optimizer.append(optax.clip_by_global_norm(config.optimizer.grad_clip))
 
         if config.optimizer.type in ["adam", "adamw"]:
             optimizer.append(
@@ -396,11 +392,15 @@ def main(config: TrainConfig):
             loss, grads = jax.value_and_grad(loss_fn)(state.params, batch[0])
             grads = jax.lax.with_sharding_constraint(grads, train_state_sharding.params)
 
+        grad_norm = optax.global_norm(grads)
+
+        # normalize grads to unit norm layer-wise
+        grads = jax.tree.map(lambda g: g / (jnp.linalg.norm(g) + 1e-12), grads)
+
         new_state = state.apply_gradients(grads=grads)
 
         check_dtypes(before_dtypes, jax.tree.map(lambda x: x.dtype, new_state))
 
-        grad_norm = optax.global_norm(grads)
         lr = state.lr_fn(state.step)
 
         return loss, new_state, grad_norm, lr

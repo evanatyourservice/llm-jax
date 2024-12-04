@@ -50,7 +50,6 @@ class OptimizerConfig:
         warmup_steps: Warmup steps.
         flat_lr: Whether to use a flat learning rate or decay linearly to 0.05x.
         weight_decay: Weight decay.
-        grad_clip: Gradient clip.
         b1: Beta 1.
         b2: Beta 2.
         eps: Epsilon.
@@ -73,7 +72,6 @@ class OptimizerConfig:
     warmup_steps: int = 1000
     flat_lr: bool = False
     weight_decay: float = 0.1
-    grad_clip: float = 1.0
     b1: float = 0.9
     b2: float = 0.95
     eps: float = 1e-8

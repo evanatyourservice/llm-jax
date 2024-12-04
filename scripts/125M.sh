@@ -23,5 +23,4 @@ python3 main.py \
     --optimizer.flat_lr \
     --optimizer.warmup_steps=1000 \
     --optimizer.b1=0.95 \
-    --optimizer.weight_decay=0.1 \
-    --optimizer.grad_clip=1.0
+    --optimizer.weight_decay=0.1
