@@ -223,21 +223,12 @@ def scale_by_kron(
             for t, s, Q in zip(updates, scanned_layers_, Qs)
         ]
 
-        # maybe update preconditioner
         def update_preconditioner(key, Qs):
             with jax.default_matmul_precision(precond_update_precision):
                 if momentum_into_precond_update:
                     precond_updates_in = momentum_updates
                 else:
                     precond_updates_in = updates
-
-                # create random vectors
-                key, subkey = jax.random.split(key)
-                Vs_keys = jax.random.split(subkey, len(precond_updates_in))
-                Vs = [
-                    jax.random.normal(k, shape=g.shape, dtype=g.dtype)
-                    for k, g in zip(Vs_keys, precond_updates_in)
-                ]
 
                 # balance preconditioners about every 100 updates
                 def balance_Qs(Qs: List[List[jax.Array]]):
@@ -257,6 +248,14 @@ def scale_by_kron(
                 key, subkey = jax.random.split(key)
                 do_balances = jax.random.uniform(subkey) < 0.01
                 Qs = jax.lax.cond(do_balances, balance_Qs, lambda qs: qs, Qs)
+
+                # create random vectors
+                key, subkey = jax.random.split(key)
+                Vs_keys = jax.random.split(subkey, len(precond_updates_in))
+                Vs = [
+                    jax.random.normal(k, shape=g.shape, dtype=g.dtype)
+                    for k, g in zip(Vs_keys, precond_updates_in)
+                ]
 
                 # form conjB
                 conjBs = [
@@ -283,13 +282,6 @@ def scale_by_kron(
                 new_Qs = otu.tree_cast(new_Qs, precond_dtype)
                 return new_Qs
 
-        key, subkey = jax.random.split(key)
-        do_update = jax.random.uniform(subkey, dtype=jnp.float32) < update_prob_in
-        key, subkey = jax.random.split(key)
-        Qs = jax.lax.cond(
-            do_update, update_preconditioner, lambda _, qs: qs, subkey, Qs
-        )
-
         # precondition gradients
         with jax.default_matmul_precision(precond_grads_precision):
             precond_gs = [
@@ -299,6 +291,14 @@ def scale_by_kron(
                 )
             ]
 
+        # update preconditioner
+        key, subkey = jax.random.split(key)
+        do_update = jax.random.uniform(subkey, dtype=jnp.float32) < update_prob_in
+        key, subkey = jax.random.split(key)
+        new_Qs = jax.lax.cond(
+            do_update, update_preconditioner, lambda _, qs: qs, subkey, Qs
+        )
+
         # box preconditioned grads
         if flax_partitioned:
             precond_gs = [
@@ -307,12 +307,12 @@ def scale_by_kron(
 
         # unflatten pytrees
         updates = grads_structure.unflatten(precond_gs)
-        Qs = grads_structure.unflatten(Qs)
+        new_Qs = grads_structure.unflatten(new_Qs)
 
         # dtypes and new state
         mu = otu.tree_cast(mu, mu_dtype)
-        Qs = otu.tree_cast(Qs, precond_dtype)
-        state = dict(count=count_inc, mu=mu, Qs_preconditioners=Qs)
+        new_Qs = otu.tree_cast(new_Qs, precond_dtype)
+        state = dict(count=count_inc, mu=mu, Qs_preconditioners=new_Qs)
 
         return updates, state
 
