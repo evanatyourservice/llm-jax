@@ -27,7 +27,7 @@ import tensorflow as tf
 
 from dataset import prepare_hellaswag, fineweb_edu_dataset, _fw_shard_names
 from configs import TrainConfig
-from optimizers.kron import kron, precond_update_prob_schedule
+from psgd_jax.kron import kron, precond_update_prob_schedule
 from optimizers.tearfree import optimizer as tearfree_opt
 from optimizers.tearfree import shampoo, second_order
 from optimizers.adam import adamw
@@ -155,6 +155,7 @@ def main(config: TrainConfig):
                 kron(
                     lr_schedule,
                     b1=0.0 if config.optimizer.schedule_free else config.optimizer.b1,
+                    normalize_grads=True,
                     weight_decay=config.optimizer.weight_decay,
                     weight_decay_mask=param_decay_mask,
                     preconditioner_update_probability=precond_update_prob_schedule(
