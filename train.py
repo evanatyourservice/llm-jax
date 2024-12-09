@@ -137,6 +137,7 @@ def main(config: TrainConfig):
         optimizer = []
 
         if config.optimizer.type in ["adam", "adamw"]:
+            optimizer.append(optax.clip_by_global_norm(1.0))
             optimizer.append(
                 adamw(
                     lr_schedule,
