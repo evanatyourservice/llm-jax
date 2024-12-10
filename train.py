@@ -135,9 +135,8 @@ def main(config: TrainConfig):
             return out
 
         optimizer = []
-
+        optimizer.append(optax.clip_by_global_norm(1.0))
         if config.optimizer.type in ["adam", "adamw"]:
-            optimizer.append(optax.clip_by_global_norm(1.0))
             optimizer.append(
                 adamw(
                     lr_schedule,
@@ -156,7 +155,7 @@ def main(config: TrainConfig):
                 kron(
                     lr_schedule,
                     b1=0.0 if config.optimizer.schedule_free else config.optimizer.b1,
-                    normalize_grads=True,
+                    normalize_grads=False,
                     weight_decay=config.optimizer.weight_decay,
                     weight_decay_mask=param_decay_mask,
                     preconditioner_update_probability=precond_update_prob_schedule(
@@ -166,6 +165,7 @@ def main(config: TrainConfig):
                     memory_save_mode=config.optimizer.memory_save_mode,
                     mu_dtype=jnp.float32,
                     precond_dtype=config.optimizer.preconditioner_dtype,
+                    precond_update_precision="float32",
                     scanned_layers=scanned_layers,
                     lax_map_scanned_layers=config.optimizer.lax_map_scanned_layers,
                     lax_map_batch_size=config.optimizer.lax_map_batch_size,
