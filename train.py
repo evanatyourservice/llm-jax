@@ -135,7 +135,7 @@ def main(config: TrainConfig):
             return out
 
         optimizer = []
-        optimizer.append(optax.clip_by_global_norm(1.0))
+        optimizer.append(optax.clip_by_global_norm(0.5))
         if config.optimizer.type in ["adam", "adamw"]:
             optimizer.append(
                 adamw(
@@ -159,7 +159,8 @@ def main(config: TrainConfig):
                     weight_decay=config.optimizer.weight_decay,
                     weight_decay_mask=param_decay_mask,
                     preconditioner_update_probability=precond_update_prob_schedule(
-                        min_prob=config.optimizer.preconditioner_update_probability
+                        min_prob=config.optimizer.preconditioner_update_probability,
+                        flat_start=1000,
                     ),
                     max_size_triangular=config.optimizer.max_size_triangular,
                     memory_save_mode=config.optimizer.memory_save_mode,

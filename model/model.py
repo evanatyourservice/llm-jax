@@ -10,6 +10,7 @@ from configs import ModelConfig
 
 
 init_fn = lambda dim: nn.initializers.normal(jnp.sqrt(2 / (5 * dim)))
+wang_fn = lambda dim, n_layers: nn.initializers.normal(2 / n_layers / jnp.sqrt(dim))
 constrain = lambda x, mesh, spec: jax.lax.with_sharding_constraint(x, NS(mesh, spec))
 
 
@@ -130,6 +131,7 @@ class Attention(nn.Module):
     num_kv_heads: int
     head_dim: int
     rope_theta: float
+    n_layers: int
     mesh: Mesh
 
     @nn.compact
@@ -143,7 +145,7 @@ class Attention(nn.Module):
         q_params = self.param("q_kernel", init_fn(C), (C, N * H))
         k_params = self.param("k_kernel", init_fn(C), (C, K * H))
         v_params = self.param("v_kernel", init_fn(C), (C, K * H))
-        out_params = self.param("out_kernel", init_fn(N * H), (N * H, C))
+        out_params = self.param("out_kernel", wang_fn(N * H, self.n_layers), (N * H, C))
 
         q = jnp.dot(x, q_params)
         k = jnp.dot(x, k_params)
@@ -164,11 +166,13 @@ class Attention(nn.Module):
         out = jnp.dot(encoded, out_params)
         if self.mesh is not None:
             out = constrain(out, self.mesh, P("fsdp"))
+        out = RMSNorm()(out)  # normformer
         return out
 
 
 class MLP(nn.Module):
     hidden_dim: int
+    n_layers: int
     mesh: Mesh
 
     @nn.compact
@@ -177,13 +181,17 @@ class MLP(nn.Module):
 
         gate_kernel = self.param("gate_kernel", init_fn(C), (C, self.hidden_dim))
         up_kernel = self.param("up_kernel", init_fn(C), (C, self.hidden_dim))
-        down_kernel = self.param("down_kernel", init_fn(self.hidden_dim), (self.hidden_dim, C))
+        down_kernel = self.param(
+            "down_kernel", wang_fn(self.hidden_dim, self.n_layers), (self.hidden_dim, C)
+        )
 
         gate = jnp.dot(x, gate_kernel)
         gate = nn.silu(gate)
 
         up = jnp.dot(x, up_kernel)
         x = gate * up
+
+        x = RMSNorm()(x)  # normformer
 
         down = jnp.dot(x, down_kernel)
         if self.mesh is not None:
@@ -199,6 +207,7 @@ class Block(nn.Module):
     head_dim: int
     hidden_dim: int
     rope_theta: float
+    n_layers: int
     mesh: Mesh
     use_scan: bool = False
 
@@ -209,10 +218,11 @@ class Block(nn.Module):
             self.num_kv_heads,
             self.head_dim,
             self.rope_theta,
+            self.n_layers,
             self.mesh,
         )
         x += attn_layer(RMSNorm()(x))
-        x += MLP(self.hidden_dim, self.mesh)(RMSNorm()(x))
+        x += MLP(self.hidden_dim, self.n_layers, self.mesh)(RMSNorm()(x))
         if self.use_scan:
             return (x, None)
         return x
@@ -266,6 +276,7 @@ class Transformer(nn.Module):
                 self.config.head_dim,
                 self.config.hidden_dim,
                 self.config.rope_theta,
+                self.config.num_layers,
                 self.mesh,
                 use_scan=True,
             )(
@@ -279,6 +290,7 @@ class Transformer(nn.Module):
                     self.config.head_dim,
                     self.config.hidden_dim,
                     self.config.rope_theta,
+                    self.config.num_layers,
                     self.mesh,
                 )(x)
 
