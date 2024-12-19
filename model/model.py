@@ -166,7 +166,6 @@ class Attention(nn.Module):
         out = jnp.dot(encoded, out_params)
         if self.mesh is not None:
             out = constrain(out, self.mesh, P("fsdp"))
-        out = RMSNorm()(out)  # normformer
         return out
 
 
@@ -187,12 +186,8 @@ class MLP(nn.Module):
 
         gate = jnp.dot(x, gate_kernel)
         gate = nn.silu(gate)
-
         up = jnp.dot(x, up_kernel)
         x = gate * up
-
-        x = RMSNorm()(x)  # normformer
-
         down = jnp.dot(x, down_kernel)
         if self.mesh is not None:
             down = constrain(down, self.mesh, P("fsdp"))
