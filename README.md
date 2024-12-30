@@ -1,6 +1,6 @@
 # llm-jax
 
-Pretrain a SmolLM-style language model with fineweb-edu.
+Pretrain a SmolLM-style language model on the fineweb-edu dataset. A 350M param model can reach 51% hellaswag in only 250B tokens by using psgd kron optimizer and architecture improvements.
 
 Has various optimizers: PSGD Kron, adamw, shampoo, CASPR, and schedule-free. Any optimizer can be wrapped in 
 schedule-free, see configs.py for more details.
