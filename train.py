@@ -40,7 +40,6 @@ from model.model import Transformer
 # hack to allow pickling of bfloat16 arrays
 builtins.bfloat16 = xla_client.bfloat16
 
-wandb.require("core")
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 jax.config.update("jax_transfer_guard", "disallow")
 jax.config.update("jax_threefry_partitionable", True)
