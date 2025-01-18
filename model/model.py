@@ -102,6 +102,7 @@ def _rotate_half(x):
 
 
 def _apply_rotary_embedding(q, k, cos, sin):
+    # come in as (B, T, K, G, H) and (B, T, K, H)
     qlen = q.shape[-4]
     klen = k.shape[-3]
 
@@ -166,7 +167,6 @@ class Attention(nn.Module):
         out = jnp.dot(encoded, out_params)
         if self.mesh is not None:
             out = constrain(out, self.mesh, P("fsdp"))
-        out = RMSNorm()(out)  # normformer
         return out
 
 
@@ -190,8 +190,6 @@ class MLP(nn.Module):
 
         up = jnp.dot(x, up_kernel)
         x = gate * up
-
-        x = RMSNorm()(x)  # normformer
 
         down = jnp.dot(x, down_kernel)
         if self.mesh is not None:
