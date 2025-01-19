@@ -27,7 +27,7 @@ import tensorflow as tf
 
 from dataset import prepare_hellaswag, fineweb_edu_dataset, _fw_shard_names
 from configs import TrainConfig
-from psgd_jax.kron import kron, precond_update_prob_schedule
+from optimizers.kron import kron, precond_update_prob_schedule
 from optimizers.tearfree import optimizer as tearfree_opt
 from optimizers.tearfree import shampoo, second_order
 from optimizers.adam import adamw
@@ -134,15 +134,15 @@ def main(config: TrainConfig):
             return out
 
         optimizer = []
+        optimizer.append(optax.clip_by_global_norm(0.5))
         if config.optimizer.type in ["adam", "adamw"]:
-            optimizer.append(optax.clip_by_global_norm(0.5))
             optimizer.append(
                 adamw(
                     lr_schedule,
                     0.0 if config.optimizer.schedule_free else config.optimizer.b1,
                     config.optimizer.b2,
                     config.optimizer.eps,
-                    mu_dtype=jnp.float32,
+                    mu_dtype=jnp.bfloat16,
                     weight_decay=config.optimizer.weight_decay,
                     mask=param_decay_mask,
                     nesterov=config.optimizer.nesterov,
@@ -154,6 +154,7 @@ def main(config: TrainConfig):
                 kron(
                     lr_schedule,
                     b1=0.0 if config.optimizer.schedule_free else config.optimizer.b1,
+                    b2=config.optimizer.b2,
                     weight_decay=config.optimizer.weight_decay,
                     weight_decay_mask=param_decay_mask,
                     preconditioner_update_probability=precond_update_prob_schedule(
@@ -162,7 +163,7 @@ def main(config: TrainConfig):
                     ),
                     max_size_triangular=config.optimizer.max_size_triangular,
                     memory_save_mode=config.optimizer.memory_save_mode,
-                    mu_dtype=jnp.float32,
+                    mu_dtype=jnp.bfloat16,
                     precond_dtype=config.optimizer.preconditioner_dtype,
                     scanned_layers=scanned_layers,
                     lax_map_scanned_layers=config.optimizer.lax_map_scanned_layers,
@@ -188,7 +189,7 @@ def main(config: TrainConfig):
                                 if config.optimizer.schedule_free
                                 else config.optimizer.b1
                             ),
-                            momentum_dtype="float32",
+                            momentum_dtype="bfloat16",
                             nesterov=config.optimizer.nesterov,
                         ),
                     ),
