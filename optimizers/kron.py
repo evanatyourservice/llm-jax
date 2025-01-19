@@ -126,7 +126,7 @@ def scale_by_kron(
         if b1 > 0:
             mu = jax.tree.map(lambda x: jnp.zeros_like(x, dtype=mu_dtype), params)
 
-        nu = jax.tree.map(lambda x: jnp.zeros_like(x, dtype=jnp.float32), params)
+        nu = jax.tree.map(lambda x: jnp.zeros_like(x, dtype=jnp.float32), jax.tree.leaves(params))
 
         # preconditioners
         Qs = [
@@ -214,14 +214,15 @@ def scale_by_kron(
             mu = otu.tree_update_moment(updates, state["mu"], b1, 1)
             momentum_updates = otu.tree_bias_correction(mu, b1, count_inc)
 
-        nu = otu.tree_update_moment(updates, state["nu"], b2, 2)
-        nu_hat = otu.tree_bias_correction(nu, b2, count_inc)
-
         # flatten pytrees
         updates, grads_structure = jax.tree.flatten(updates)
         momentum_updates = grads_structure.flatten_up_to(momentum_updates)
         Qs = grads_structure.flatten_up_to(state["Qs_preconditioners"])
         scanned_layers_ = grads_structure.flatten_up_to(scanned_layers_)
+
+        # adam nu
+        nu = otu.tree_update_moment(updates, state["nu"], b2, 2)
+        nu_hat = otu.tree_bias_correction(nu, b2, count_inc)
 
         # get einsum expressions
         expressions = [
