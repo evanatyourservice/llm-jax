@@ -369,6 +369,7 @@ def scale_by_kron(
 def kron(
     learning_rate: Union[float, Callable[[int], float]] = 0.001,
     b1: float = 0.9,
+    b2: float = 0.95,
     weight_decay: float = 0.0,
     weight_decay_mask: Optional[Union[Any, Callable[[base.Params], Any]]] = None,
     preconditioner_update_probability: Union[
@@ -429,6 +430,7 @@ def kron(
     optimizer = [
         scale_by_kron(
             b1=b1,
+            b2=b2,
             preconditioner_update_probability=preconditioner_update_probability,
             max_size_triangular=max_size_triangular,
             min_ndim_triangular=min_ndim_triangular,
