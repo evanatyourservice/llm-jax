@@ -163,6 +163,7 @@ def main(config: TrainConfig):
                     ),
                     max_size_triangular=config.optimizer.max_size_triangular,
                     memory_save_mode=config.optimizer.memory_save_mode,
+                    momentum_into_precond_update=False,
                     mu_dtype=jnp.bfloat16,
                     precond_dtype=config.optimizer.preconditioner_dtype,
                     scanned_layers=scanned_layers,

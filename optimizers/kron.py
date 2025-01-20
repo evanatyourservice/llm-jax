@@ -124,9 +124,15 @@ def scale_by_kron(
         # momentum
         mu = None
         if b1 > 0:
-            mu = jax.tree.map(lambda x: jnp.zeros_like(x, dtype=mu_dtype), params)
+            mu = jax.tree.map(
+                lambda x: jnp.zeros_like(x, dtype=mu_dtype),
+                jax.tree.leaves(params),
+            )
 
-        nu = jax.tree.map(lambda x: jnp.zeros_like(x, dtype=jnp.float32), jax.tree.leaves(params))
+        nu = jax.tree.map(
+            lambda x: jnp.zeros_like(x, dtype=jnp.float32),
+            jax.tree.leaves(params),
+        )
 
         # preconditioners
         Qs = [
@@ -207,22 +213,10 @@ def scale_by_kron(
         if isinstance(preconditioner_update_probability, Callable):
             update_prob_in = preconditioner_update_probability(count_inc)
 
-        # momentum
-        mu = None
-        momentum_updates = updates
-        if state["mu"] is not None:
-            mu = otu.tree_update_moment(updates, state["mu"], b1, 1)
-            momentum_updates = otu.tree_bias_correction(mu, b1, count_inc)
-
         # flatten pytrees
         updates, grads_structure = jax.tree.flatten(updates)
-        momentum_updates = grads_structure.flatten_up_to(momentum_updates)
         Qs = grads_structure.flatten_up_to(state["Qs_preconditioners"])
         scanned_layers_ = grads_structure.flatten_up_to(scanned_layers_)
-
-        # adam nu
-        nu = otu.tree_update_moment(updates, state["nu"], b2, 2)
-        nu_hat = otu.tree_bias_correction(nu, b2, count_inc)
 
         # get einsum expressions
         expressions = [
@@ -241,10 +235,7 @@ def scale_by_kron(
         # maybe update preconditioner
         def update_preconditioner(key, Qs):
             with jax.default_matmul_precision(precond_update_precision):
-                if momentum_into_precond_update:
-                    precond_updates_in = momentum_updates
-                else:
-                    precond_updates_in = updates
+                precond_updates_in = updates
 
                 # balance preconditioners about every 100 updates
                 def balance_Qs(Qs: List[List[jax.Array]]):
@@ -318,7 +309,7 @@ def scale_by_kron(
             precond_gs = [
                 map_fn(s, partial(_precond_grad, exprs=exprs), Q, g)
                 for s, exprs, Q, g in zip(
-                    scanned_layers_, expressions, Qs, momentum_updates
+                    scanned_layers_, expressions, Qs, updates
                 )
             ]
 
@@ -332,11 +323,18 @@ def scale_by_kron(
         # precond_gs = jax.tree.map(_clip_fn, precond_gs)
 
         # adam grafting
+        mu = None
+        mu_hat = precond_gs
+        if state["mu"] is not None:
+            mu = otu.tree_update_moment(precond_gs, state["mu"], b1, 1)
+            mu_hat = otu.tree_bias_correction(mu, b1, count_inc)
+        nu = otu.tree_update_moment(precond_gs, state["nu"], b2, 2)
+        nu_hat = otu.tree_bias_correction(nu, b2, count_inc)
         adam_update = jax.tree.map(
-            lambda m, n: m / (jnp.sqrt(n) + 1e-8), momentum_updates, nu_hat
+            lambda m, n: m / (jnp.sqrt(n) + 1e-8), mu_hat, nu_hat
         )
         precond_gs = jax.tree.map(
-            lambda g, a: g * (jnp.linalg.norm(a) / (jnp.linalg.norm(g) + 1e-12)),
+            lambda g, a: g * (jnp.linalg.norm(a) / (jnp.linalg.norm(g) + 1e-16)),
             precond_gs,
             adam_update,
         )
