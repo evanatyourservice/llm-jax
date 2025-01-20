@@ -27,7 +27,7 @@ import tensorflow as tf
 
 from dataset import prepare_hellaswag, fineweb_edu_dataset, _fw_shard_names
 from configs import TrainConfig
-from optimizers.kron import kron, precond_update_prob_schedule
+from psgd_jax.kron import kron, precond_update_prob_schedule
 from optimizers.tearfree import optimizer as tearfree_opt
 from optimizers.tearfree import shampoo, second_order
 from optimizers.adam import adamw
@@ -114,7 +114,7 @@ def main(config: TrainConfig):
                 ),
                 optax.linear_schedule(
                     config.optimizer.learning_rate,
-                    config.optimizer.learning_rate * 0.01,
+                    config.optimizer.learning_rate * 0.1,
                     config.train_steps - config.optimizer.warmup_steps,
                 ),
             ],
@@ -134,8 +134,8 @@ def main(config: TrainConfig):
             return out
 
         optimizer = []
-        optimizer.append(optax.clip_by_global_norm(0.5))
         if config.optimizer.type in ["adam", "adamw"]:
+            optimizer.append(optax.clip_by_global_norm(0.5))
             optimizer.append(
                 adamw(
                     lr_schedule,
@@ -154,7 +154,6 @@ def main(config: TrainConfig):
                 kron(
                     lr_schedule,
                     b1=0.0 if config.optimizer.schedule_free else config.optimizer.b1,
-                    b2=config.optimizer.b2,
                     weight_decay=config.optimizer.weight_decay,
                     weight_decay_mask=param_decay_mask,
                     preconditioner_update_probability=precond_update_prob_schedule(
@@ -163,9 +162,10 @@ def main(config: TrainConfig):
                     ),
                     max_size_triangular=config.optimizer.max_size_triangular,
                     memory_save_mode=config.optimizer.memory_save_mode,
-                    momentum_into_precond_update=False,
-                    mu_dtype=jnp.bfloat16,
+                    preconditioner_lr=0.3,
+                    mu_dtype=jnp.float32,
                     precond_dtype=config.optimizer.preconditioner_dtype,
+                    precond_update_precision="float32",
                     scanned_layers=scanned_layers,
                     lax_map_scanned_layers=config.optimizer.lax_map_scanned_layers,
                     lax_map_batch_size=config.optimizer.lax_map_batch_size,
