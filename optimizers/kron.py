@@ -219,6 +219,7 @@ def scale_by_kron(
         # flatten pytrees
         updates, grads_structure = jax.tree.flatten(updates)
         momentum_updates = grads_structure.flatten_up_to(momentum_updates)
+        nu_hat = grads_structure.flatten_up_to(nu_hat)
         Qs = grads_structure.flatten_up_to(state["Qs_preconditioners"])
         scanned_layers_ = grads_structure.flatten_up_to(scanned_layers_)
 
