@@ -1,5 +1,4 @@
-from typing import Optional
-import numpy as np
+from functools import partial
 
 import jax
 import jax.numpy as jnp
@@ -12,6 +11,61 @@ from configs import ModelConfig
 init_fn = lambda dim: nn.initializers.normal(jnp.sqrt(2 / (5 * dim)))
 wang_fn = lambda dim, n_layers: nn.initializers.normal(2 / n_layers / jnp.sqrt(dim))
 constrain = lambda x, mesh, spec: jax.lax.with_sharding_constraint(x, NS(mesh, spec))
+
+
+def splash_attention(query, key, value, mesh):
+    from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_kernel, splash_attention_mask
+    from jax.experimental.shard_map import shard_map
+
+    B, T, N, H = query.shape
+    _, S, K, _ = key.shape
+
+    query = constrain(query, mesh, P("fsdp"))
+    key = constrain(key, mesh, P("fsdp"))
+    value = constrain(value, mesh, P("fsdp"))
+
+    causal_mask = splash_attention_mask.MultiHeadMask(
+        masks=[splash_attention_mask.CausalMask(shape=(T, S)) for _ in range(N)]
+    )
+    block_sizes = splash_attention_kernel.BlockSizes(
+        block_q=128,
+        block_kv=128,
+        block_q_dkv=128,
+        block_kv_dkv=128,
+        block_q_dq=128,
+        block_kv_dq=128,
+        block_kv_compute=128,
+        block_kv_dkv_compute=128,
+        use_fused_bwd_kernel=False
+    )
+    splash_kernel = splash_attention_kernel.make_splash_mha(
+        mask=causal_mask,
+        head_shards=1,
+        q_seq_shards=1,
+        block_sizes=block_sizes,
+        downcast_smem_data=True
+    )
+    query = jnp.transpose(query, (0, 2, 1, 3))
+    key = jnp.transpose(key, (0, 2, 1, 3))
+    value = jnp.transpose(value, (0, 2, 1, 3))
+    query = query.reshape(B * N, T, H)
+    key = key.reshape(B * K, S, H)
+    value = value.reshape(B * K, S, H)
+
+    @partial(
+        shard_map,
+        mesh=mesh,
+        in_specs=(P("fsdp"), P("fsdp"), P("fsdp")),
+        out_specs=(P("fsdp"),),
+        check_rep=False,
+    )
+    def sharded_splash(q, k, v):
+        return splash_kernel(q, k, v)
+
+    output = sharded_splash(query, key, value)
+    output = constrain(output, mesh, P("fsdp"))
+    output = output.reshape(B, N, T, H)
+    return jnp.transpose(output, (0, 2, 1, 3))
 
 
 class RMSNorm(nn.Module):
@@ -102,24 +156,16 @@ def _rotate_half(x):
 
 
 def _apply_rotary_embedding(q, k, cos, sin):
-    # come in as (B, T, K, G, H) and (B, T, K, H)
-    qlen = q.shape[-4]
-    klen = k.shape[-3]
-
-    qcos = jnp.expand_dims(cos[:qlen, :], range(len(q.shape) - 2))
-    qsin = jnp.expand_dims(sin[:qlen, :], range(len(q.shape) - 2))
-    kcos = jnp.expand_dims(cos[:klen, :], range(len(k.shape) - 2))
-    ksin = jnp.expand_dims(sin[:klen, :], range(len(k.shape) - 2))
-
-    qcos = jnp.swapaxes(qcos, -2, -4)
-    qsin = jnp.swapaxes(qsin, -2, -4)
-    kcos = jnp.swapaxes(kcos, -2, -3)
-    ksin = jnp.swapaxes(ksin, -2, -3)
-
-    # done in float32
+    qcos = jnp.expand_dims(cos[:q.shape[1], :], range(len(q.shape) - 2))
+    qsin = jnp.expand_dims(sin[:q.shape[1], :], range(len(q.shape) - 2))
+    kcos = jnp.expand_dims(cos[:k.shape[1], :], range(len(k.shape) - 2))
+    ksin = jnp.expand_dims(sin[:k.shape[1], :], range(len(k.shape) - 2))
+    qcos = jnp.swapaxes(qcos, -2, 1)
+    qsin = jnp.swapaxes(qsin, -2, 1)
+    kcos = jnp.swapaxes(kcos, -2, 1)
+    ksin = jnp.swapaxes(ksin, -2, 1)
     out_q = q * qcos + _rotate_half(q) * qsin
     out_k = k * kcos + _rotate_half(k) * ksin
-
     return out_q.astype(q.dtype), out_k.astype(k.dtype)
 
 
@@ -152,17 +198,25 @@ class Attention(nn.Module):
         k = jnp.dot(x, k_params)
         v = jnp.dot(x, v_params)
 
-        q = jnp.reshape(q, (B, T, K, G, H))
-        k = jnp.reshape(k, (B, T, K, H))
-        v = jnp.reshape(v, (B, T, K, H))
+        try:
+            q = jnp.reshape(q, (B, T, N, H))
+            k = jnp.reshape(k, (B, T, K, H))
+            v = jnp.reshape(v, (B, T, K, H))
+            sin, cos = _sine_table(H, T, max_timescale=self.rope_theta)
+            q, k = _apply_rotary_embedding(q, k, cos, sin)
+            encoded = splash_attention(q, k, v, self.mesh)
+            print("Using splash attention")
+        except Exception as e:
+            print(f"Error in splash attention, falling back to JAX: {e}")
+            q = jnp.reshape(q, (B, T, K, G, H))
+            k = jnp.reshape(k, (B, T, K, H))
+            v = jnp.reshape(v, (B, T, K, H))
+            sin, cos = _sine_table(H, T, max_timescale=self.rope_theta)
+            q, k = _apply_rotary_embedding(q, k, cos, sin)
+            encoded = jax.vmap(
+                _dot_product_attention_core, in_axes=(3, None, None), out_axes=3
+            )(q, k, v)
 
-        sin, cos = _sine_table(H, T, max_timescale=self.rope_theta)
-        q, k = _apply_rotary_embedding(q, k, cos, sin)
-
-        vmapped_fn = jax.vmap(
-            _dot_product_attention_core, in_axes=(3, None, None), out_axes=3
-        )
-        encoded = vmapped_fn(q, k, v)
         encoded = jnp.reshape(encoded, (B, T, N * H))
         out = jnp.dot(encoded, out_params)
         if self.mesh is not None:
