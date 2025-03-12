@@ -163,7 +163,7 @@ def main(config: TrainConfig):
                     max_size_triangular=config.optimizer.max_size_triangular,
                     memory_save_mode=config.optimizer.memory_save_mode,
                     preconditioner_lr=0.2,
-                    mu_dtype=jnp.float32,
+                    # mu_dtype=jnp.float32,
                     precond_dtype=config.optimizer.preconditioner_dtype,
                     precond_update_precision="tensorfloat32",
                     scanned_layers=scanned_layers,

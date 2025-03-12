@@ -22,6 +22,9 @@ class ModelConfig:
         remat_everything: Whether to remat everything, otherwise only use
             `checkpoint_dots_with_no_batch_dims`.
         min_size_to_shard_mb: Minimum size of shards to create.
+        use_ssm: Whether to use SSM instead of MLP
+        ssm_type: "complex" or "real"
+        ssm_state_size: Size of SSM state
     """
 
     block_size: int = 2048
@@ -36,7 +39,10 @@ class ModelConfig:
     scan_layers: bool = False
     remat: bool = False
     remat_everything: bool = False
-    min_size_to_shard_mb: int = 0.1
+    min_size_to_shard_mb: int = 1.0
+    use_ssm: bool = True
+    ssm_type: str = "real"
+    ssm_state_size: int = 512
 
 
 @dataclass(frozen=True)
@@ -76,7 +82,7 @@ class OptimizerConfig:
     b2: float = 0.95
     eps: float = 1e-8
     nesterov: bool = False
-    preconditioner_update_probability: float = 0.03
+    preconditioner_update_probability: float = 0.05
     max_size_triangular: int = 8192
     memory_save_mode: Optional[str] = None
     preconditioner_dtype: str = "float32"

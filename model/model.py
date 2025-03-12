@@ -6,6 +6,7 @@ from jax.sharding import Mesh, NamedSharding as NS, PartitionSpec as P
 import flax.linen as nn
 
 from configs import ModelConfig
+from model.ssm import ComplexStateSpaceModelJAX, RealStateSpaceModelJAX
 
 
 init_fn = lambda dim: nn.initializers.normal(jnp.sqrt(2 / (5 * dim)))
@@ -126,7 +127,6 @@ def _dot_product_attention_core(query, key, value):
     head_dim = query.shape[-1]
     query *= jax.lax.rsqrt(jnp.array(head_dim, dtype=jnp.float32)).astype(query.dtype)
     logits = jnp.einsum("BTNH,BSNH->BNTS", query, key)
-    logits = jnp.tanh(logits / 50) * 50
     causal_mask = _get_causal_mask(logits.shape[-2], logits.shape[-1])
     logits = jnp.where(causal_mask, logits, _get_large_negative(logits.dtype))
     probs = jax.nn.softmax(logits.astype(jnp.float32)).astype(logits.dtype)
@@ -202,6 +202,8 @@ class Attention(nn.Module):
             q = jnp.reshape(q, (B, T, N, H))
             k = jnp.reshape(k, (B, T, K, H))
             v = jnp.reshape(v, (B, T, K, H))
+            q = RMSNorm()(q)
+            k = RMSNorm()(k)
             sin, cos = _sine_table(H, T, max_timescale=self.rope_theta)
             q, k = _apply_rotary_embedding(q, k, cos, sin)
             encoded = splash_attention(q, k, v, self.mesh)
@@ -211,6 +213,8 @@ class Attention(nn.Module):
             q = jnp.reshape(q, (B, T, K, G, H))
             k = jnp.reshape(k, (B, T, K, H))
             v = jnp.reshape(v, (B, T, K, H))
+            q = RMSNorm()(q)
+            k = RMSNorm()(k)
             sin, cos = _sine_table(H, T, max_timescale=self.rope_theta)
             q, k = _apply_rotary_embedding(q, k, cos, sin)
             encoded = jax.vmap(
@@ -219,9 +223,10 @@ class Attention(nn.Module):
 
         encoded = jnp.reshape(encoded, (B, T, N * H))
         out = jnp.dot(encoded, out_params)
+        out = RMSNorm()(out)
         if self.mesh is not None:
             out = constrain(out, self.mesh, P("fsdp"))
-        return RMSNorm()(out)  # normformer
+        return out
 
 
 class MLP(nn.Module):
@@ -238,19 +243,15 @@ class MLP(nn.Module):
         down_kernel = self.param(
             "down_kernel", wang_fn(self.hidden_dim, self.n_layers), (self.hidden_dim, C)
         )
-
         gate = jnp.dot(x, gate_kernel)
         gate = nn.silu(gate)
-
         up = jnp.dot(x, up_kernel)
         x = gate * up
-
-        x = RMSNorm()(x)  # normformer
-
         down = jnp.dot(x, down_kernel)
+        out = RMSNorm()(down)
         if self.mesh is not None:
-            down = constrain(down, self.mesh, P("fsdp"))
-        return down
+            out = constrain(out, self.mesh, P("fsdp"))
+        return out
 
 
 class Block(nn.Module):
@@ -264,18 +265,42 @@ class Block(nn.Module):
     n_layers: int
     mesh: Mesh
     use_scan: bool = False
+    use_ssm: bool = True
+    ssm_type: str = "real"
+    ssm_state_size: int = 32
 
     @nn.compact
     def __call__(self, x):
-        attn_layer = Attention(
-            self.num_heads,
-            self.num_kv_heads,
-            self.head_dim,
-            self.rope_theta,
-            self.n_layers,
-            self.mesh,
-        )
-        x += attn_layer(RMSNorm()(x))
+        if self.use_ssm:
+            if self.ssm_type == "complex":
+                print("Using complex SSM")
+                ssm = ComplexStateSpaceModelJAX(
+                    input_size=self.hidden_dim,
+                    state_size=self.ssm_state_size,
+                    output_size=self.hidden_dim,
+                    mesh=self.mesh
+                )
+            else:
+                print("Using real SSM")
+                ssm = RealStateSpaceModelJAX(
+                    input_size=self.hidden_dim,
+                    state_size=self.ssm_state_size,
+                    output_size=self.hidden_dim,
+                    mesh=self.mesh
+                )
+            y, _ = ssm(RMSNorm()(x))
+            y = RMSNorm()(y)
+            x += y
+        else:
+            attn_layer = Attention(
+                self.num_heads,
+                self.num_kv_heads,
+                self.head_dim,
+                self.rope_theta,
+                self.n_layers,
+                self.mesh,
+            )
+            x += attn_layer(RMSNorm()(x))
         x += MLP(self.hidden_dim, self.n_layers, self.mesh)(RMSNorm()(x))
         if self.use_scan:
             return (x, None)
@@ -333,6 +358,9 @@ class Transformer(nn.Module):
                 self.config.num_layers,
                 self.mesh,
                 use_scan=True,
+                use_ssm=self.config.use_ssm,
+                ssm_type=self.config.ssm_type,
+                ssm_state_size=self.config.ssm_state_size,
             )(
                 x
             )
@@ -346,6 +374,9 @@ class Transformer(nn.Module):
                     self.config.rope_theta,
                     self.config.num_layers,
                     self.mesh,
+                    use_ssm=self.config.use_ssm,
+                    ssm_type=self.config.ssm_type,
+                    ssm_state_size=self.config.ssm_state_size,
                 )(x)
 
         x = RMSNorm()(x)
