@@ -3,7 +3,7 @@ from functools import partial
 from pprint import pprint
 import shutil
 import time
-from typing import Callable, List, Tuple
+from typing import List, Tuple, Any
 from dataclasses import asdict
 import os
 import random
@@ -17,7 +17,6 @@ from jax.experimental import mesh_utils
 from jax.sharding import Mesh, PartitionSpec as P, NamedSharding
 import flax
 from flax import struct
-from flax.training.train_state import TrainState as ts
 from flax.training import orbax_utils
 import flax.traverse_util
 import optax
@@ -45,8 +44,10 @@ jax.config.update("jax_transfer_guard", "disallow")
 jax.config.update("jax_threefry_partitionable", True)
 
 
-class TrainState(ts):
-    lr_fn: Callable = struct.field(pytree_node=False)
+class TrainState(struct.PyTreeNode):
+    step: int | jax.Array
+    params: Any = struct.field(pytree_node=True)
+    opt_state: optax.OptState = struct.field(pytree_node=True)
 
 
 def main(config: TrainConfig):
@@ -72,6 +73,9 @@ def main(config: TrainConfig):
         wandb.config.update(wandb_config)
 
     platform = jax.devices()[0].platform
+    compute_dtype = (
+        jnp.bfloat16 if config.compute_dtype in ["bfloat16", "bf16"] else jnp.float32
+    )
 
     # ====== checkpointer ======
     with jax.transfer_guard("allow"):
@@ -162,8 +166,8 @@ def main(config: TrainConfig):
                     ),
                     max_size_triangular=config.optimizer.max_size_triangular,
                     memory_save_mode=config.optimizer.memory_save_mode,
-                    preconditioner_lr=0.2,
-                    # mu_dtype=jnp.float32,
+                    preconditioner_lr=0.3,
+                    mu_dtype=jnp.bfloat16,
                     precond_dtype=config.optimizer.preconditioner_dtype,
                     precond_update_precision="tensorfloat32",
                     scanned_layers=scanned_layers,
@@ -210,40 +214,32 @@ def main(config: TrainConfig):
     repl_sharding = NamedSharding(mesh, P())
     data_sharding = NamedSharding(mesh, P("fsdp"))
 
+    # make model
+    model = Transformer(config.model, mesh, config.gradient_accumulation_steps > 1)
+
+    # which layers are scanned
+    with jax.transfer_guard("allow"):
+        model_struct = jax.eval_shape(
+            model.init,
+            jax.random.PRNGKey(0),
+            jnp.zeros((config.batch_size, config.model.block_size), dtype=jnp.uint16),
+        )
+        all_false = jax.tree.map(lambda _: False, model_struct)
+        scanned_layers = flax.traverse_util.ModelParamTraversal(
+            lambda p, _: "scan" in p or "Scan" in p
+        ).update(lambda _: True, all_false)
+
+    # make optimizer
+    optimizer = make_opt(scanned_layers=scanned_layers)
+
     def init_train_state(key):
         """Initialize the train state."""
-        # make model
-        model = Transformer(config.model, mesh, config.gradient_accumulation_steps > 1)
-
-        # init params
         dummy_tokens = jnp.zeros(
             (config.batch_size, config.model.block_size), dtype=jnp.uint16
         )
         params = model.init(key, dummy_tokens)
         params = otu.tree_cast(params, config.params_dtype)
-
-        # which layers are scanned
-        if config.model.scan_layers:
-            all_false = jax.tree.map(lambda _: False, params)
-            scanned_layers = flax.traverse_util.ModelParamTraversal(
-                lambda p, _: "scan" in p or "Scan" in p
-            ).update(lambda _: True, all_false)
-        else:
-            scanned_layers = None
-
-        # make optimizer
-        optimizer = make_opt(scanned_layers=scanned_layers)
-
-        # make train state
-        train_state = TrainState(
-            step=0,
-            apply_fn=model.apply,
-            params=params,
-            tx=optimizer,
-            opt_state=optimizer.init(params),
-            lr_fn=lr_schedule,
-        )
-        return train_state
+        return TrainState(step=0, params=params, opt_state=optimizer.init(params))
 
     rng = jax.random.PRNGKey(
         jax.device_put(config.seed, jax.local_devices(backend="cpu")[0])
@@ -336,10 +332,8 @@ def main(config: TrainConfig):
     ) -> Tuple[jnp.ndarray, TrainState, jnp.ndarray, jnp.ndarray]:
 
         def loss_fn(params, tokens):
-            logits = state.apply_fn(
-                otu.tree_cast(params, config.compute_dtype), tokens[:, :-1]
-            )
-            assert logits.dtype == config.compute_dtype
+            logits = model.apply(otu.tree_cast(params, compute_dtype), tokens[:, :-1])
+            assert logits.dtype == compute_dtype
 
             logits = logits.astype(jnp.float32)
 
@@ -396,16 +390,16 @@ def main(config: TrainConfig):
 
         grad_norm = optax.global_norm(grads)
 
-        # normalize grads to unit norm layer-wise
-        grads = jax.tree.map(lambda g: g / (jnp.linalg.norm(g) + 1e-12), grads)
+        updates, opt_state = optimizer.update(grads, state.opt_state, state.params)
+        params = optax.apply_updates(state.params, updates)
 
-        new_state = state.apply_gradients(grads=grads)
+        state = state.replace(step=state.step + 1, params=params, opt_state=opt_state)
 
-        check_dtypes(before_dtypes, jax.tree.map(lambda x: x.dtype, new_state))
+        check_dtypes(before_dtypes, jax.tree.map(lambda x: x.dtype, state))
 
-        lr = state.lr_fn(state.step)
+        lr = lr_schedule(state.step)
 
-        return loss, new_state, grad_norm, lr
+        return loss, state, grad_norm, lr
 
     def hs_eval_step_unreduced(
         state: TrainState,
@@ -417,10 +411,8 @@ def main(config: TrainConfig):
         if config.optimizer.schedule_free:
             params_in = schedule_free_eval_params(state.opt_state, state.params)
 
-        logits = state.apply_fn(
-            otu.tree_cast(params_in, config.compute_dtype), tokens[:, :-1]
-        )
-        assert logits.dtype == config.compute_dtype
+        logits = model.apply(otu.tree_cast(params_in, compute_dtype), tokens[:, :-1])
+        assert logits.dtype == compute_dtype
 
         logits = logits.astype(jnp.float32)
 
@@ -585,7 +577,7 @@ def main(config: TrainConfig):
                 write_note(
                     f"step: {curr_step}, loss: {train_loss:.4f}, "
                     f"grad_norm: {grad_norm:.4f}, "
-                    f"lr: {curr_lr:.4f}, tokens: {curr_tokens:.4f}"
+                    f"lr: {curr_lr:.6f}, tokens: {int(curr_tokens):,}"
                 )
 
                 # eval hellaswag

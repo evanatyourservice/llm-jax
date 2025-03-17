@@ -25,8 +25,6 @@ nohup python3 main_multihost.py \
     --compute_dtype=bfloat16 \
     --params_dtype=float32 \
     --profile \
-    --model.scan_layers \
-    --model.remat \
     --model.no_remat_everything \
     --optimizer.type=kron \
     --optimizer.learning_rate=0.001 \

@@ -30,8 +30,6 @@ nohup python3 main_multihost.py \
     --model.head_dim=64 \
     --model.num_embeds=960 \
     --model.hidden_dim=2560 \
-    --model.scan_layers \
-    --model.remat \
     --model.no_remat_everything \
     --optimizer.type=kron \
     --optimizer.learning_rate=0.001 \

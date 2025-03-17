@@ -27,7 +27,6 @@ python3 main.py \
     --model.head_dim=4 \
     --model.hidden_dim=8 \
     --model.num_kv_heads=2 \
-    --model.scan_layers \
     --model.no_use_ssm \
     --model.ssm_type=real \
     --model.ssm_state_size=64

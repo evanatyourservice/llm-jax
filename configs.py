@@ -17,8 +17,6 @@ class ModelConfig:
         num_embeds: Number of embeddings.
         hidden_dim: Hidden dimension.
         rope_theta: Rotary embedding theta.
-        scan_layers: Whether to scan layers.
-        remat: Whether to use remat. Should be used if scanning layers.
         remat_everything: Whether to remat everything, otherwise only use
             `checkpoint_dots_with_no_batch_dims`.
         min_size_to_shard_mb: Minimum size of shards to create.
@@ -36,11 +34,9 @@ class ModelConfig:
     num_embeds: int = 576
     hidden_dim: int = 1536
     rope_theta: float = 1000000.0
-    scan_layers: bool = False
-    remat: bool = False
     remat_everything: bool = False
     min_size_to_shard_mb: int = 1.0
-    use_ssm: bool = True
+    use_ssm: bool = False
     ssm_type: str = "real"
     ssm_state_size: int = 512
 
@@ -77,7 +73,7 @@ class OptimizerConfig:
     learning_rate: float = 0.001
     warmup_steps: int = 1000
     flat_lr: bool = False
-    weight_decay: float = 0.1
+    weight_decay: float = 0.7
     b1: float = 0.9
     b2: float = 0.95
     eps: float = 1e-8

@@ -38,6 +38,11 @@ Install python dependencies GPU
 cd llm-jax && pip install -U pip && pip install -r requirements.txt && pip install --force-reinstall --upgrade --no-cache-dir 'jax[cuda12]' && pip install 'numpy<2'
 ```
 
+## Data
+
+Create a dir called `data/` in the llm-jax root dir, download `hellaswag_val.jsonl` from [here](https://github.com/rowanz/hellaswag/tree/master/data), and place 
+it in `data/`
+
 
 ## Run
 

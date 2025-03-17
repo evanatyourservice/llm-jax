@@ -6,7 +6,7 @@ from jax.sharding import Mesh, NamedSharding as NS, PartitionSpec as P
 import flax.linen as nn
 
 from configs import ModelConfig
-from model.ssm import ComplexStateSpaceModelJAX, RealStateSpaceModelJAX
+from model.ssm import ComplexStateSpaceModel, RealStateSpaceModel
 
 
 init_fn = lambda dim: nn.initializers.normal(jnp.sqrt(2 / (5 * dim)))
@@ -37,14 +37,13 @@ def splash_attention(query, key, value, mesh):
         block_kv_dq=128,
         block_kv_compute=128,
         block_kv_dkv_compute=128,
-        use_fused_bwd_kernel=False
+        use_fused_bwd_kernel=False,
     )
     splash_kernel = splash_attention_kernel.make_splash_mha(
         mask=causal_mask,
         head_shards=1,
         q_seq_shards=1,
         block_sizes=block_sizes,
-        downcast_smem_data=True
     )
     query = jnp.transpose(query, (0, 2, 1, 3))
     key = jnp.transpose(key, (0, 2, 1, 3))
@@ -57,7 +56,7 @@ def splash_attention(query, key, value, mesh):
         shard_map,
         mesh=mesh,
         in_specs=(P("fsdp"), P("fsdp"), P("fsdp")),
-        out_specs=(P("fsdp"),),
+        out_specs=P("fsdp"),
         check_rep=False,
     )
     def sharded_splash(q, k, v):
@@ -264,7 +263,6 @@ class Block(nn.Module):
     rope_theta: float
     n_layers: int
     mesh: Mesh
-    use_scan: bool = False
     use_ssm: bool = True
     ssm_type: str = "real"
     ssm_state_size: int = 32
@@ -274,7 +272,7 @@ class Block(nn.Module):
         if self.use_ssm:
             if self.ssm_type == "complex":
                 print("Using complex SSM")
-                ssm = ComplexStateSpaceModelJAX(
+                ssm = ComplexStateSpaceModel(
                     input_size=self.hidden_dim,
                     state_size=self.ssm_state_size,
                     output_size=self.hidden_dim,
@@ -282,7 +280,7 @@ class Block(nn.Module):
                 )
             else:
                 print("Using real SSM")
-                ssm = RealStateSpaceModelJAX(
+                ssm = RealStateSpaceModel(
                     input_size=self.hidden_dim,
                     state_size=self.ssm_state_size,
                     output_size=self.hidden_dim,
@@ -302,9 +300,7 @@ class Block(nn.Module):
             )
             x += attn_layer(RMSNorm()(x))
         x += MLP(self.hidden_dim, self.n_layers, self.mesh)(RMSNorm()(x))
-        if self.use_scan:
-            return (x, None)
-        return x
+        return (x, None)
 
 
 class Transformer(nn.Module):
@@ -317,68 +313,33 @@ class Transformer(nn.Module):
         remat_policy = None
         if not self.config.remat_everything:
             remat_policy = jax.checkpoint_policies.checkpoint_dots_with_no_batch_dims
-
-        if self.config.remat:
-            embedder = nn.remat(
-                Embedder, prevent_cse=not self.using_grad_accum, policy=remat_policy
-            )(
-                self.config.vocab_size,
-                self.config.num_embeds,
-                self.mesh,
-            )
-        else:
-            embedder = Embedder(
-                self.config.vocab_size,
-                self.config.num_embeds,
-                self.mesh,
-            )
-
+        embedder = nn.remat(
+            Embedder, prevent_cse=not self.using_grad_accum, policy=remat_policy
+        )(
+            self.config.vocab_size,
+            self.config.num_embeds,
+            self.mesh,
+        )
         x = embedder.encode(tokens)
-
-        if self.config.remat:
-            prevent_cse = True
-            if self.using_grad_accum or self.config.scan_layers:
-                prevent_cse = False
-            BlockModule = nn.remat(Block, prevent_cse=prevent_cse, policy=remat_policy)
-        else:
-            BlockModule = Block
-
-        if self.config.scan_layers:
-            x, _ = nn.scan(
-                BlockModule,
-                variable_axes={True: 0},
-                split_rngs={True: True},
-                length=self.config.num_layers,
-            )(
-                self.config.num_heads,
-                self.config.num_kv_heads,
-                self.config.head_dim,
-                self.config.hidden_dim,
-                self.config.rope_theta,
-                self.config.num_layers,
-                self.mesh,
-                use_scan=True,
-                use_ssm=self.config.use_ssm,
-                ssm_type=self.config.ssm_type,
-                ssm_state_size=self.config.ssm_state_size,
-            )(
-                x
-            )
-        else:
-            for _ in range(self.config.num_layers):
-                x = BlockModule(
-                    self.config.num_heads,
-                    self.config.num_kv_heads,
-                    self.config.head_dim,
-                    self.config.hidden_dim,
-                    self.config.rope_theta,
-                    self.config.num_layers,
-                    self.mesh,
-                    use_ssm=self.config.use_ssm,
-                    ssm_type=self.config.ssm_type,
-                    ssm_state_size=self.config.ssm_state_size,
-                )(x)
-
+        x, _ = nn.scan(
+            nn.remat(Block, prevent_cse=False, policy=remat_policy),
+            variable_axes={True: 0},
+            split_rngs={True: True},
+            length=self.config.num_layers,
+        )(
+            self.config.num_heads,
+            self.config.num_kv_heads,
+            self.config.head_dim,
+            self.config.hidden_dim,
+            self.config.rope_theta,
+            self.config.num_layers,
+            self.mesh,
+            use_ssm=self.config.use_ssm,
+            ssm_type=self.config.ssm_type,
+            ssm_state_size=self.config.ssm_state_size,
+        )(
+            x
+        )
         x = RMSNorm()(x)
         logits = embedder.decode(x)
         return logits
